@@ -1,0 +1,36 @@
+# Python-generated files
+__pycache__/
+*.py[cod]
+*.pyo
+.eggs/
+*.egg-info/
+build/
+dist/
+wheels/
+
+# uv
+.uv/
+
+# Virtual environments
+.venv/
+
+# Testing & coverage
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# Output (generated artifacts — never commit)
+output/
+
+# VS Code
+.vscode/settings.json
+.vscode/launch.json
+
+# Environment
+.env
+.env.*
+
+# OS
+.DS_Store
+Thumbs.db
