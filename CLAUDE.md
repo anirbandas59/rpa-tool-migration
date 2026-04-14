@@ -61,6 +61,7 @@ tests/          — mirrors src/flowsmith structure exactly
   Types: feat, fix, test, refactor, docs, chore
   Example: feat(parser): add VBO method parser with param extraction
 - Stage specific files only — never: git add .
+- Do not mention author name
 
 ### Dependencies
 
@@ -99,9 +100,29 @@ uv run python -c "from flowsmith.<module> import <Class>; print('OK')"
 
 ## Stage type enum reference
 
-All 14 Blue Prism stage types that the parser must handle:
+Canonical AST types (17 total):
 START, END, ACTION, DECISION, CALCULATION, CODE, WAIT,
-NAVIGATE, READ, WRITE, LOOP, EXCEPTION, RECOVER, RESUME
+NAVIGATE, READ, WRITE, LOOP, EXCEPTION, RECOVER, RESUME,
+BLOCK, COLLECTION, DATA
+
+Skip types (no AST node, no generated output):
+ANCHOR, NOTE, SUBSHEETINFO, PROCESSINFO, PROCESS
+
+Normalised on parse (collapsed into existing types):
+MULTIPLECALCULATION → CALCULATION  (fan-out as N nodes)
+SUBSHEET            → ACTION       (is_subsheet_call=True)
+WAITSTART/WAITEND   → WAIT         (paired bracket, 74 each)
+LOOPSTART/LOOPEND   → LOOP         (paired bracket, 20 each)
+
+BLOCK ≠ EXCEPTION:
+  BLOCK     = scope boundary (try/catch wrapper)
+  EXCEPTION = throw stage
+
+Exception type strings (preserve in AST on every EXCEPTION stage):
+  Business Exception, System Exception, Action Failed, Bad Handle,
+  File Not Found, Invalid Direction Parameter, Invalid Input Parameter,
+  System Unavailable Exception, UtilityException,
+  Workbook Not Found, Worksheet Not Found
 
 ## Key Pydantic models (Phase 3 reference)
 
