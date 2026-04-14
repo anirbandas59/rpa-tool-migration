@@ -143,7 +143,7 @@ def merge_results(results: list[dict]) -> dict:
     return merged
 
 
-# Stage types found in the XML that map to or extend the 14 canonical CLAUDE.md types
+# Stage types found in the XML that map to the 17 canonical CLAUDE.md types
 _CANONICAL_STAGE_TYPES = {
     "Start",
     "End",
@@ -161,6 +161,9 @@ _CANONICAL_STAGE_TYPES = {
     "Exception",
     "Recover",
     "Resume",
+    "Block",
+    "Collection",
+    "Data",
 }
 
 
@@ -187,7 +190,7 @@ def build_md_report(merged: dict, file_paths: list[Path]) -> str:
     # Stage types
     lines.append("## Stage type counts\n")
     lines.append("| Stage type | Count | Canonical? |")
-    lines.append("|------------|------:|------------|")
+    lines.append("| ---------- | ----- | ---------- |")
     for stype, count in sorted(merged["stage_type_counts"].items()):
         canonical = "yes" if stype in _CANONICAL_STAGE_TYPES else "**NO — needs mapping**"
         lines.append(f"| `{stype}` | {count:,} | {canonical} |")
@@ -210,7 +213,7 @@ def build_md_report(merged: dict, file_paths: list[Path]) -> str:
     lines.append("## All unique XML tags\n")
     lines.append(f"Total unique tags: **{len(merged['tags'])}**\n")
     lines.append("| Tag | Attributes |")
-    lines.append("|-----|------------|")
+    lines.append("| --- | ---------- |")
     for tag in sorted(merged["tags"]):
         attrs = sorted(merged["tag_attrs"].get(tag, set()))
         attr_str = ", ".join(f"`{a}`" for a in attrs) if attrs else "—"
@@ -234,12 +237,11 @@ def build_md_report(merged: dict, file_paths: list[Path]) -> str:
             "types defined in CLAUDE.md. Each needs an explicit parser + mapping decision.\n"
         )
         lines.append("| Stage type | Count | Suggested handling |")
-        lines.append("|------------|------:|--------------------|")
+        lines.append("| ---------- | ----- | ------------------ |")
         suggestions = {
             "Anchor": "Skip — routing connector only, no logic",
-            "Block": "Map to exception block boundary (EXCEPTION scope)",
-            "Collection": "Variable declaration — treat as DATA stage",
-            "Data": "Variable declaration — treat as DATA stage",
+            "Block": "Emit as PAD BLOCK...ON BLOCK ERROR scope boundary (not a throw)",
+            "Collection": "Emit as PAD DataTable variable declaration (preserves column schema)",
             "MultipleCalculation": "Treat as multiple CALCULATION stages",
             "Note": "Skip — comment annotation only",
             "Process": "Metadata — skip or emit as process header",
