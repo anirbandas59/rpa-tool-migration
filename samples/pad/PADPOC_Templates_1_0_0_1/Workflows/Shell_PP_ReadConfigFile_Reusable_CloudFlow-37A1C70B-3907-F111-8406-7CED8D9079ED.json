@@ -1,0 +1,415 @@
+{
+  "properties": {
+    "connectionReferences": {
+      "shared_excelonlinebusiness-1": {
+        "runtimeSource": "embedded",
+        "connection": {
+          "connectionReferenceLogicalName": "new_sharedexcelonlinebusiness_6a019"
+        },
+        "api": {
+          "name": "shared_excelonlinebusiness"
+        }
+      },
+      "shared_office365": {
+        "runtimeSource": "embedded",
+        "connection": {
+          "connectionReferenceLogicalName": "cr3ac_sharedoffice365_030f2"
+        },
+        "api": {
+          "name": "shared_office365"
+        }
+      }
+    },
+    "definition": {
+      "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+      "contentVersion": "1.0.0.0",
+      "parameters": {
+        "$authentication": {
+          "defaultValue": {},
+          "type": "SecureObject"
+        },
+        "$connections": {
+          "defaultValue": {},
+          "type": "Object"
+        }
+      },
+      "triggers": {
+        "manual": {
+          "metadata": {
+            "operationMetadataId": "a133f848-6e08-4914-b57c-777fe9a2897b"
+          },
+          "type": "Request",
+          "kind": "Button",
+          "inputs": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "text": {
+                  "title": "SP_Location",
+                  "type": "string",
+                  "x-ms-dynamically-added": true,
+                  "description": "https://eu023-sp.shell.com/sites/SPOAA1437",
+                  "x-ms-content-hint": "TEXT"
+                },
+                "text_1": {
+                  "title": "SP_FileName",
+                  "type": "string",
+                  "x-ms-dynamically-added": true,
+                  "description": "/BluePrismToPowerAutomate/Config_DS_FA_Automation.xlsx",
+                  "x-ms-content-hint": "TEXT"
+                },
+                "text_2": {
+                  "title": "SP_TableName",
+                  "type": "string",
+                  "x-ms-dynamically-added": true,
+                  "description": "Table1",
+                  "x-ms-content-hint": "TEXT"
+                },
+                "text_3": {
+                  "description": "Please enter your input",
+                  "title": "Exception_EmailID",
+                  "type": "string",
+                  "x-ms-content-hint": "TEXT",
+                  "x-ms-dynamically-added": true
+                },
+                "text_4": {
+                  "description": "SharePoint Doc library",
+                  "title": "SP_DocLibrary",
+                  "type": "string",
+                  "x-ms-content-hint": "TEXT",
+                  "x-ms-dynamically-added": true
+                }
+              },
+              "required": [
+                "text",
+                "text_1",
+                "text_2",
+                "text_3",
+                "text_4"
+              ]
+            }
+          }
+        }
+      },
+      "actions": {
+        "Initialize_variable-Configuration": {
+          "runAfter": {},
+          "metadata": {
+            "operationMetadataId": "5c462d0b-1976-4054-aaac-5b9a15174cc2"
+          },
+          "type": "InitializeVariable",
+          "inputs": {
+            "variables": [
+              {
+                "name": "Configuration",
+                "type": "object",
+                "value": {}
+              }
+            ]
+          }
+        },
+        "Initialize_variable-Config_Status": {
+          "runAfter": {
+            "Initialize_variable-Configuration": [
+              "Succeeded"
+            ]
+          },
+          "metadata": {
+            "operationMetadataId": "5c462d0b-1976-4054-aaac-5b9a15174cc2"
+          },
+          "type": "InitializeVariable",
+          "inputs": {
+            "variables": [
+              {
+                "name": "Config_Status",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "Try": {
+          "actions": {
+            "List_rows_present_in_a_table": {
+              "metadata": {
+                "01RKI4CC3QY22YHPB7ENGZ3Z2BN4B4T5VJ": "/BluePrismToPowerAutomate/Config_DS_SDS_Automation.xlsx",
+                "operationMetadataId": "f11127aa-98e5-4fe5-82f3-5193c3ab2791",
+                "tableId": "@triggerBody()?['text_2']",
+                "01RKI4CCY4HRO26OZ66RBIPNXUAEYOLTA5": "/BluePrismToPowerAutomate/Config_DS_FA_Automation.xlsx"
+              },
+              "type": "OpenApiConnection",
+              "inputs": {
+                "parameters": {
+                  "source": "@triggerBody()?['text']",
+                  "drive": "@triggerBody()?['text_4']",
+                  "file": "@triggerBody()?['text_1']",
+                  "table": "@triggerBody()?['text_2']"
+                },
+                "host": {
+                  "apiId": "/providers/Microsoft.PowerApps/apis/shared_excelonlinebusiness",
+                  "operationId": "GetItems",
+                  "connectionName": "shared_excelonlinebusiness-1"
+                }
+              }
+            },
+            "Select-Name_Value_Pair": {
+              "runAfter": {
+                "List_rows_present_in_a_table": [
+                  "Succeeded"
+                ]
+              },
+              "metadata": {
+                "operationMetadataId": "e8e57b22-503e-4006-8c73-36c3a8430676"
+              },
+              "type": "Select",
+              "inputs": {
+                "from": "@outputs('List_rows_present_in_a_table')?['body/value']",
+                "select": {
+                  "@{item()?['Name']}": "@item()?['Value']"
+                }
+              }
+            },
+            "ForEach": {
+              "foreach": "@body('Select-Name_Value_Pair')",
+              "actions": {
+                "Union": {
+                  "metadata": {
+                    "operationMetadataId": "02fb8f3e-a978-4035-a698-ad1300fc7107"
+                  },
+                  "type": "Compose",
+                  "inputs": "@union(variables('Configuration'),items('ForEach'))"
+                },
+                "Set_variable-Configuration": {
+                  "runAfter": {
+                    "Union": [
+                      "Succeeded"
+                    ]
+                  },
+                  "metadata": {
+                    "operationMetadataId": "4ad1be02-3e9f-4ac5-9ce7-605bdae973e4"
+                  },
+                  "type": "SetVariable",
+                  "inputs": {
+                    "name": "Configuration",
+                    "value": "@outputs('Union')"
+                  }
+                }
+              },
+              "runAfter": {
+                "Select-Name_Value_Pair": [
+                  "Succeeded"
+                ]
+              },
+              "metadata": {
+                "operationMetadataId": "bd719e68-6a41-4eea-86ab-b606bf27da54"
+              },
+              "type": "Foreach"
+            },
+            "Respond_to_a_Power_App_or_flow": {
+              "runAfter": {
+                "Success_Status": [
+                  "Succeeded"
+                ]
+              },
+              "metadata": {
+                "operationMetadataId": "7ec9143e-c0c5-48d2-b2b4-a8cd1e5bd325"
+              },
+              "type": "Response",
+              "kind": "PowerApp",
+              "inputs": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "configuration": {
+                      "title": "Configuration",
+                      "x-ms-dynamically-added": true,
+                      "type": "string"
+                    },
+                    "config_flow_status": {
+                      "title": "Config_Flow_Status",
+                      "x-ms-dynamically-added": true,
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": {}
+                },
+                "statusCode": 200,
+                "body": {
+                  "configuration": "@{string(variables('Configuration'))}",
+                  "config_flow_status": "@{variables('Config_Status')}"
+                }
+              }
+            },
+            "Success_Status": {
+              "runAfter": {
+                "ForEach": [
+                  "Succeeded"
+                ]
+              },
+              "metadata": {
+                "operationMetadataId": "52db0ffc-029c-4198-81b9-524dbcf37e20"
+              },
+              "type": "SetVariable",
+              "inputs": {
+                "name": "Config_Status",
+                "value": "Success"
+              }
+            }
+          },
+          "runAfter": {
+            "Initialize_variable-Config_Status": [
+              "Succeeded"
+            ]
+          },
+          "metadata": {
+            "operationMetadataId": "ab9d9539-27ac-4190-b057-c39210ddde14"
+          },
+          "type": "Scope"
+        },
+        "Catch": {
+          "actions": {
+            "Filter_array": {
+              "metadata": {
+                "operationMetadataId": "334f6b6f-7798-4099-b507-2d57a08170d4"
+              },
+              "type": "Query",
+              "inputs": {
+                "from": "@result('Try')",
+                "where": "@or(equals(item()?['Status'],'Failed'),equals(item()?['Status'],'TimedOut'))"
+              }
+            },
+            "Get_workflow_details": {
+              "runAfter": {
+                "Condition": [
+                  "Succeeded"
+                ]
+              },
+              "metadata": {
+                "operationMetadataId": "5d88ca7c-de0e-4916-8859-4af8ab4648df"
+              },
+              "type": "Compose",
+              "inputs": "@workflow()"
+            },
+            "Send_an_email_(V2)": {
+              "runAfter": {
+                "Get_workflow_details": [
+                  "Succeeded"
+                ]
+              },
+              "metadata": {
+                "operationMetadataId": "12c421e1-88c4-43ff-82d0-6be7c720a1b5"
+              },
+              "type": "OpenApiConnection",
+              "inputs": {
+                "parameters": {
+                  "emailMessage/To": "@triggerBody()?['text_3']",
+                  "emailMessage/Subject": "Power Automate Flow Exception : @{workflow()?['tags']['flowDisplayName']}",
+                  "emailMessage/Body": "<p class=\"editor-paragraph\"><span style=\"font-family: &quot;Courier New&quot;; font-size: 15px;\">Hello Team,</span></p><p class=\"editor-paragraph\"><br><span style=\"font-family: &quot;Courier New&quot;;\">An exception occurred in the Power Automate flow.</span><br><span style=\"font-family: &quot;Courier New&quot;;\">Please find the below exception details.</span></p><br><p class=\"editor-paragraph\"><b><strong class=\"editor-text-bold\" style=\"font-family: &quot;Courier New&quot;;\">Flow name: </strong></b>@{workflow()?['tags']['flowDisplayName']}</p><p class=\"editor-paragraph\"><b><strong class=\"editor-text-bold\" style=\"font-family: &quot;Courier New&quot;; font-size: 15px;\">Action :</strong></b><b><strong class=\"editor-text-bold\" style=\"font-family: &quot;Courier New&quot;; font-size: 15px;\"> </strong></b>@{first(body('Filter_array'))?['name']}</p><p class=\"editor-paragraph\"><b><strong class=\"editor-text-bold\" style=\"font-family: &quot;Courier New&quot;; font-size: 15px;\">Error message : </strong></b>@{variables('Config_Status')}</p><p class=\"editor-paragraph\"><b><strong class=\"editor-text-bold\" style=\"font-family: &quot;Courier New&quot;; font-size: 15px;\">Status : </strong></b>@{first(body('Filter_array'))?['status']}</p><br><p class=\"editor-paragraph\"><b><strong class=\"editor-text-bold\" style=\"font-family: &quot;Courier New&quot;; font-size: 15px;\">Power Automate Flow URL</strong></b><span style=\"font-family: &quot;Courier New&quot;; font-size: 15px;\">: </span><u><b><strong class=\"editor-text-bold editor-text-underline\" style=\"font-family: &quot;Courier New&quot;; font-size: 16px;\">https://make.powerautomate.com/environments/</strong></b></u>@{workflow()?['tags']['environmentName']}<u><b><strong class=\"editor-text-bold editor-text-underline\" style=\"font-family: &quot;Courier New&quot;; font-size: 16px;\">/flows/</strong></b></u>@{workflow()?['name']}<u><b><strong class=\"editor-text-bold editor-text-underline\" style=\"font-family: &quot;Courier New&quot;; font-size: 16px;\">/</strong></b></u>@{workflow()?['run']['name']}</p><br><p class=\"editor-paragraph\"><span style=\"font-family: &quot;Courier New&quot;;\">Regards,</span></p><p class=\"editor-paragraph\"><span style=\"font-family: &quot;Courier New&quot;;\">AFA BOT</span></p>",
+                  "emailMessage/Importance": "Normal"
+                },
+                "host": {
+                  "apiId": "/providers/Microsoft.PowerApps/apis/shared_office365",
+                  "operationId": "SendEmailV2",
+                  "connectionName": "shared_office365"
+                }
+              }
+            },
+            "Exception": {
+              "runAfter": {
+                "Send_an_email_(V2)": [
+                  "Succeeded"
+                ]
+              },
+              "metadata": {
+                "operationMetadataId": "7ec9143e-c0c5-48d2-b2b4-a8cd1e5bd325"
+              },
+              "type": "Response",
+              "kind": "PowerApp",
+              "inputs": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "configuration": {
+                      "title": "Configuration",
+                      "x-ms-dynamically-added": true,
+                      "type": "string"
+                    },
+                    "config_flow_status": {
+                      "title": "Config_Flow_Status",
+                      "x-ms-dynamically-added": true,
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": {}
+                },
+                "statusCode": 200,
+                "body": {
+                  "configuration": "@{string(variables('Configuration'))}",
+                  "config_flow_status": "@{variables('Config_Status')}"
+                }
+              }
+            },
+            "Condition": {
+              "actions": {
+                "Set_exception_-_Error_Description": {
+                  "metadata": {
+                    "operationMetadataId": "4057448c-eb0b-45d2-8efe-3d035135fe51"
+                  },
+                  "type": "SetVariable",
+                  "inputs": {
+                    "name": "Config_Status",
+                    "value": "@concat(first(body('Filter_array'))?['outputs']?['body']?['error'],'-',first(body('Filter_array'))?['outputs']?['body']?['error_description'])"
+                  }
+                }
+              },
+              "runAfter": {
+                "Filter_array": [
+                  "Succeeded"
+                ]
+              },
+              "else": {
+                "actions": {
+                  "Set_exception": {
+                    "metadata": {
+                      "operationMetadataId": "4057448c-eb0b-45d2-8efe-3d035135fe51"
+                    },
+                    "type": "SetVariable",
+                    "inputs": {
+                      "name": "Config_Status",
+                      "value": "@coalesce(\r\nfirst(body('Filter_array'))?['outputs']?['body']?['error']?['message'],\r\nfirst(body('Filter_array'))?['body']?['message'],\r\nfirst(body('Filter_array'))?['error']?['message']\r\n)"
+                    }
+                  }
+                }
+              },
+              "expression": {
+                "and": [
+                  {
+                    "contains": [
+                      "@string(first(body('Filter_array'))?['outputs'])",
+                      "error_description"
+                    ]
+                  }
+                ]
+              },
+              "metadata": {
+                "operationMetadataId": "650ec663-6ecc-4cf2-880c-9dc6e8a9f37b"
+              },
+              "type": "If"
+            }
+          },
+          "runAfter": {
+            "Try": [
+              "TimedOut",
+              "Failed"
+            ]
+          },
+          "metadata": {
+            "operationMetadataId": "d68a3c9c-c266-4c40-b04d-45f046786d41"
+          },
+          "type": "Scope"
+        }
+      }
+    },
+    "templateName": null
+  },
+  "schemaVersion": "1.0.0.0"
+}

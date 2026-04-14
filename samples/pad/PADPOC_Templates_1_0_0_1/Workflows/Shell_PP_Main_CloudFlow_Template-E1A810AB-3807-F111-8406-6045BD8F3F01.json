@@ -1,0 +1,2320 @@
+{
+  "properties": {
+    "connectionReferences": {
+      "shared_commondataserviceforapps": {
+        "runtimeSource": "embedded",
+        "connection": {
+          "connectionReferenceLogicalName": "new_sharedcommondataserviceforapps_25e8c"
+        },
+        "api": {
+          "name": "shared_commondataserviceforapps"
+        }
+      },
+      "shared_uiflow": {
+        "runtimeSource": "invoker",
+        "connection": {
+          "connectionReferenceLogicalName": "new_shareduiflow_bef1a"
+        },
+        "api": {
+          "name": "shared_uiflow"
+        }
+      },
+      "shared_office365": {
+        "runtimeSource": "invoker",
+        "connection": {
+          "connectionReferenceLogicalName": "cr3ac_sharedoffice365_030f2"
+        },
+        "api": {
+          "name": "shared_office365"
+        }
+      },
+      "shared_keyvault": {
+        "runtimeSource": "invoker",
+        "connection": {
+          "connectionReferenceLogicalName": "new_sharedkeyvault_895e2"
+        },
+        "api": {
+          "name": "shared_keyvault"
+        }
+      }
+    },
+    "definition": {
+      "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+      "contentVersion": "undefined",
+      "parameters": {
+        "$authentication": {
+          "defaultValue": {},
+          "type": "SecureObject"
+        },
+        "$connections": {
+          "defaultValue": {},
+          "type": "Object"
+        }
+      },
+      "triggers": {
+        "manual": {
+          "metadata": {
+            "operationMetadataId": "c822b504-9d09-4daa-8e54-da362da01fad"
+          },
+          "type": "Request",
+          "kind": "Button",
+          "inputs": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "boolean": {
+                  "description": "Please select yes or no",
+                  "title": "Loader_Flag",
+                  "type": "boolean",
+                  "x-ms-content-hint": "BOOLEAN",
+                  "x-ms-dynamically-added": true
+                },
+                "boolean_1": {
+                  "description": "Please select yes or no",
+                  "title": "Performer_Flag",
+                  "type": "boolean",
+                  "x-ms-content-hint": "BOOLEAN",
+                  "x-ms-dynamically-added": true
+                }
+              },
+              "required": [
+                "boolean",
+                "boolean_1"
+              ]
+            }
+          }
+        }
+      },
+      "actions": {
+        "Exception_EmailID": {
+          "runAfter": {},
+          "metadata": {
+            "operationMetadataId": "16af18dc-fcb7-42fe-9c1d-5053b8a4bbf5"
+          },
+          "type": "InitializeVariable",
+          "inputs": {
+            "variables": [
+              {
+                "name": "Exception_EmailID",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "Main_Flow_Status": {
+          "runAfter": {
+            "Exception_EmailID": [
+              "Succeeded"
+            ]
+          },
+          "metadata": {
+            "operationMetadataId": "6c9d90c3-771f-42ec-9020-da6faceccf89"
+          },
+          "type": "InitializeVariable",
+          "inputs": {
+            "variables": [
+              {
+                "name": "Main_FlowStatus",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "Try": {
+          "actions": {
+            "Run_a_Child_Flow-_Get_Config_File": {
+              "metadata": {
+                "operationMetadataId": "4317c356-25cb-4c2e-8216-546955d7ec57"
+              },
+              "type": "Workflow",
+              "inputs": {
+                "host": {
+                  "workflowReferenceName": "37a1c70b-3907-f111-8406-7ced8d9079ed"
+                },
+                "retryPolicy": {
+                  "type": "fixed",
+                  "count": 3,
+                  "interval": "PT10S"
+                }
+              },
+              "runtimeConfiguration": {
+                "secureData": {
+                  "properties": [
+                    "outputs"
+                  ]
+                }
+              }
+            },
+            "Run_Type": {
+              "runAfter": {
+                "Loader_Type": [
+                  "Succeeded"
+                ]
+              },
+              "metadata": {
+                "operationMetadataId": "b1f48364-a118-45b3-b4dc-7997db6471a5"
+              },
+              "type": "Compose",
+              "inputs": "@body('Parse_JSON_Config')['Unattended_Run']"
+            },
+            "Condition": {
+              "actions": {
+                "List_rows_-_Get_Queue_Item_count": {
+                  "runAfter": {
+                    "RunLoader_Bot": [
+                      "Succeeded"
+                    ]
+                  },
+                  "metadata": {
+                    "operationMetadataId": "17d5cb21-da2c-494f-8273-d91517b077f9"
+                  },
+                  "type": "OpenApiConnection",
+                  "inputs": {
+                    "parameters": {
+                      "entityName": "workqueueitems",
+                      "$filter": "_workqueueid_value eq '@{variables('WorkQueue_ID')}' and statecode eq 0"
+                    },
+                    "host": {
+                      "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps",
+                      "operationId": "ListRecords",
+                      "connectionName": "shared_commondataserviceforapps"
+                    }
+                  }
+                },
+                "Parse_JSON_-_Queue_Item": {
+                  "runAfter": {
+                    "List_rows_-_Get_Queue_Item_count": [
+                      "Succeeded"
+                    ]
+                  },
+                  "metadata": {
+                    "operationMetadataId": "2cfa87a1-681d-4c80-a908-5ecf63117426"
+                  },
+                  "type": "ParseJson",
+                  "inputs": {
+                    "content": "@body('List_rows_-_Get_Queue_Item_count')",
+                    "schema": {
+                      "type": "object",
+                      "properties": {
+                        "statusCode": {
+                          "type": "integer"
+                        },
+                        "headers": {
+                          "type": "object",
+                          "properties": {
+                            "Cache-Control": {
+                              "type": "string"
+                            },
+                            "Vary": {
+                              "type": "string"
+                            },
+                            "Set-Cookie": {
+                              "type": "string"
+                            },
+                            "x-ms-service-request-id": {
+                              "type": "string"
+                            },
+                            "Strict-Transport-Security": {
+                              "type": "string"
+                            },
+                            "REQ_ID": {
+                              "type": "string"
+                            },
+                            "CRM.ServiceId": {
+                              "type": "string"
+                            },
+                            "AuthActivityId": {
+                              "type": "string"
+                            },
+                            "x-ms-dop-hint": {
+                              "type": "string"
+                            },
+                            "x-ms-ratelimit-time-remaining-xrm-requests": {
+                              "type": "string"
+                            },
+                            "x-ms-ratelimit-burst-remaining-xrm-requests": {
+                              "type": "string"
+                            },
+                            "mise-correlation-id": {
+                              "type": "string"
+                            },
+                            "X-Content-Type-Options": {
+                              "type": "string"
+                            },
+                            "OData-Version": {
+                              "type": "string"
+                            },
+                            "Preference-Applied": {
+                              "type": "string"
+                            },
+                            "X-Source": {
+                              "type": "string"
+                            },
+                            "Public": {
+                              "type": "string"
+                            },
+                            "Date": {
+                              "type": "string"
+                            },
+                            "Allow": {
+                              "type": "string"
+                            },
+                            "Content-Type": {
+                              "type": "string"
+                            },
+                            "Expires": {
+                              "type": "string"
+                            },
+                            "Content-Length": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "body": {
+                          "type": "object",
+                          "properties": {
+                            "@@odata.context": {
+                              "type": "string"
+                            },
+                            "#Microsoft.Dynamics.CRM.CreateMultiple": {
+                              "type": "object",
+                              "properties": {
+                                "title": {
+                                  "type": "string"
+                                },
+                                "target": {
+                                  "type": "string"
+                                }
+                              }
+                            },
+                            "#Microsoft.Dynamics.CRM.DeleteMultiple": {
+                              "type": "object",
+                              "properties": {
+                                "title": {
+                                  "type": "string"
+                                },
+                                "target": {
+                                  "type": "string"
+                                }
+                              }
+                            },
+                            "#Microsoft.Dynamics.CRM.UpdateMultiple": {
+                              "type": "object",
+                              "properties": {
+                                "title": {
+                                  "type": "string"
+                                },
+                                "target": {
+                                  "type": "string"
+                                }
+                              }
+                            },
+                            "#Microsoft.Dynamics.CRM.UpsertMultiple": {
+                              "type": "object",
+                              "properties": {
+                                "title": {
+                                  "type": "string"
+                                },
+                                "target": {
+                                  "type": "string"
+                                }
+                              }
+                            },
+                            "@@Microsoft.Dynamics.CRM.totalrecordcount": {
+                              "type": "integer"
+                            },
+                            "@@Microsoft.Dynamics.CRM.totalrecordcountlimitexceeded": {
+                              "type": "boolean"
+                            },
+                            "@@Microsoft.Dynamics.CRM.globalmetadataversion": {
+                              "type": "string"
+                            },
+                            "value": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "@@odata.type": {
+                                    "type": "string"
+                                  },
+                                  "@@odata.id": {
+                                    "type": "string"
+                                  },
+                                  "@@odata.etag": {
+                                    "type": "string"
+                                  },
+                                  "@@odata.editLink": {
+                                    "type": "string"
+                                  },
+                                  "priority@OData.Community.Display.V1.FormattedValue": {
+                                    "type": "string"
+                                  },
+                                  "priority": {
+                                    "type": "integer"
+                                  },
+                                  "requeuecount@OData.Community.Display.V1.FormattedValue": {
+                                    "type": "string"
+                                  },
+                                  "requeuecount": {
+                                    "type": "integer"
+                                  },
+                                  "createdon@OData.Community.Display.V1.FormattedValue": {
+                                    "type": "string"
+                                  },
+                                  "createdon@odata.type": {
+                                    "type": "string"
+                                  },
+                                  "createdon": {
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "type": "string"
+                                  },
+                                  "statecode@OData.Community.Display.V1.FormattedValue": {
+                                    "type": "string"
+                                  },
+                                  "statecode": {
+                                    "type": "integer"
+                                  },
+                                  "overwritetime@OData.Community.Display.V1.FormattedValue": {
+                                    "type": "string"
+                                  },
+                                  "overwritetime@odata.type": {
+                                    "type": "string"
+                                  },
+                                  "overwritetime": {
+                                    "type": "string"
+                                  },
+                                  "_createdby_value@OData.Community.Display.V1.FormattedValue": {
+                                    "type": "string"
+                                  },
+                                  "_createdby_value@Microsoft.Dynamics.CRM.lookuplogicalname": {
+                                    "type": "string"
+                                  },
+                                  "_createdby_value@odata.type": {
+                                    "type": "string"
+                                  },
+                                  "_createdby_value": {
+                                    "type": "string"
+                                  },
+                                  "solutionid@odata.type": {
+                                    "type": "string"
+                                  },
+                                  "solutionid": {
+                                    "type": "string"
+                                  },
+                                  "processortype@OData.Community.Display.V1.FormattedValue": {
+                                    "type": "string"
+                                  },
+                                  "processortype": {
+                                    "type": "integer"
+                                  },
+                                  "componentidunique@odata.type": {
+                                    "type": "string"
+                                  },
+                                  "componentidunique": {
+                                    "type": "string"
+                                  },
+                                  "_owningbusinessunit_value@OData.Community.Display.V1.FormattedValue": {
+                                    "type": "string"
+                                  },
+                                  "_owningbusinessunit_value@Microsoft.Dynamics.CRM.associatednavigationproperty": {
+                                    "type": "string"
+                                  },
+                                  "_owningbusinessunit_value@Microsoft.Dynamics.CRM.lookuplogicalname": {
+                                    "type": "string"
+                                  },
+                                  "_owningbusinessunit_value@odata.type": {
+                                    "type": "string"
+                                  },
+                                  "_owningbusinessunit_value": {
+                                    "type": "string"
+                                  },
+                                  "versionnumber@OData.Community.Display.V1.FormattedValue": {
+                                    "type": "string"
+                                  },
+                                  "versionnumber@odata.type": {
+                                    "type": "string"
+                                  },
+                                  "versionnumber": {
+                                    "type": "integer"
+                                  },
+                                  "statuscode@OData.Community.Display.V1.FormattedValue": {
+                                    "type": "string"
+                                  },
+                                  "statuscode": {
+                                    "type": "integer"
+                                  },
+                                  "retrycount@OData.Community.Display.V1.FormattedValue": {
+                                    "type": "string"
+                                  },
+                                  "retrycount": {
+                                    "type": "integer"
+                                  },
+                                  "_workqueueid_value@OData.Community.Display.V1.FormattedValue": {
+                                    "type": "string"
+                                  },
+                                  "_workqueueid_value@Microsoft.Dynamics.CRM.associatednavigationproperty": {
+                                    "type": "string"
+                                  },
+                                  "_workqueueid_value@Microsoft.Dynamics.CRM.lookuplogicalname": {
+                                    "type": "string"
+                                  },
+                                  "_workqueueid_value@odata.type": {
+                                    "type": "string"
+                                  },
+                                  "_workqueueid_value": {
+                                    "type": "string"
+                                  },
+                                  "_ownerid_value@OData.Community.Display.V1.FormattedValue": {
+                                    "type": "string"
+                                  },
+                                  "_ownerid_value@Microsoft.Dynamics.CRM.associatednavigationproperty": {
+                                    "type": "string"
+                                  },
+                                  "_ownerid_value@Microsoft.Dynamics.CRM.lookuplogicalname": {
+                                    "type": "string"
+                                  },
+                                  "_ownerid_value@odata.type": {
+                                    "type": "string"
+                                  },
+                                  "_ownerid_value": {
+                                    "type": "string"
+                                  },
+                                  "ismanaged@OData.Community.Display.V1.FormattedValue": {
+                                    "type": "string"
+                                  },
+                                  "ismanaged": {
+                                    "type": "boolean"
+                                  },
+                                  "_modifiedby_value@OData.Community.Display.V1.FormattedValue": {
+                                    "type": "string"
+                                  },
+                                  "_modifiedby_value@Microsoft.Dynamics.CRM.lookuplogicalname": {
+                                    "type": "string"
+                                  },
+                                  "_modifiedby_value@odata.type": {
+                                    "type": "string"
+                                  },
+                                  "_modifiedby_value": {
+                                    "type": "string"
+                                  },
+                                  "componentstate@OData.Community.Display.V1.FormattedValue": {
+                                    "type": "string"
+                                  },
+                                  "componentstate": {
+                                    "type": "integer"
+                                  },
+                                  "uniqueidbyqueue": {
+                                    "type": "string"
+                                  },
+                                  "_owninguser_value@Microsoft.Dynamics.CRM.lookuplogicalname": {
+                                    "type": "string"
+                                  },
+                                  "_owninguser_value@odata.type": {
+                                    "type": "string"
+                                  },
+                                  "_owninguser_value": {
+                                    "type": "string"
+                                  },
+                                  "slastatus@OData.Community.Display.V1.FormattedValue": {
+                                    "type": "string"
+                                  },
+                                  "slastatus": {
+                                    "type": "integer"
+                                  },
+                                  "workqueueitemid@odata.type": {
+                                    "type": "string"
+                                  },
+                                  "workqueueitemid": {
+                                    "type": "string"
+                                  },
+                                  "modifiedon@OData.Community.Display.V1.FormattedValue": {
+                                    "type": "string"
+                                  },
+                                  "modifiedon@odata.type": {
+                                    "type": "string"
+                                  },
+                                  "modifiedon": {
+                                    "type": "string"
+                                  },
+                                  "input": {
+                                    "type": "string"
+                                  },
+                                  "iscustomizable": {
+                                    "type": "object",
+                                    "properties": {
+                                      "@@odata.type": {
+                                        "type": "string"
+                                      },
+                                      "Value": {
+                                        "type": "boolean"
+                                      },
+                                      "CanBeChanged": {
+                                        "type": "boolean"
+                                      },
+                                      "ManagedPropertyLogicalName": {
+                                        "type": "string"
+                                      }
+                                    }
+                                  },
+                                  "workqueueid@odata.associationLink": {
+                                    "type": "string"
+                                  },
+                                  "workqueueid@odata.navigationLink": {
+                                    "type": "string"
+                                  },
+                                  "ownerid@odata.associationLink": {
+                                    "type": "string"
+                                  },
+                                  "ownerid@odata.navigationLink": {
+                                    "type": "string"
+                                  },
+                                  "owningbusinessunit@odata.associationLink": {
+                                    "type": "string"
+                                  },
+                                  "owningbusinessunit@odata.navigationLink": {
+                                    "type": "string"
+                                  },
+                                  "createdby@odata.associationLink": {
+                                    "type": "string"
+                                  },
+                                  "createdby@odata.navigationLink": {
+                                    "type": "string"
+                                  },
+                                  "createdonbehalfby@odata.associationLink": {
+                                    "type": "string"
+                                  },
+                                  "createdonbehalfby@odata.navigationLink": {
+                                    "type": "string"
+                                  },
+                                  "modifiedby@odata.associationLink": {
+                                    "type": "string"
+                                  },
+                                  "modifiedby@odata.navigationLink": {
+                                    "type": "string"
+                                  },
+                                  "modifiedonbehalfby@odata.associationLink": {
+                                    "type": "string"
+                                  },
+                                  "modifiedonbehalfby@odata.navigationLink": {
+                                    "type": "string"
+                                  },
+                                  "owninguser@odata.associationLink": {
+                                    "type": "string"
+                                  },
+                                  "owninguser@odata.navigationLink": {
+                                    "type": "string"
+                                  },
+                                  "owningteam@odata.associationLink": {
+                                    "type": "string"
+                                  },
+                                  "owningteam@odata.navigationLink": {
+                                    "type": "string"
+                                  },
+                                  "workqueueitem_SyncErrors@odata.associationLink": {
+                                    "type": "string"
+                                  },
+                                  "workqueueitem_SyncErrors@odata.navigationLink": {
+                                    "type": "string"
+                                  },
+                                  "workqueueitem_DuplicateMatchingRecord@odata.associationLink": {
+                                    "type": "string"
+                                  },
+                                  "workqueueitem_DuplicateMatchingRecord@odata.navigationLink": {
+                                    "type": "string"
+                                  },
+                                  "workqueueitem_DuplicateBaseRecord@odata.associationLink": {
+                                    "type": "string"
+                                  },
+                                  "workqueueitem_DuplicateBaseRecord@odata.navigationLink": {
+                                    "type": "string"
+                                  },
+                                  "workqueueitem_AsyncOperations@odata.associationLink": {
+                                    "type": "string"
+                                  },
+                                  "workqueueitem_AsyncOperations@odata.navigationLink": {
+                                    "type": "string"
+                                  },
+                                  "workqueueitem_MailboxTrackingFolders@odata.associationLink": {
+                                    "type": "string"
+                                  },
+                                  "workqueueitem_MailboxTrackingFolders@odata.navigationLink": {
+                                    "type": "string"
+                                  },
+                                  "workqueueitem_UserEntityInstanceDatas@odata.associationLink": {
+                                    "type": "string"
+                                  },
+                                  "workqueueitem_UserEntityInstanceDatas@odata.navigationLink": {
+                                    "type": "string"
+                                  },
+                                  "workqueueitem_ProcessSession@odata.associationLink": {
+                                    "type": "string"
+                                  },
+                                  "workqueueitem_ProcessSession@odata.navigationLink": {
+                                    "type": "string"
+                                  },
+                                  "workqueueitem_BulkDeleteFailures@odata.associationLink": {
+                                    "type": "string"
+                                  },
+                                  "workqueueitem_BulkDeleteFailures@odata.navigationLink": {
+                                    "type": "string"
+                                  },
+                                  "workqueueitem_PrincipalObjectAttributeAccesses@odata.associationLink": {
+                                    "type": "string"
+                                  },
+                                  "workqueueitem_PrincipalObjectAttributeAccesses@odata.navigationLink": {
+                                    "type": "string"
+                                  },
+                                  "processinguser@odata.associationLink": {
+                                    "type": "string"
+                                  },
+                                  "processinguser@odata.navigationLink": {
+                                    "type": "string"
+                                  },
+                                  "workqueueitem_flowlog_workqueueitemid@odata.associationLink": {
+                                    "type": "string"
+                                  },
+                                  "workqueueitem_flowlog_workqueueitemid@odata.navigationLink": {
+                                    "type": "string"
+                                  },
+                                  "#Microsoft.Dynamics.CRM.AddWorkQueueItemProcessingHistoryEntry": {
+                                    "type": "object",
+                                    "properties": {
+                                      "title": {
+                                        "type": "string"
+                                      },
+                                      "target": {
+                                        "type": "string"
+                                      }
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "@@odata.type",
+                                  "@@odata.id",
+                                  "@@odata.etag",
+                                  "@@odata.editLink",
+                                  "priority@OData.Community.Display.V1.FormattedValue",
+                                  "priority",
+                                  "requeuecount@OData.Community.Display.V1.FormattedValue",
+                                  "requeuecount",
+                                  "createdon@OData.Community.Display.V1.FormattedValue",
+                                  "createdon@odata.type",
+                                  "createdon",
+                                  "name",
+                                  "statecode@OData.Community.Display.V1.FormattedValue",
+                                  "statecode",
+                                  "overwritetime@OData.Community.Display.V1.FormattedValue",
+                                  "overwritetime@odata.type",
+                                  "overwritetime",
+                                  "_createdby_value@OData.Community.Display.V1.FormattedValue",
+                                  "_createdby_value@Microsoft.Dynamics.CRM.lookuplogicalname",
+                                  "_createdby_value@odata.type",
+                                  "_createdby_value",
+                                  "solutionid@odata.type",
+                                  "solutionid",
+                                  "processortype@OData.Community.Display.V1.FormattedValue",
+                                  "processortype",
+                                  "componentidunique@odata.type",
+                                  "componentidunique",
+                                  "_owningbusinessunit_value@OData.Community.Display.V1.FormattedValue",
+                                  "_owningbusinessunit_value@Microsoft.Dynamics.CRM.associatednavigationproperty",
+                                  "_owningbusinessunit_value@Microsoft.Dynamics.CRM.lookuplogicalname",
+                                  "_owningbusinessunit_value@odata.type",
+                                  "_owningbusinessunit_value",
+                                  "versionnumber@OData.Community.Display.V1.FormattedValue",
+                                  "versionnumber@odata.type",
+                                  "versionnumber",
+                                  "statuscode@OData.Community.Display.V1.FormattedValue",
+                                  "statuscode",
+                                  "retrycount@OData.Community.Display.V1.FormattedValue",
+                                  "retrycount",
+                                  "_workqueueid_value@OData.Community.Display.V1.FormattedValue",
+                                  "_workqueueid_value@Microsoft.Dynamics.CRM.associatednavigationproperty",
+                                  "_workqueueid_value@Microsoft.Dynamics.CRM.lookuplogicalname",
+                                  "_workqueueid_value@odata.type",
+                                  "_workqueueid_value",
+                                  "_ownerid_value@OData.Community.Display.V1.FormattedValue",
+                                  "_ownerid_value@Microsoft.Dynamics.CRM.associatednavigationproperty",
+                                  "_ownerid_value@Microsoft.Dynamics.CRM.lookuplogicalname",
+                                  "_ownerid_value@odata.type",
+                                  "_ownerid_value",
+                                  "ismanaged@OData.Community.Display.V1.FormattedValue",
+                                  "ismanaged",
+                                  "_modifiedby_value@OData.Community.Display.V1.FormattedValue",
+                                  "_modifiedby_value@Microsoft.Dynamics.CRM.lookuplogicalname",
+                                  "_modifiedby_value@odata.type",
+                                  "_modifiedby_value",
+                                  "componentstate@OData.Community.Display.V1.FormattedValue",
+                                  "componentstate",
+                                  "uniqueidbyqueue",
+                                  "_owninguser_value@Microsoft.Dynamics.CRM.lookuplogicalname",
+                                  "_owninguser_value@odata.type",
+                                  "_owninguser_value",
+                                  "slastatus@OData.Community.Display.V1.FormattedValue",
+                                  "slastatus",
+                                  "workqueueitemid@odata.type",
+                                  "workqueueitemid",
+                                  "modifiedon@OData.Community.Display.V1.FormattedValue",
+                                  "modifiedon@odata.type",
+                                  "modifiedon",
+                                  "input",
+                                  "iscustomizable",
+                                  "workqueueid@odata.associationLink",
+                                  "workqueueid@odata.navigationLink",
+                                  "ownerid@odata.associationLink",
+                                  "ownerid@odata.navigationLink",
+                                  "owningbusinessunit@odata.associationLink",
+                                  "owningbusinessunit@odata.navigationLink",
+                                  "createdby@odata.associationLink",
+                                  "createdby@odata.navigationLink",
+                                  "createdonbehalfby@odata.associationLink",
+                                  "createdonbehalfby@odata.navigationLink",
+                                  "modifiedby@odata.associationLink",
+                                  "modifiedby@odata.navigationLink",
+                                  "modifiedonbehalfby@odata.associationLink",
+                                  "modifiedonbehalfby@odata.navigationLink",
+                                  "owninguser@odata.associationLink",
+                                  "owninguser@odata.navigationLink",
+                                  "owningteam@odata.associationLink",
+                                  "owningteam@odata.navigationLink",
+                                  "workqueueitem_SyncErrors@odata.associationLink",
+                                  "workqueueitem_SyncErrors@odata.navigationLink",
+                                  "workqueueitem_DuplicateMatchingRecord@odata.associationLink",
+                                  "workqueueitem_DuplicateMatchingRecord@odata.navigationLink",
+                                  "workqueueitem_DuplicateBaseRecord@odata.associationLink",
+                                  "workqueueitem_DuplicateBaseRecord@odata.navigationLink",
+                                  "workqueueitem_AsyncOperations@odata.associationLink",
+                                  "workqueueitem_AsyncOperations@odata.navigationLink",
+                                  "workqueueitem_MailboxTrackingFolders@odata.associationLink",
+                                  "workqueueitem_MailboxTrackingFolders@odata.navigationLink",
+                                  "workqueueitem_UserEntityInstanceDatas@odata.associationLink",
+                                  "workqueueitem_UserEntityInstanceDatas@odata.navigationLink",
+                                  "workqueueitem_ProcessSession@odata.associationLink",
+                                  "workqueueitem_ProcessSession@odata.navigationLink",
+                                  "workqueueitem_BulkDeleteFailures@odata.associationLink",
+                                  "workqueueitem_BulkDeleteFailures@odata.navigationLink",
+                                  "workqueueitem_PrincipalObjectAttributeAccesses@odata.associationLink",
+                                  "workqueueitem_PrincipalObjectAttributeAccesses@odata.navigationLink",
+                                  "processinguser@odata.associationLink",
+                                  "processinguser@odata.navigationLink",
+                                  "workqueueitem_flowlog_workqueueitemid@odata.associationLink",
+                                  "workqueueitem_flowlog_workqueueitemid@odata.navigationLink",
+                                  "#Microsoft.Dynamics.CRM.AddWorkQueueItemProcessingHistoryEntry"
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "Total_Queue_Items": {
+                  "runAfter": {
+                    "Parse_JSON_-_Queue_Item": [
+                      "Succeeded"
+                    ]
+                  },
+                  "metadata": {
+                    "operationMetadataId": "3cddef3a-0c35-4605-89cf-301b894d38c8"
+                  },
+                  "type": "Compose",
+                  "inputs": "@length(body('Parse_JSON_-_Queue_Item')?['value'])"
+                },
+                "Work_Item_greater_than_0_AND_Run_Performer_Bot": {
+                  "actions": {
+                    "Desktop_Flow_-_Performer_-_Unattended": {
+                      "metadata": {
+                        "operationMetadataId": "5ec02e70-7daf-485d-8f74-e9824ac20f63"
+                      },
+                      "type": "OpenApiConnection",
+                      "inputs": {
+                        "parameters": {
+                          "uiFlowId": "dc461cfb-b2b6-4d3e-bf5e-23488b370672",
+                          "runMode": "unattended",
+                          "item/ConfigData": "@body('Parse_JSON_Config')",
+                          "item/Exception_EmailAddress": "Default email address for exception",
+                          "item/Run_LoaderFlow_Flag": false,
+                          "item/Run_PerformerFlow_Flag": true,
+                          "item/Run_ReportFlow_Flag": true,
+                          "item/Enc_Dec_Key": "@outputs('Get_Enc_Dec_Key')?['body/value']"
+                        },
+                        "host": {
+                          "apiId": "/providers/Microsoft.PowerApps/apis/shared_uiflow",
+                          "operationId": "RunUIFlow_V2",
+                          "connectionName": "shared_uiflow"
+                        }
+                      }
+                    },
+                    "Unattended_Desktop_Flow_Failed": {
+                      "runAfter": {
+                        "Desktop_Flow_-_Performer_-_Unattended": [
+                          "TimedOut",
+                          "Failed"
+                        ]
+                      },
+                      "metadata": {
+                        "operationMetadataId": "cb641645-b4c6-4063-978c-d56c7f206dfb"
+                      },
+                      "type": "SetVariable",
+                      "inputs": {
+                        "name": "DesktopFlow_Failed_Flag",
+                        "value": true
+                      }
+                    }
+                  },
+                  "runAfter": {
+                    "Total_Queue_Items": [
+                      "Succeeded"
+                    ]
+                  },
+                  "else": {
+                    "actions": {}
+                  },
+                  "expression": {
+                    "and": [
+                      {
+                        "greater": [
+                          "@outputs('Total_Queue_Items')",
+                          0
+                        ]
+                      },
+                      {
+                        "equals": [
+                          "@triggerBody()?['boolean_1']",
+                          "Yes"
+                        ]
+                      }
+                    ]
+                  },
+                  "metadata": {
+                    "operationMetadataId": "dc5eb8fc-a0ed-42a4-9e26-2731a5e4c1d7"
+                  },
+                  "type": "If"
+                },
+                "RunLoader_Bot": {
+                  "actions": {
+                    "Desktop_or_Cloud_-_Loader": {
+                      "actions": {
+                        "Desktop_Flow_-_Loader_-_Unattended": {
+                          "metadata": {
+                            "operationMetadataId": "e2443d6c-2929-4e37-82ee-8ba4efc3604b"
+                          },
+                          "type": "OpenApiConnection",
+                          "inputs": {
+                            "parameters": {
+                              "uiFlowId": "dc461cfb-b2b6-4d3e-bf5e-23488b370672",
+                              "runMode": "unattended",
+                              "item/ConfigData": "@body('Parse_JSON_Config')",
+                              "item/Exception_EmailAddress": "Default email address for exception",
+                              "item/Run_LoaderFlow_Flag": true,
+                              "item/Run_PerformerFlow_Flag": false,
+                              "item/Run_ReportFlow_Flag": false,
+                              "item/Enc_Dec_Key": "@outputs('Get_Enc_Dec_Key')?['body/value']"
+                            },
+                            "host": {
+                              "apiId": "/providers/Microsoft.PowerApps/apis/shared_uiflow",
+                              "operationId": "RunUIFlow_V2",
+                              "connectionName": "shared_uiflow"
+                            },
+                            "retryPolicy": {
+                              "type": "fixed",
+                              "count": 3,
+                              "interval": "PT10S"
+                            }
+                          },
+                          "runtimeConfiguration": {
+                            "secureData": {
+                              "properties": [
+                                "inputs"
+                              ]
+                            }
+                          }
+                        },
+                        "Unattended_Desktop_Flow_Failed_1": {
+                          "runAfter": {
+                            "Desktop_Flow_-_Loader_-_Unattended": [
+                              "TimedOut",
+                              "Failed"
+                            ]
+                          },
+                          "metadata": {
+                            "operationMetadataId": "7da6d986-f555-4e60-9f77-04ad53aafa50"
+                          },
+                          "type": "SetVariable",
+                          "inputs": {
+                            "name": "DesktopFlow_Failed_Flag",
+                            "value": true
+                          }
+                        }
+                      },
+                      "else": {
+                        "actions": {
+                          "Call_-_Cloud_Loader_Flow": {
+                            "metadata": {
+                              "operationMetadataId": "b2e7c552-d0d2-48e8-8e33-2dc04994fcf4"
+                            },
+                            "type": "Compose",
+                            "inputs": "Call Child cloud for loader flow"
+                          }
+                        }
+                      },
+                      "expression": {
+                        "and": [
+                          {
+                            "equals": [
+                              "@outputs('Loader_Type')",
+                              "Desktop"
+                            ]
+                          }
+                        ]
+                      },
+                      "metadata": {
+                        "operationMetadataId": "a0fbb8b1-ebb0-4eee-805d-dc026ab0d27b"
+                      },
+                      "type": "If"
+                    }
+                  },
+                  "else": {
+                    "actions": {}
+                  },
+                  "expression": {
+                    "and": [
+                      {
+                        "equals": [
+                          "@triggerBody()?['boolean']",
+                          "Yes"
+                        ]
+                      }
+                    ]
+                  },
+                  "metadata": {
+                    "operationMetadataId": "cd6a8115-c9fa-4182-9138-f5d9d46a2be5"
+                  },
+                  "type": "If"
+                }
+              },
+              "runAfter": {
+                "Run_Type": [
+                  "Succeeded"
+                ]
+              },
+              "else": {
+                "actions": {
+                  "List_rows_-_Get_Total_Queue_Item": {
+                    "runAfter": {
+                      "Run_Loader_Bot": [
+                        "Succeeded"
+                      ]
+                    },
+                    "metadata": {
+                      "operationMetadataId": "649899c7-2c23-42da-a585-1bce44b94b44"
+                    },
+                    "type": "OpenApiConnection",
+                    "inputs": {
+                      "parameters": {
+                        "entityName": "workqueueitems",
+                        "$filter": "_workqueueid_value eq '@{variables('WorkQueue_ID')}' and statecode eq 0"
+                      },
+                      "host": {
+                        "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps",
+                        "operationId": "ListRecords",
+                        "connectionName": "shared_commondataserviceforapps"
+                      }
+                    }
+                  },
+                  "Parse_JSON_-_QueueItem": {
+                    "runAfter": {
+                      "List_rows_-_Get_Total_Queue_Item": [
+                        "Succeeded"
+                      ]
+                    },
+                    "metadata": {
+                      "operationMetadataId": "6a8f8230-dd8a-4df2-be29-8d737bf75d10"
+                    },
+                    "type": "ParseJson",
+                    "inputs": {
+                      "content": "@body('List_rows_-_Get_Total_Queue_Item')",
+                      "schema": {
+                        "type": "object",
+                        "properties": {
+                          "statusCode": {
+                            "type": "integer"
+                          },
+                          "headers": {
+                            "type": "object",
+                            "properties": {
+                              "Cache-Control": {
+                                "type": "string"
+                              },
+                              "Vary": {
+                                "type": "string"
+                              },
+                              "Set-Cookie": {
+                                "type": "string"
+                              },
+                              "x-ms-service-request-id": {
+                                "type": "string"
+                              },
+                              "Strict-Transport-Security": {
+                                "type": "string"
+                              },
+                              "REQ_ID": {
+                                "type": "string"
+                              },
+                              "CRM.ServiceId": {
+                                "type": "string"
+                              },
+                              "AuthActivityId": {
+                                "type": "string"
+                              },
+                              "x-ms-dop-hint": {
+                                "type": "string"
+                              },
+                              "x-ms-ratelimit-time-remaining-xrm-requests": {
+                                "type": "string"
+                              },
+                              "x-ms-ratelimit-burst-remaining-xrm-requests": {
+                                "type": "string"
+                              },
+                              "mise-correlation-id": {
+                                "type": "string"
+                              },
+                              "X-Content-Type-Options": {
+                                "type": "string"
+                              },
+                              "OData-Version": {
+                                "type": "string"
+                              },
+                              "Preference-Applied": {
+                                "type": "string"
+                              },
+                              "X-Source": {
+                                "type": "string"
+                              },
+                              "Public": {
+                                "type": "string"
+                              },
+                              "Date": {
+                                "type": "string"
+                              },
+                              "Allow": {
+                                "type": "string"
+                              },
+                              "Content-Type": {
+                                "type": "string"
+                              },
+                              "Expires": {
+                                "type": "string"
+                              },
+                              "Content-Length": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "body": {
+                            "type": "object",
+                            "properties": {
+                              "@@odata.context": {
+                                "type": "string"
+                              },
+                              "#Microsoft.Dynamics.CRM.CreateMultiple": {
+                                "type": "object",
+                                "properties": {
+                                  "title": {
+                                    "type": "string"
+                                  },
+                                  "target": {
+                                    "type": "string"
+                                  }
+                                }
+                              },
+                              "#Microsoft.Dynamics.CRM.DeleteMultiple": {
+                                "type": "object",
+                                "properties": {
+                                  "title": {
+                                    "type": "string"
+                                  },
+                                  "target": {
+                                    "type": "string"
+                                  }
+                                }
+                              },
+                              "#Microsoft.Dynamics.CRM.UpdateMultiple": {
+                                "type": "object",
+                                "properties": {
+                                  "title": {
+                                    "type": "string"
+                                  },
+                                  "target": {
+                                    "type": "string"
+                                  }
+                                }
+                              },
+                              "#Microsoft.Dynamics.CRM.UpsertMultiple": {
+                                "type": "object",
+                                "properties": {
+                                  "title": {
+                                    "type": "string"
+                                  },
+                                  "target": {
+                                    "type": "string"
+                                  }
+                                }
+                              },
+                              "@@Microsoft.Dynamics.CRM.totalrecordcount": {
+                                "type": "integer"
+                              },
+                              "@@Microsoft.Dynamics.CRM.totalrecordcountlimitexceeded": {
+                                "type": "boolean"
+                              },
+                              "@@Microsoft.Dynamics.CRM.globalmetadataversion": {
+                                "type": "string"
+                              },
+                              "value": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "@@odata.type": {
+                                      "type": "string"
+                                    },
+                                    "@@odata.id": {
+                                      "type": "string"
+                                    },
+                                    "@@odata.etag": {
+                                      "type": "string"
+                                    },
+                                    "@@odata.editLink": {
+                                      "type": "string"
+                                    },
+                                    "priority@OData.Community.Display.V1.FormattedValue": {
+                                      "type": "string"
+                                    },
+                                    "priority": {
+                                      "type": "integer"
+                                    },
+                                    "requeuecount@OData.Community.Display.V1.FormattedValue": {
+                                      "type": "string"
+                                    },
+                                    "requeuecount": {
+                                      "type": "integer"
+                                    },
+                                    "createdon@OData.Community.Display.V1.FormattedValue": {
+                                      "type": "string"
+                                    },
+                                    "createdon@odata.type": {
+                                      "type": "string"
+                                    },
+                                    "createdon": {
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "statecode@OData.Community.Display.V1.FormattedValue": {
+                                      "type": "string"
+                                    },
+                                    "statecode": {
+                                      "type": "integer"
+                                    },
+                                    "overwritetime@OData.Community.Display.V1.FormattedValue": {
+                                      "type": "string"
+                                    },
+                                    "overwritetime@odata.type": {
+                                      "type": "string"
+                                    },
+                                    "overwritetime": {
+                                      "type": "string"
+                                    },
+                                    "_createdby_value@OData.Community.Display.V1.FormattedValue": {
+                                      "type": "string"
+                                    },
+                                    "_createdby_value@Microsoft.Dynamics.CRM.lookuplogicalname": {
+                                      "type": "string"
+                                    },
+                                    "_createdby_value@odata.type": {
+                                      "type": "string"
+                                    },
+                                    "_createdby_value": {
+                                      "type": "string"
+                                    },
+                                    "solutionid@odata.type": {
+                                      "type": "string"
+                                    },
+                                    "solutionid": {
+                                      "type": "string"
+                                    },
+                                    "processortype@OData.Community.Display.V1.FormattedValue": {
+                                      "type": "string"
+                                    },
+                                    "processortype": {
+                                      "type": "integer"
+                                    },
+                                    "componentidunique@odata.type": {
+                                      "type": "string"
+                                    },
+                                    "componentidunique": {
+                                      "type": "string"
+                                    },
+                                    "_owningbusinessunit_value@OData.Community.Display.V1.FormattedValue": {
+                                      "type": "string"
+                                    },
+                                    "_owningbusinessunit_value@Microsoft.Dynamics.CRM.associatednavigationproperty": {
+                                      "type": "string"
+                                    },
+                                    "_owningbusinessunit_value@Microsoft.Dynamics.CRM.lookuplogicalname": {
+                                      "type": "string"
+                                    },
+                                    "_owningbusinessunit_value@odata.type": {
+                                      "type": "string"
+                                    },
+                                    "_owningbusinessunit_value": {
+                                      "type": "string"
+                                    },
+                                    "versionnumber@OData.Community.Display.V1.FormattedValue": {
+                                      "type": "string"
+                                    },
+                                    "versionnumber@odata.type": {
+                                      "type": "string"
+                                    },
+                                    "versionnumber": {
+                                      "type": "integer"
+                                    },
+                                    "statuscode@OData.Community.Display.V1.FormattedValue": {
+                                      "type": "string"
+                                    },
+                                    "statuscode": {
+                                      "type": "integer"
+                                    },
+                                    "retrycount@OData.Community.Display.V1.FormattedValue": {
+                                      "type": "string"
+                                    },
+                                    "retrycount": {
+                                      "type": "integer"
+                                    },
+                                    "_workqueueid_value@OData.Community.Display.V1.FormattedValue": {
+                                      "type": "string"
+                                    },
+                                    "_workqueueid_value@Microsoft.Dynamics.CRM.associatednavigationproperty": {
+                                      "type": "string"
+                                    },
+                                    "_workqueueid_value@Microsoft.Dynamics.CRM.lookuplogicalname": {
+                                      "type": "string"
+                                    },
+                                    "_workqueueid_value@odata.type": {
+                                      "type": "string"
+                                    },
+                                    "_workqueueid_value": {
+                                      "type": "string"
+                                    },
+                                    "_ownerid_value@OData.Community.Display.V1.FormattedValue": {
+                                      "type": "string"
+                                    },
+                                    "_ownerid_value@Microsoft.Dynamics.CRM.associatednavigationproperty": {
+                                      "type": "string"
+                                    },
+                                    "_ownerid_value@Microsoft.Dynamics.CRM.lookuplogicalname": {
+                                      "type": "string"
+                                    },
+                                    "_ownerid_value@odata.type": {
+                                      "type": "string"
+                                    },
+                                    "_ownerid_value": {
+                                      "type": "string"
+                                    },
+                                    "ismanaged@OData.Community.Display.V1.FormattedValue": {
+                                      "type": "string"
+                                    },
+                                    "ismanaged": {
+                                      "type": "boolean"
+                                    },
+                                    "_modifiedby_value@OData.Community.Display.V1.FormattedValue": {
+                                      "type": "string"
+                                    },
+                                    "_modifiedby_value@Microsoft.Dynamics.CRM.lookuplogicalname": {
+                                      "type": "string"
+                                    },
+                                    "_modifiedby_value@odata.type": {
+                                      "type": "string"
+                                    },
+                                    "_modifiedby_value": {
+                                      "type": "string"
+                                    },
+                                    "componentstate@OData.Community.Display.V1.FormattedValue": {
+                                      "type": "string"
+                                    },
+                                    "componentstate": {
+                                      "type": "integer"
+                                    },
+                                    "uniqueidbyqueue": {
+                                      "type": "string"
+                                    },
+                                    "_owninguser_value@Microsoft.Dynamics.CRM.lookuplogicalname": {
+                                      "type": "string"
+                                    },
+                                    "_owninguser_value@odata.type": {
+                                      "type": "string"
+                                    },
+                                    "_owninguser_value": {
+                                      "type": "string"
+                                    },
+                                    "slastatus@OData.Community.Display.V1.FormattedValue": {
+                                      "type": "string"
+                                    },
+                                    "slastatus": {
+                                      "type": "integer"
+                                    },
+                                    "workqueueitemid@odata.type": {
+                                      "type": "string"
+                                    },
+                                    "workqueueitemid": {
+                                      "type": "string"
+                                    },
+                                    "modifiedon@OData.Community.Display.V1.FormattedValue": {
+                                      "type": "string"
+                                    },
+                                    "modifiedon@odata.type": {
+                                      "type": "string"
+                                    },
+                                    "modifiedon": {
+                                      "type": "string"
+                                    },
+                                    "input": {
+                                      "type": "string"
+                                    },
+                                    "iscustomizable": {
+                                      "type": "object",
+                                      "properties": {
+                                        "@@odata.type": {
+                                          "type": "string"
+                                        },
+                                        "Value": {
+                                          "type": "boolean"
+                                        },
+                                        "CanBeChanged": {
+                                          "type": "boolean"
+                                        },
+                                        "ManagedPropertyLogicalName": {
+                                          "type": "string"
+                                        }
+                                      }
+                                    },
+                                    "workqueueid@odata.associationLink": {
+                                      "type": "string"
+                                    },
+                                    "workqueueid@odata.navigationLink": {
+                                      "type": "string"
+                                    },
+                                    "ownerid@odata.associationLink": {
+                                      "type": "string"
+                                    },
+                                    "ownerid@odata.navigationLink": {
+                                      "type": "string"
+                                    },
+                                    "owningbusinessunit@odata.associationLink": {
+                                      "type": "string"
+                                    },
+                                    "owningbusinessunit@odata.navigationLink": {
+                                      "type": "string"
+                                    },
+                                    "createdby@odata.associationLink": {
+                                      "type": "string"
+                                    },
+                                    "createdby@odata.navigationLink": {
+                                      "type": "string"
+                                    },
+                                    "createdonbehalfby@odata.associationLink": {
+                                      "type": "string"
+                                    },
+                                    "createdonbehalfby@odata.navigationLink": {
+                                      "type": "string"
+                                    },
+                                    "modifiedby@odata.associationLink": {
+                                      "type": "string"
+                                    },
+                                    "modifiedby@odata.navigationLink": {
+                                      "type": "string"
+                                    },
+                                    "modifiedonbehalfby@odata.associationLink": {
+                                      "type": "string"
+                                    },
+                                    "modifiedonbehalfby@odata.navigationLink": {
+                                      "type": "string"
+                                    },
+                                    "owninguser@odata.associationLink": {
+                                      "type": "string"
+                                    },
+                                    "owninguser@odata.navigationLink": {
+                                      "type": "string"
+                                    },
+                                    "owningteam@odata.associationLink": {
+                                      "type": "string"
+                                    },
+                                    "owningteam@odata.navigationLink": {
+                                      "type": "string"
+                                    },
+                                    "workqueueitem_SyncErrors@odata.associationLink": {
+                                      "type": "string"
+                                    },
+                                    "workqueueitem_SyncErrors@odata.navigationLink": {
+                                      "type": "string"
+                                    },
+                                    "workqueueitem_DuplicateMatchingRecord@odata.associationLink": {
+                                      "type": "string"
+                                    },
+                                    "workqueueitem_DuplicateMatchingRecord@odata.navigationLink": {
+                                      "type": "string"
+                                    },
+                                    "workqueueitem_DuplicateBaseRecord@odata.associationLink": {
+                                      "type": "string"
+                                    },
+                                    "workqueueitem_DuplicateBaseRecord@odata.navigationLink": {
+                                      "type": "string"
+                                    },
+                                    "workqueueitem_AsyncOperations@odata.associationLink": {
+                                      "type": "string"
+                                    },
+                                    "workqueueitem_AsyncOperations@odata.navigationLink": {
+                                      "type": "string"
+                                    },
+                                    "workqueueitem_MailboxTrackingFolders@odata.associationLink": {
+                                      "type": "string"
+                                    },
+                                    "workqueueitem_MailboxTrackingFolders@odata.navigationLink": {
+                                      "type": "string"
+                                    },
+                                    "workqueueitem_UserEntityInstanceDatas@odata.associationLink": {
+                                      "type": "string"
+                                    },
+                                    "workqueueitem_UserEntityInstanceDatas@odata.navigationLink": {
+                                      "type": "string"
+                                    },
+                                    "workqueueitem_ProcessSession@odata.associationLink": {
+                                      "type": "string"
+                                    },
+                                    "workqueueitem_ProcessSession@odata.navigationLink": {
+                                      "type": "string"
+                                    },
+                                    "workqueueitem_BulkDeleteFailures@odata.associationLink": {
+                                      "type": "string"
+                                    },
+                                    "workqueueitem_BulkDeleteFailures@odata.navigationLink": {
+                                      "type": "string"
+                                    },
+                                    "workqueueitem_PrincipalObjectAttributeAccesses@odata.associationLink": {
+                                      "type": "string"
+                                    },
+                                    "workqueueitem_PrincipalObjectAttributeAccesses@odata.navigationLink": {
+                                      "type": "string"
+                                    },
+                                    "processinguser@odata.associationLink": {
+                                      "type": "string"
+                                    },
+                                    "processinguser@odata.navigationLink": {
+                                      "type": "string"
+                                    },
+                                    "workqueueitem_flowlog_workqueueitemid@odata.associationLink": {
+                                      "type": "string"
+                                    },
+                                    "workqueueitem_flowlog_workqueueitemid@odata.navigationLink": {
+                                      "type": "string"
+                                    },
+                                    "#Microsoft.Dynamics.CRM.AddWorkQueueItemProcessingHistoryEntry": {
+                                      "type": "object",
+                                      "properties": {
+                                        "title": {
+                                          "type": "string"
+                                        },
+                                        "target": {
+                                          "type": "string"
+                                        }
+                                      }
+                                    }
+                                  },
+                                  "required": [
+                                    "@@odata.type",
+                                    "@@odata.id",
+                                    "@@odata.etag",
+                                    "@@odata.editLink",
+                                    "priority@OData.Community.Display.V1.FormattedValue",
+                                    "priority",
+                                    "requeuecount@OData.Community.Display.V1.FormattedValue",
+                                    "requeuecount",
+                                    "createdon@OData.Community.Display.V1.FormattedValue",
+                                    "createdon@odata.type",
+                                    "createdon",
+                                    "name",
+                                    "statecode@OData.Community.Display.V1.FormattedValue",
+                                    "statecode",
+                                    "overwritetime@OData.Community.Display.V1.FormattedValue",
+                                    "overwritetime@odata.type",
+                                    "overwritetime",
+                                    "_createdby_value@OData.Community.Display.V1.FormattedValue",
+                                    "_createdby_value@Microsoft.Dynamics.CRM.lookuplogicalname",
+                                    "_createdby_value@odata.type",
+                                    "_createdby_value",
+                                    "solutionid@odata.type",
+                                    "solutionid",
+                                    "processortype@OData.Community.Display.V1.FormattedValue",
+                                    "processortype",
+                                    "componentidunique@odata.type",
+                                    "componentidunique",
+                                    "_owningbusinessunit_value@OData.Community.Display.V1.FormattedValue",
+                                    "_owningbusinessunit_value@Microsoft.Dynamics.CRM.associatednavigationproperty",
+                                    "_owningbusinessunit_value@Microsoft.Dynamics.CRM.lookuplogicalname",
+                                    "_owningbusinessunit_value@odata.type",
+                                    "_owningbusinessunit_value",
+                                    "versionnumber@OData.Community.Display.V1.FormattedValue",
+                                    "versionnumber@odata.type",
+                                    "versionnumber",
+                                    "statuscode@OData.Community.Display.V1.FormattedValue",
+                                    "statuscode",
+                                    "retrycount@OData.Community.Display.V1.FormattedValue",
+                                    "retrycount",
+                                    "_workqueueid_value@OData.Community.Display.V1.FormattedValue",
+                                    "_workqueueid_value@Microsoft.Dynamics.CRM.associatednavigationproperty",
+                                    "_workqueueid_value@Microsoft.Dynamics.CRM.lookuplogicalname",
+                                    "_workqueueid_value@odata.type",
+                                    "_workqueueid_value",
+                                    "_ownerid_value@OData.Community.Display.V1.FormattedValue",
+                                    "_ownerid_value@Microsoft.Dynamics.CRM.associatednavigationproperty",
+                                    "_ownerid_value@Microsoft.Dynamics.CRM.lookuplogicalname",
+                                    "_ownerid_value@odata.type",
+                                    "_ownerid_value",
+                                    "ismanaged@OData.Community.Display.V1.FormattedValue",
+                                    "ismanaged",
+                                    "_modifiedby_value@OData.Community.Display.V1.FormattedValue",
+                                    "_modifiedby_value@Microsoft.Dynamics.CRM.lookuplogicalname",
+                                    "_modifiedby_value@odata.type",
+                                    "_modifiedby_value",
+                                    "componentstate@OData.Community.Display.V1.FormattedValue",
+                                    "componentstate",
+                                    "uniqueidbyqueue",
+                                    "_owninguser_value@Microsoft.Dynamics.CRM.lookuplogicalname",
+                                    "_owninguser_value@odata.type",
+                                    "_owninguser_value",
+                                    "slastatus@OData.Community.Display.V1.FormattedValue",
+                                    "slastatus",
+                                    "workqueueitemid@odata.type",
+                                    "workqueueitemid",
+                                    "modifiedon@OData.Community.Display.V1.FormattedValue",
+                                    "modifiedon@odata.type",
+                                    "modifiedon",
+                                    "input",
+                                    "iscustomizable",
+                                    "workqueueid@odata.associationLink",
+                                    "workqueueid@odata.navigationLink",
+                                    "ownerid@odata.associationLink",
+                                    "ownerid@odata.navigationLink",
+                                    "owningbusinessunit@odata.associationLink",
+                                    "owningbusinessunit@odata.navigationLink",
+                                    "createdby@odata.associationLink",
+                                    "createdby@odata.navigationLink",
+                                    "createdonbehalfby@odata.associationLink",
+                                    "createdonbehalfby@odata.navigationLink",
+                                    "modifiedby@odata.associationLink",
+                                    "modifiedby@odata.navigationLink",
+                                    "modifiedonbehalfby@odata.associationLink",
+                                    "modifiedonbehalfby@odata.navigationLink",
+                                    "owninguser@odata.associationLink",
+                                    "owninguser@odata.navigationLink",
+                                    "owningteam@odata.associationLink",
+                                    "owningteam@odata.navigationLink",
+                                    "workqueueitem_SyncErrors@odata.associationLink",
+                                    "workqueueitem_SyncErrors@odata.navigationLink",
+                                    "workqueueitem_DuplicateMatchingRecord@odata.associationLink",
+                                    "workqueueitem_DuplicateMatchingRecord@odata.navigationLink",
+                                    "workqueueitem_DuplicateBaseRecord@odata.associationLink",
+                                    "workqueueitem_DuplicateBaseRecord@odata.navigationLink",
+                                    "workqueueitem_AsyncOperations@odata.associationLink",
+                                    "workqueueitem_AsyncOperations@odata.navigationLink",
+                                    "workqueueitem_MailboxTrackingFolders@odata.associationLink",
+                                    "workqueueitem_MailboxTrackingFolders@odata.navigationLink",
+                                    "workqueueitem_UserEntityInstanceDatas@odata.associationLink",
+                                    "workqueueitem_UserEntityInstanceDatas@odata.navigationLink",
+                                    "workqueueitem_ProcessSession@odata.associationLink",
+                                    "workqueueitem_ProcessSession@odata.navigationLink",
+                                    "workqueueitem_BulkDeleteFailures@odata.associationLink",
+                                    "workqueueitem_BulkDeleteFailures@odata.navigationLink",
+                                    "workqueueitem_PrincipalObjectAttributeAccesses@odata.associationLink",
+                                    "workqueueitem_PrincipalObjectAttributeAccesses@odata.navigationLink",
+                                    "processinguser@odata.associationLink",
+                                    "processinguser@odata.navigationLink",
+                                    "workqueueitem_flowlog_workqueueitemid@odata.associationLink",
+                                    "workqueueitem_flowlog_workqueueitemid@odata.navigationLink",
+                                    "#Microsoft.Dynamics.CRM.AddWorkQueueItemProcessingHistoryEntry"
+                                  ]
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "Total_QueueItems": {
+                    "runAfter": {
+                      "Parse_JSON_-_QueueItem": [
+                        "Succeeded"
+                      ]
+                    },
+                    "metadata": {
+                      "operationMetadataId": "3d8c247a-eef7-428e-ad0b-7ef002aeeaca"
+                    },
+                    "type": "Compose",
+                    "inputs": "@length(body('Parse_JSON_-_QueueItem')?['value'])"
+                  },
+                  "WorkItem_Greater_than_0_AND_Run_Performer_Bot": {
+                    "actions": {
+                      "Desktop_Flow_-_Performer_-_Attended": {
+                        "metadata": {
+                          "operationMetadataId": "aa0825cf-4f0b-4016-8501-74bec0d2443c"
+                        },
+                        "type": "OpenApiConnection",
+                        "inputs": {
+                          "parameters": {
+                            "uiFlowId": "dc461cfb-b2b6-4d3e-bf5e-23488b370672",
+                            "runMode": "attended",
+                            "item/ConfigData": "@body('Parse_JSON_Config')",
+                            "item/Exception_EmailAddress": "Default email address for exception",
+                            "item/Run_LoaderFlow_Flag": false,
+                            "item/Run_PerformerFlow_Flag": true,
+                            "item/Run_ReportFlow_Flag": true,
+                            "item/Enc_Dec_Key": "@outputs('Get_Enc_Dec_Key')?['body/value']"
+                          },
+                          "host": {
+                            "apiId": "/providers/Microsoft.PowerApps/apis/shared_uiflow",
+                            "operationId": "RunUIFlow_V2",
+                            "connectionName": "shared_uiflow"
+                          },
+                          "retryPolicy": {
+                            "type": "fixed",
+                            "count": 3,
+                            "interval": "PT10S"
+                          }
+                        },
+                        "runtimeConfiguration": {
+                          "secureData": {
+                            "properties": [
+                              "inputs"
+                            ]
+                          }
+                        }
+                      },
+                      "Attended_Desktop_Flow_Failed_": {
+                        "runAfter": {
+                          "Desktop_Flow_-_Performer_-_Attended": [
+                            "TimedOut",
+                            "Failed"
+                          ]
+                        },
+                        "metadata": {
+                          "operationMetadataId": "52abed55-0ee3-42ac-8131-e60b75b5ddfa"
+                        },
+                        "type": "SetVariable",
+                        "inputs": {
+                          "name": "DesktopFlow_Failed_Flag",
+                          "value": true
+                        }
+                      }
+                    },
+                    "runAfter": {
+                      "Total_QueueItems": [
+                        "Succeeded"
+                      ]
+                    },
+                    "else": {
+                      "actions": {}
+                    },
+                    "expression": {
+                      "and": [
+                        {
+                          "greater": [
+                            "@outputs('Total_QueueItems')",
+                            0
+                          ]
+                        },
+                        {
+                          "equals": [
+                            "@triggerBody()?['boolean_1']",
+                            "Yes"
+                          ]
+                        }
+                      ]
+                    },
+                    "metadata": {
+                      "operationMetadataId": "da12cd9c-4dc3-46e5-9cb0-584fb45e2084"
+                    },
+                    "type": "If"
+                  },
+                  "Run_Loader_Bot": {
+                    "actions": {
+                      "Desktop_or_Cloud_Loader": {
+                        "actions": {
+                          "Desktop_Flow_-_Loader_-_Attended": {
+                            "metadata": {
+                              "operationMetadataId": "95fb97f6-2951-4ca0-bafc-1d1fcbe44948"
+                            },
+                            "type": "OpenApiConnection",
+                            "inputs": {
+                              "parameters": {
+                                "uiFlowId": "dc461cfb-b2b6-4d3e-bf5e-23488b370672",
+                                "runMode": "attended",
+                                "item/ConfigData": "@body('Parse_JSON_Config')",
+                                "item/Exception_EmailAddress": "Default email address for exception",
+                                "item/Run_LoaderFlow_Flag": true,
+                                "item/Run_PerformerFlow_Flag": false,
+                                "item/Run_ReportFlow_Flag": false,
+                                "item/Enc_Dec_Key": "@outputs('Get_Enc_Dec_Key')?['body/value']"
+                              },
+                              "host": {
+                                "apiId": "/providers/Microsoft.PowerApps/apis/shared_uiflow",
+                                "operationId": "RunUIFlow_V2",
+                                "connectionName": "shared_uiflow"
+                              },
+                              "retryPolicy": {
+                                "type": "fixed",
+                                "count": 3,
+                                "interval": "PT10S"
+                              }
+                            },
+                            "runtimeConfiguration": {
+                              "secureData": {
+                                "properties": [
+                                  "inputs"
+                                ]
+                              }
+                            }
+                          },
+                          "Attended_Desktop_Flow_Failed_1": {
+                            "runAfter": {
+                              "Desktop_Flow_-_Loader_-_Attended": [
+                                "TimedOut",
+                                "Failed"
+                              ]
+                            },
+                            "metadata": {
+                              "operationMetadataId": "a76516cb-9e05-4b03-b19a-f8f8cdf8824c"
+                            },
+                            "type": "SetVariable",
+                            "inputs": {
+                              "name": "DesktopFlow_Failed_Flag",
+                              "value": true
+                            }
+                          }
+                        },
+                        "else": {
+                          "actions": {
+                            "Call_Cloud_Loader_Flow": {
+                              "metadata": {
+                                "operationMetadataId": "a1bbb71f-b224-4e00-b5a0-6f433da4cff8"
+                              },
+                              "type": "Compose",
+                              "inputs": "Call Child cloud for loader flow"
+                            }
+                          }
+                        },
+                        "expression": {
+                          "and": [
+                            {
+                              "equals": [
+                                "@outputs('Loader_Type')",
+                                "Desktop"
+                              ]
+                            }
+                          ]
+                        },
+                        "metadata": {
+                          "operationMetadataId": "32bec0a5-4da3-4558-a357-98edd171598d"
+                        },
+                        "type": "If"
+                      }
+                    },
+                    "else": {
+                      "actions": {}
+                    },
+                    "expression": {
+                      "and": [
+                        {
+                          "equals": [
+                            "",
+                            ""
+                          ]
+                        }
+                      ]
+                    },
+                    "metadata": {
+                      "operationMetadataId": "ea244320-6685-452f-b683-0683d48691dc"
+                    },
+                    "type": "If"
+                  }
+                }
+              },
+              "expression": {
+                "and": [
+                  {
+                    "equals": [
+                      "@outputs('Run_Type')",
+                      "Yes"
+                    ]
+                  }
+                ]
+              },
+              "metadata": {
+                "operationMetadataId": "f03f99b3-af87-4c09-baea-e9f0206b2431"
+              },
+              "type": "If"
+            },
+            "Desktop_Flow_Failed_Condition": {
+              "actions": {
+                "Desktop_Flow_Exception": {
+                  "runAfter": {
+                    "Get_CurrentDateTime": [
+                      "Succeeded"
+                    ]
+                  },
+                  "metadata": {
+                    "operationMetadataId": "4f720cf5-0483-4a7b-881c-c90763000e9f"
+                  },
+                  "type": "SetVariable",
+                  "inputs": {
+                    "name": "Exception_Message",
+                    "value": "@coalesce(outputs('Desktop_Flow_-_Loader_-_Unattended')?['body']?['error']?['message'],outputs('Desktop_Flow_-_Loader_-_Attended')?['body']?['error']?['message'],outputs('Desktop_Flow_-_Performer_-_Unattended')?['body']?['error']?['message'],outputs('Desktop_Flow_-_Performer_-_Attended')?['body']?['error']?['message'])\r\n\r\n"
+                  }
+                },
+                "Get_CurrentDateTime": {
+                  "metadata": {
+                    "operationMetadataId": "bd66af68-0af7-465e-aab6-565cce046b46"
+                  },
+                  "type": "Compose",
+                  "inputs": "@formatDateTime(utcNow(), 'MM/dd/yyyy hh:mm:ss tt')"
+                },
+                "Get_workflowDetails": {
+                  "runAfter": {
+                    "Desktop_Flow_Exception": [
+                      "Succeeded"
+                    ]
+                  },
+                  "metadata": {
+                    "operationMetadataId": "07197efa-6bff-4dbd-a843-23848dda11f7"
+                  },
+                  "type": "Compose",
+                  "inputs": "@workflow()"
+                },
+                "Send_an_email_(V2)_-_Desktop_Flow_Failure": {
+                  "runAfter": {
+                    "Get_workflowDetails": [
+                      "Succeeded"
+                    ]
+                  },
+                  "metadata": {
+                    "operationMetadataId": "12c421e1-88c4-43ff-82d0-6be7c720a1b5"
+                  },
+                  "type": "OpenApiConnection",
+                  "inputs": {
+                    "parameters": {
+                      "emailMessage/To": "@variables('Exception_EmailID')",
+                      "emailMessage/Subject": " @{workflow()?['tags']['flowDisplayName']} - System Exception - @{outputs('Get_CurrentDateTime')}",
+                      "emailMessage/Body": "<p class=\"editor-paragraph\"><span style=\"font-family: &quot;Courier New&quot;; font-size: 15px;\">Hello Team,</span><br><span style=\"font-family: &quot;Courier New&quot;;\">An exception occurred in the Power Automate flow.</span><br><span style=\"font-family: &quot;Courier New&quot;;\">Please find the below exception details.</span></p><p class=\"editor-paragraph\"><b><strong class=\"editor-text-bold\" style=\"font-family: &quot;Courier New&quot;;\">Flow name: </strong></b>@{workflow()?['tags']['flowDisplayName']}</p><p class=\"editor-paragraph\"><b><strong class=\"editor-text-bold\" style=\"font-family: &quot;Courier New&quot;; font-size: 15px;\">Action :</strong></b><b><strong class=\"editor-text-bold\" style=\"font-family: &quot;Courier New&quot;; font-size: 15px;\"> </strong></b>Run a flow built with Power Automate for desktop</p><p class=\"editor-paragraph\"><b><strong class=\"editor-text-bold\" style=\"font-family: &quot;Courier New&quot;; font-size: 15px;\">Error message :</strong></b>@{variables('Exception_Message')}</p><p class=\"editor-paragraph\"><b><strong class=\"editor-text-bold\" style=\"font-family: &quot;Courier New&quot;; font-size: 15px;\">Status : Failed</strong></b></p><p class=\"editor-paragraph\"><b><strong class=\"editor-text-bold\" style=\"font-family: &quot;Courier New&quot;; font-size: 15px;\">Power Automate Flow URL</strong></b><span style=\"font-family: &quot;Courier New&quot;; font-size: 15px;\">: </span><u><b><strong class=\"editor-text-bold editor-text-underline\" style=\"font-family: &quot;Courier New&quot;; font-size: 16px;\">https://make.powerautomate.com/environments/</strong></b></u>@{workflow()?['tags']['environmentName']}<u><b><strong class=\"editor-text-bold editor-text-underline\" style=\"font-family: &quot;Courier New&quot;; font-size: 16px;\">/flows/</strong></b></u>@{workflow()?['name']}<u><b><strong class=\"editor-text-bold editor-text-underline\" style=\"font-family: &quot;Courier New&quot;; font-size: 16px;\">/</strong></b></u>@{workflow()?['run']['name']}</p><p class=\"editor-paragraph\"><span style=\"font-family: &quot;Courier New&quot;;\">Regards,</span></p><p class=\"editor-paragraph\"><span style=\"font-family: &quot;Courier New&quot;;\">Trading Oil BOT</span></p>",
+                      "emailMessage/Importance": "Normal"
+                    },
+                    "host": {
+                      "apiId": "/providers/Microsoft.PowerApps/apis/shared_office365",
+                      "operationId": "SendEmailV2",
+                      "connectionName": "shared_office365"
+                    }
+                  }
+                },
+                "Terminate_Flow": {
+                  "runAfter": {
+                    "Send_an_email_(V2)_-_Desktop_Flow_Failure": [
+                      "Succeeded"
+                    ]
+                  },
+                  "metadata": {
+                    "operationMetadataId": "b198b5c2-871c-4205-9ad8-9a481e1eb182"
+                  },
+                  "type": "Terminate",
+                  "inputs": {
+                    "runStatus": "Failed",
+                    "runError": {
+                      "code": "Run a flow built with Power Automate for desktop Failed",
+                      "message": "@variables('Exception_Message')"
+                    }
+                  }
+                }
+              },
+              "runAfter": {
+                "Condition": [
+                  "Succeeded",
+                  "Failed",
+                  "TimedOut"
+                ]
+              },
+              "else": {
+                "actions": {
+                  "Main_Flow_Status_No_Error_in_Desktop": {
+                    "metadata": {
+                      "operationMetadataId": "72c3e43f-0590-4115-b438-930092affb4c"
+                    },
+                    "type": "SetVariable",
+                    "inputs": {
+                      "name": "Main_FlowStatus",
+                      "value": "Success"
+                    }
+                  }
+                }
+              },
+              "expression": {
+                "and": [
+                  {
+                    "equals": [
+                      "@variables('DesktopFlow_Failed_Flag')",
+                      true
+                    ]
+                  }
+                ]
+              },
+              "metadata": {
+                "operationMetadataId": "1346150f-b7e2-442a-a6d5-0376537fc090"
+              },
+              "type": "If"
+            },
+            "Assign_Work_Queue_ID": {
+              "runAfter": {
+                "Assign_Exception_Email_ID": [
+                  "Succeeded"
+                ]
+              },
+              "metadata": {
+                "operationMetadataId": "c7fad76c-0c21-4cb8-9b53-76683b21dde7"
+              },
+              "type": "SetVariable",
+              "inputs": {
+                "name": "WorkQueue_ID",
+                "value": "@body('Parse_JSON_Config')['WorkQueueID']"
+              }
+            },
+            "Config_Status": {
+              "actions": {
+                "Parse_JSON_Config": {
+                  "metadata": {
+                    "operationMetadataId": "eff0ea85-02ae-4df2-a344-92318c17edd4"
+                  },
+                  "type": "ParseJson",
+                  "inputs": {
+                    "content": "@body('Run_a_Child_Flow-_Get_Config_File')?['configuration']",
+                    "schema": {
+                      "type": "object",
+                      "properties": {
+                        "SubjectFilter": {
+                          "type": "string"
+                        },
+                        "AttachmentPath": {
+                          "type": "string"
+                        },
+                        "BusinessEmail": {
+                          "type": "string"
+                        },
+                        "TechnicalEmail": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "runAfter": {
+                "Run_a_Child_Flow-_Get_Config_File": [
+                  "Succeeded"
+                ]
+              },
+              "else": {
+                "actions": {
+                  "Terminate": {
+                    "metadata": {
+                      "operationMetadataId": "4e0144e1-b244-483b-832d-4ba8613463e1"
+                    },
+                    "type": "Terminate",
+                    "inputs": {
+                      "runStatus": "Failed",
+                      "runError": {
+                        "code": "Failed to Read Config File",
+                        "message": "@body('Run_a_Child_Flow-_Get_Config_File')?['config_flow_status']"
+                      }
+                    }
+                  }
+                }
+              },
+              "expression": {
+                "and": [
+                  {
+                    "equals": [
+                      "@body('Run_a_Child_Flow-_Get_Config_File')?['config_flow_status']",
+                      "Success"
+                    ]
+                  }
+                ]
+              },
+              "metadata": {
+                "operationMetadataId": "2451949f-6f4f-4798-83a5-571ada54436e"
+              },
+              "type": "If"
+            },
+            "Assign_Exception_Email_ID": {
+              "runAfter": {
+                "Config_Status": [
+                  "Succeeded"
+                ]
+              },
+              "metadata": {
+                "operationMetadataId": "93596dcd-1e77-494d-bb4e-8215f4e0303e"
+              },
+              "type": "SetVariable",
+              "inputs": {
+                "name": "Exception_EmailID",
+                "value": "@body('Parse_JSON_Config')['SystemExceptionTo']"
+              }
+            },
+            "Loader_Type": {
+              "runAfter": {
+                "Get_Enc_Dec_Key": [
+                  "Succeeded"
+                ]
+              },
+              "metadata": {
+                "operationMetadataId": "b1f48364-a118-45b3-b4dc-7997db6471a5"
+              },
+              "type": "Compose",
+              "inputs": "@body('Parse_JSON_Config')['Loader_Type']"
+            },
+            "Get_Enc_Dec_Key": {
+              "runAfter": {
+                "Assign_Work_Queue_ID": [
+                  "Succeeded"
+                ]
+              },
+              "metadata": {
+                "operationMetadataId": "ea2521f7-aacf-44a5-882f-d7b034a5b895"
+              },
+              "type": "OpenApiConnection",
+              "inputs": {
+                "parameters": {
+                  "secretName": "@body('Parse_JSON_Config')['Enc_Dec_Secret']"
+                },
+                "host": {
+                  "apiId": "/providers/Microsoft.PowerApps/apis/shared_keyvault",
+                  "operationId": "GetSecret",
+                  "connectionName": "shared_keyvault"
+                },
+                "retryPolicy": {
+                  "type": "fixed",
+                  "count": 3,
+                  "interval": "PT10S"
+                }
+              },
+              "runtimeConfiguration": {
+                "secureData": {
+                  "properties": [
+                    "outputs"
+                  ]
+                }
+              }
+            }
+          },
+          "runAfter": {
+            "Desktop_Flow_Failed_Flag": [
+              "Succeeded"
+            ]
+          },
+          "metadata": {
+            "operationMetadataId": "824abbd5-fe46-4740-8076-41e7691978cf"
+          },
+          "type": "Scope"
+        },
+        "Catch": {
+          "actions": {
+            "Filter_array": {
+              "runAfter": {
+                "Get_Current_DateTime": [
+                  "Succeeded"
+                ]
+              },
+              "metadata": {
+                "operationMetadataId": "334f6b6f-7798-4099-b507-2d57a08170d4"
+              },
+              "type": "Query",
+              "inputs": {
+                "from": "@result('Try')",
+                "where": "@or(equals(item()?['Status'],'Failed'),equals(item()?['Status'],'TimedOut'))"
+              }
+            },
+            "Get_workflow_details": {
+              "runAfter": {
+                "Condition__-_Exception_message": [
+                  "Succeeded"
+                ]
+              },
+              "metadata": {
+                "operationMetadataId": "07197efa-6bff-4dbd-a843-23848dda11f7"
+              },
+              "type": "Compose",
+              "inputs": "@workflow()"
+            },
+            "Send_an_email_(V2)": {
+              "runAfter": {
+                "Get_workflow_details": [
+                  "Succeeded"
+                ]
+              },
+              "metadata": {
+                "operationMetadataId": "12c421e1-88c4-43ff-82d0-6be7c720a1b5"
+              },
+              "type": "OpenApiConnection",
+              "inputs": {
+                "parameters": {
+                  "emailMessage/To": "@variables('Exception_EmailID')",
+                  "emailMessage/Subject": " @{workflow()?['tags']['flowDisplayName']} - System Exception - @{outputs('Get_Current_DateTime')}",
+                  "emailMessage/Body": "<p class=\"editor-paragraph\"><span style=\"font-family: &quot;Courier New&quot;; font-size: 15px;\">Hello Team,</span><br><span style=\"font-family: &quot;Courier New&quot;;\">An exception occurred in the Power Automate flow.</span><br><span style=\"font-family: &quot;Courier New&quot;;\">Please find the below exception details.</span></p><p class=\"editor-paragraph\"><b><strong class=\"editor-text-bold\" style=\"font-family: &quot;Courier New&quot;;\">Flow name: </strong></b>@{workflow()?['tags']['flowDisplayName']}</p><p class=\"editor-paragraph\"><b><strong class=\"editor-text-bold\" style=\"font-family: &quot;Courier New&quot;; font-size: 15px;\">Action :</strong></b><b><strong class=\"editor-text-bold\" style=\"font-family: &quot;Courier New&quot;; font-size: 15px;\"> </strong></b>@{first(body('Filter_array'))?['name']}</p><p class=\"editor-paragraph\"><b><strong class=\"editor-text-bold\" style=\"font-family: &quot;Courier New&quot;; font-size: 15px;\">Error message :</strong></b>@{variables('Exception_Message')}</p><p class=\"editor-paragraph\"><b><strong class=\"editor-text-bold\" style=\"font-family: &quot;Courier New&quot;; font-size: 15px;\">Status : </strong></b>@{first(body('Filter_array'))?['status']}</p><p class=\"editor-paragraph\"><b><strong class=\"editor-text-bold\" style=\"font-family: &quot;Courier New&quot;; font-size: 15px;\">Power Automate Flow URL</strong></b><span style=\"font-family: &quot;Courier New&quot;; font-size: 15px;\">: </span><u><b><strong class=\"editor-text-bold editor-text-underline\" style=\"font-family: &quot;Courier New&quot;; font-size: 16px;\">https://make.powerautomate.com/environments/</strong></b></u>@{workflow()?['tags']['environmentName']}<u><b><strong class=\"editor-text-bold editor-text-underline\" style=\"font-family: &quot;Courier New&quot;; font-size: 16px;\">/flows/</strong></b></u>@{workflow()?['name']}<u><b><strong class=\"editor-text-bold editor-text-underline\" style=\"font-family: &quot;Courier New&quot;; font-size: 16px;\">/</strong></b></u>@{workflow()?['run']['name']}</p><p class=\"editor-paragraph\"><span style=\"font-family: &quot;Courier New&quot;;\">Regards,</span></p><p class=\"editor-paragraph\"><span style=\"font-family: &quot;Courier New&quot;;\">Trading Oil BOT</span></p>",
+                  "emailMessage/Importance": "Normal"
+                },
+                "host": {
+                  "apiId": "/providers/Microsoft.PowerApps/apis/shared_office365",
+                  "operationId": "SendEmailV2",
+                  "connectionName": "shared_office365"
+                }
+              }
+            },
+            "Condition__-_Exception_message": {
+              "actions": {
+                "Set_Exception_-_Error_Description": {
+                  "metadata": {
+                    "operationMetadataId": "4f720cf5-0483-4a7b-881c-c90763000e9f"
+                  },
+                  "type": "SetVariable",
+                  "inputs": {
+                    "name": "Exception_Message",
+                    "value": "@concat(first(body('Filter_array'))?['outputs']?['body']?['error'],'-',first(body('Filter_array'))?['outputs']?['body']?['error_description'])"
+                  }
+                }
+              },
+              "runAfter": {
+                "Filter_array": [
+                  "Succeeded"
+                ]
+              },
+              "else": {
+                "actions": {
+                  "Set_Exception": {
+                    "metadata": {
+                      "operationMetadataId": "4f720cf5-0483-4a7b-881c-c90763000e9f"
+                    },
+                    "type": "SetVariable",
+                    "inputs": {
+                      "name": "Exception_Message",
+                      "value": "@coalesce(\r\nfirst(body('Filter_array'))?['outputs']?['body']?['error']?['message'],\r\nfirst(body('Filter_array'))?['body']?['message'],\r\nfirst(body('Filter_array'))?['error']?['message']\r\n)"
+                    }
+                  }
+                }
+              },
+              "expression": {
+                "and": [
+                  {
+                    "contains": [
+                      "@string(first(body('Filter_array'))?['outputs'])",
+                      "error_description"
+                    ]
+                  }
+                ]
+              },
+              "metadata": {
+                "operationMetadataId": "2423be24-658d-499a-a142-6eaa3d730755"
+              },
+              "type": "If"
+            },
+            "Get_Current_DateTime": {
+              "metadata": {
+                "operationMetadataId": "46df1a60-7915-49ba-a029-0080eedde0a0"
+              },
+              "type": "Compose",
+              "inputs": "@formatDateTime(utcNow(), 'MM/dd/yyyy hh:mm:ss tt')"
+            }
+          },
+          "runAfter": {
+            "Try": [
+              "TimedOut",
+              "Failed"
+            ]
+          },
+          "metadata": {
+            "operationMetadataId": "c708e036-f5c9-4fab-a4ab-75cba3534130"
+          },
+          "type": "Scope"
+        },
+        "Exception_Message": {
+          "runAfter": {
+            "Main_Flow_Status": [
+              "Succeeded"
+            ]
+          },
+          "metadata": {
+            "operationMetadataId": "ba9a775f-84c4-4014-bb56-7706c536f7c3"
+          },
+          "type": "InitializeVariable",
+          "inputs": {
+            "variables": [
+              {
+                "name": "Exception_Message",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "Desktop_Flow_Failed_Flag": {
+          "runAfter": {
+            "Work_Queue_ID": [
+              "Succeeded"
+            ]
+          },
+          "metadata": {
+            "operationMetadataId": "90b3f6e2-9f05-4648-97f4-2af9d9432056"
+          },
+          "type": "InitializeVariable",
+          "inputs": {
+            "variables": [
+              {
+                "name": "DesktopFlow_Failed_Flag",
+                "type": "boolean",
+                "value": false
+              }
+            ]
+          }
+        },
+        "Work_Queue_ID": {
+          "runAfter": {
+            "Exception_Message": [
+              "Succeeded"
+            ]
+          },
+          "metadata": {
+            "operationMetadataId": "69bd6ac1-75c6-4a40-85de-497e78e88958"
+          },
+          "type": "InitializeVariable",
+          "inputs": {
+            "variables": [
+              {
+                "name": "WorkQueue_ID",
+                "type": "string"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "templateName": null
+  },
+  "schemaVersion": "1.0.0.0"
+}

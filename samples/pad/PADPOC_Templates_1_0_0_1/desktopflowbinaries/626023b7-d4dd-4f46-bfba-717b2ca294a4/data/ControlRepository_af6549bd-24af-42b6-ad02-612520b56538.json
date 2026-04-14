@@ -1,0 +1,236 @@
+{
+  "Screens": [
+    {
+      "Controls": [
+        {
+          "AutomationProtocol": "sap",
+          "ScreenShot": null,
+          "ElementTypeName": "Gui Titlebar",
+          "InstanceId": "74a2bc83-2764-4e9a-8f9c-d5880c7b4514",
+          "Name": "SAP Easy Access Window Titlebar 'titl'",
+          "SelectorCount": 1,
+          "Selectors": [
+            {
+              "CustomSelector": null,
+              "Elements": [
+                {
+                  "Attributes": [
+                    {
+                      "Ignore": true,
+                      "IsOrdinal": false,
+                      "IsDisabledAttribute": false,
+                      "Name": "Enabled",
+                      "Operation": "EqualTo",
+                      "Value": true
+                    },
+                    {
+                      "Ignore": false,
+                      "IsOrdinal": false,
+                      "IsDisabledAttribute": false,
+                      "Name": "Id",
+                      "Operation": "EqualTo",
+                      "Value": "wnd[0]"
+                    },
+                    {
+                      "Ignore": true,
+                      "IsOrdinal": false,
+                      "IsDisabledAttribute": false,
+                      "Name": "Name",
+                      "Operation": "EqualTo",
+                      "Value": "wnd[0]"
+                    },
+                    {
+                      "Ignore": true,
+                      "IsOrdinal": true,
+                      "IsDisabledAttribute": false,
+                      "Name": "Ordinal",
+                      "Operation": "EqualTo",
+                      "Value": 0
+                    },
+                    {
+                      "Ignore": false,
+                      "IsOrdinal": false,
+                      "IsDisabledAttribute": false,
+                      "Name": "Text",
+                      "Operation": "Contains",
+                      "Value": "SAP Easy Access"
+                    },
+                    {
+                      "Ignore": true,
+                      "IsOrdinal": false,
+                      "IsDisabledAttribute": false,
+                      "Name": "Visible",
+                      "Operation": "EqualTo",
+                      "Value": true
+                    }
+                  ],
+                  "CustomValue": null,
+                  "Ignore": false,
+                  "Name": "Gui Main Window 'wnd[0]'",
+                  "Tag": "GuiMainWindow"
+                },
+                {
+                  "Attributes": [
+                    {
+                      "Ignore": true,
+                      "IsOrdinal": false,
+                      "IsDisabledAttribute": false,
+                      "Name": "Enabled",
+                      "Operation": "EqualTo",
+                      "Value": false
+                    },
+                    {
+                      "Ignore": false,
+                      "IsOrdinal": false,
+                      "IsDisabledAttribute": false,
+                      "Name": "Id",
+                      "Operation": "EqualTo",
+                      "Value": "wnd[0]/titl"
+                    },
+                    {
+                      "Ignore": true,
+                      "IsOrdinal": false,
+                      "IsDisabledAttribute": false,
+                      "Name": "Name",
+                      "Operation": "EqualTo",
+                      "Value": "titl"
+                    },
+                    {
+                      "Ignore": true,
+                      "IsOrdinal": true,
+                      "IsDisabledAttribute": false,
+                      "Name": "Ordinal",
+                      "Operation": "EqualTo",
+                      "Value": 0
+                    },
+                    {
+                      "Ignore": false,
+                      "IsOrdinal": false,
+                      "IsDisabledAttribute": false,
+                      "Name": "Text",
+                      "Operation": "Contains",
+                      "Value": "SAP Easy Access"
+                    },
+                    {
+                      "Ignore": true,
+                      "IsOrdinal": false,
+                      "IsDisabledAttribute": false,
+                      "Name": "Visible",
+                      "Operation": "EqualTo",
+                      "Value": true
+                    }
+                  ],
+                  "CustomValue": null,
+                  "Ignore": false,
+                  "Name": "Gui Titlebar 'titl'",
+                  "Tag": "GuiTitlebar"
+                }
+              ],
+              "Ignore": false,
+              "ImageSelector": null,
+              "IsCustom": false,
+              "IsImageBased": false,
+              "IsPlaceholderSelector": false,
+              "IsWindowsInstance": false,
+              "Name": "Default Selector",
+              "Properties": []
+            }
+          ],
+          "Tag": "GuiTitlebar",
+          "ScreenshotPath": "controlRepo-screenshots\\a360b8ba-4cd2-42fc-bfd8-94325c96b127.png"
+        }
+      ],
+      "Handle": {
+        "value": 0
+      },
+      "ProcessName": null,
+      "ScreenShot": null,
+      "ElementTypeName": "Window",
+      "InstanceId": "86ea3f56-1e86-4fbb-995a-120de52fea0e",
+      "Name": "Window 'SAP Easy  ...  GL-FORPAMHI'",
+      "SelectorCount": 1,
+      "Selectors": [
+        {
+          "CustomSelector": null,
+          "Elements": [
+            {
+              "Attributes": [
+                {
+                  "Ignore": true,
+                  "IsOrdinal": false,
+                  "IsDisabledAttribute": false,
+                  "Name": "Class",
+                  "Operation": "EqualTo",
+                  "Value": "SAP_FRONTEND_SESSION"
+                },
+                {
+                  "Ignore": true,
+                  "IsOrdinal": false,
+                  "IsDisabledAttribute": false,
+                  "Name": "Enabled",
+                  "Operation": "EqualTo",
+                  "Value": true
+                },
+                {
+                  "Ignore": true,
+                  "IsOrdinal": false,
+                  "IsDisabledAttribute": false,
+                  "Name": "Id",
+                  "Operation": "EqualTo",
+                  "Value": ""
+                },
+                {
+                  "Ignore": false,
+                  "IsOrdinal": false,
+                  "IsDisabledAttribute": false,
+                  "Name": "Name",
+                  "Operation": "Contains",
+                  "Value": "SAP Easy Access"
+                },
+                {
+                  "Ignore": true,
+                  "IsOrdinal": true,
+                  "IsDisabledAttribute": false,
+                  "Name": "Ordinal",
+                  "Operation": "EqualTo",
+                  "Value": 0
+                },
+                {
+                  "Ignore": false,
+                  "IsOrdinal": false,
+                  "IsDisabledAttribute": false,
+                  "Name": "Process",
+                  "Operation": "EqualTo",
+                  "Value": "saplogon"
+                },
+                {
+                  "Ignore": true,
+                  "IsOrdinal": false,
+                  "IsDisabledAttribute": false,
+                  "Name": "Visible",
+                  "Operation": "EqualTo",
+                  "Value": true
+                }
+              ],
+              "CustomValue": null,
+              "Ignore": false,
+              "Name": "Window 'SAP Easy Access  -  User Menu for darren.chapman@shell.com GL-FORPAMHI'",
+              "Tag": "window"
+            }
+          ],
+          "Ignore": false,
+          "ImageSelector": null,
+          "IsCustom": false,
+          "IsImageBased": false,
+          "IsPlaceholderSelector": false,
+          "IsWindowsInstance": false,
+          "Name": "Default Selector",
+          "Properties": []
+        }
+      ],
+      "Tag": "window",
+      "ScreenshotPath": "controlRepo-screenshots\\49cc95d2-1dbf-4d4e-95fc-244c883da4ea.png"
+    }
+  ],
+  "Version": 1
+}
