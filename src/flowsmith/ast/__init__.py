@@ -6,9 +6,11 @@ Import all public model classes and enums from this package:
         StageType, Runtime, ConfidenceBand,
         ReviewFlag, PAAnnotation,
         BPDataItem, BPStage, BPPage, BPProcess,
+        build_ast, RawProcess,
     )
 """
 
+from flowsmith.ast.builder import RawProcess, build_ast
 from flowsmith.ast.models import (
     BPDataItem,
     BPPage,
@@ -31,4 +33,6 @@ __all__ = [
     "BPStage",
     "BPPage",
     "BPProcess",
+    "build_ast",
+    "RawProcess",
 ]
