@@ -7,6 +7,7 @@ Import all public model classes and enums from this package:
         ReviewFlag, PAAnnotation,
         BPDataItem, BPStage, BPPage, BPProcess,
         build_ast, RawProcess,
+        serialise, deserialise, to_json_str, from_json_str,
     )
 """
 
@@ -22,6 +23,7 @@ from flowsmith.ast.models import (
     Runtime,
     StageType,
 )
+from flowsmith.ast.serialiser import deserialise, from_json_str, serialise, to_json_str
 
 __all__ = [
     "StageType",
@@ -35,4 +37,8 @@ __all__ = [
     "BPProcess",
     "build_ast",
     "RawProcess",
+    "serialise",
+    "deserialise",
+    "to_json_str",
+    "from_json_str",
 ]
