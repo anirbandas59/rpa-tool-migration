@@ -429,7 +429,7 @@ def build_md_report(data: dict) -> str:
     lines.append("## PAD Module References\n")
     lines.append(f"Total unique PAD modules referenced: **{len(pad_modules)}**\n")
     lines.append("| Module | Manifest count |")
-    lines.append("|--------|---------------:|")
+    lines.append("| ------ | -------------- |")
     for mod, cnt in sorted(pad_modules.items()):
         lines.append(f"| `{mod}` | {cnt} |")
     lines.append("")
@@ -439,7 +439,7 @@ def build_md_report(data: dict) -> str:
     lines.append("## Cloud Flow Action Types\n")
     lines.append(f"Total unique Cloud Flow action types: **{len(cf_types)}**\n")
     lines.append("| Action Type | Count |")
-    lines.append("|-------------|------:|")
+    lines.append("| ----------- | ----- |")
     for atype, cnt in sorted(cf_types.items()):
         lines.append(f"| `{atype}` | {cnt} |")
     lines.append("")
@@ -454,7 +454,7 @@ def build_md_report(data: dict) -> str:
         lines.append("")
         if cf["actions"]:
             lines.append("| Action name | Type | Depth |")
-            lines.append("|-------------|------|------:|")
+            lines.append("| ----------- | ---- | ----- |")
             for a in cf["actions"]:
                 lines.append(f"| `{a['name']}` | `{a['type'] or '—'}` | {a['depth']} |")
         lines.append("")
@@ -486,7 +486,7 @@ def build_md_report(data: dict) -> str:
     lines.append("## Desktop Flow Binary Types\n")
     binary_types = Counter(b["binary_type"] for b in data["df_binaries"])
     lines.append("| Type | Count |")
-    lines.append("|------|------:|")
+    lines.append("| ---- | ----- |")
     for btype, cnt in sorted(binary_types.items()):
         lines.append(f"| `{btype or '(none)'}` | {cnt} |")
     lines.append("")
@@ -511,7 +511,7 @@ def build_md_report(data: dict) -> str:
         "WorkQueues": "Work queue operations — maps to BP queue management",
     }
     lines.append("| Module | Usage guidance |")
-    lines.append("|--------|----------------|")
+    lines.append("| ------ | -------------- |")
     for mod in sorted(pad_modules.keys()):
         guidance = module_guidance.get(mod, "— no guidance yet")
         lines.append(f"| `{mod}` | {guidance} |")
