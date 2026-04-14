@@ -22,6 +22,17 @@ def convert(
 
 
 @app.command()
+def report(
+    input: str = typer.Option(..., "--input", "-i", help="Path to .bprelease file"),
+    output: str = typer.Option("output", "--output", "-o", help="Output directory for report"),
+    format: str = typer.Option("html", "--format", "-f", help="Report format: html or terminal"),
+) -> None:
+    """Generate a migration assessment report without producing output files."""
+    console.print(f"[bold]flowsmith report[/bold] — input: {input}")
+    console.print("[yellow]Not yet implemented — Phase 7[/yellow]")
+
+
+@app.command()
 def deploy(
     solution: str = typer.Option(..., "--solution", "-s", help="Path to solution .zip"),
     env: str = typer.Option(..., "--env", "-e", help="Power platform environment ID"),

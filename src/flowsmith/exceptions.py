@@ -1,8 +1,16 @@
-"""Typed exception for Flowsmith - never return 'None' on failure, raise these instead."""
+"""Typed exceptions for Flowsmith — never return None on failure, raise these instead.
+
+Base class is FlowsmithError. BP2PAError is an alias kept for compatibility.
+All typed exceptions subclass FlowsmithError.
+"""
 
 
 class FlowsmithError(Exception):
-    """Base exception for all flowsmith errors."""
+    """Base exception for all Flowsmith errors."""
+
+
+# Compatibility alias — FlowsmithError is canonical; BP2PAError resolves to the same class.
+BP2PAError = FlowsmithError
 
 
 class ParseError(FlowsmithError):

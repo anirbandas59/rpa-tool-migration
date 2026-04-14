@@ -1,5 +1,6 @@
 # CLAUDE.md — Flowsmith project intelligence file
-# READ THIS COMPLETELY BEFORE WRITING ANY CODE.
+
+## READ THIS COMPLETELY BEFORE WRITING ANY CODE
 
 ## What this project does
 
@@ -26,30 +27,35 @@ tests/          — mirrors src/flowsmith structure exactly
   docs/           — markdown documentation
   output/         — generated files (gitignored — never commit)
 
-  ## Non-negotiable rules
+## Non-negotiable rules
 
 ### Structure
+
 - ONE responsibility per file. Parser parses. Engine transforms. Generator generates.
 - CLI files (src/flowsmith/cli/) contain ZERO business logic — only typer command wiring.
 - Prompts and templates live in templates/ — never inline them in Python code.
 - YAML mapping config lives in mapping/ — never hardcode mappings in Python.
 
 ### Exceptions
+
 - NEVER return None to signal failure. ALWAYS raise a typed exception from exceptions.py.
 - Every function that can fail must raise the appropriate typed exception with a clear message.
 
 ### Testing
+
 - Every module must have a corresponding test file in tests/<module>/
 - Test files are named test_<module_name>.py
 - Coverage threshold is 85% — check with: uv run pytest --cov
 - DO NOT move to the next task until the test for the current task passes.
 
 ### Code quality
+
 - Type hints on ALL function signatures — parameters and return types.
 - Docstrings on every public function: purpose, params (Args:), returns (Returns:), raises (Raises:).
 - Run ruff before every commit: uv run ruff check src/ tests/
 
 ### Git discipline
+
 - Commit after each individual task — not after each phase.
 - Commit message format: type(scope): description
   Types: feat, fix, test, refactor, docs, chore
@@ -57,11 +63,13 @@ tests/          — mirrors src/flowsmith structure exactly
 - Stage specific files only — never: git add .
 
 ### Dependencies
+
 - ALL new packages go into pyproject.toml under [project.dependencies] or [project.dependency-groups].dev
 - Install with: uv sync --extra dev
 - NEVER pip install anything directly.
 
 ### Output files
+
 - All generated .robin, .json, .zip, .html files go to output/ only.
 - output/ is gitignored — never commit generated artifacts.
 
@@ -82,12 +90,12 @@ uv run python -c "from flowsmith.<module> import <Class>; print('OK')"
 
 ## Confidence band reference
 
-| Score    | Band       | Generated output behaviour           |
-|----------|------------|--------------------------------------|
-| >= 0.90  | AUTO       | Full code, no TODO markers           |
-| 0.70-0.89| SPOT-CHECK | Full code + inline comment to verify |
-| 0.50-0.69| PARTIAL    | Scaffold + TODO: complete this block |
-| < 0.50   | MANUAL     | Stub only + ReviewFlag(severity=error)|
+| Score    | Band       | Generated output behaviour             |
+|----------|------------|----------------------------------------|
+| >= 0.90  | AUTO       | Full code, no TODO markers             |
+| 0.70-0.89| SPOT-CHECK | Full code + inline comment to verify   |
+| 0.50-0.69| PARTIAL    | Scaffold + TODO: complete this block   |
+| < 0.50   | MANUAL     | Stub only + ReviewFlag(severity=error) |
 
 ## Stage type enum reference
 

@@ -23,6 +23,9 @@ coverage.xml
 # Output (generated artifacts — never commit)
 output/
 
+# Samples
+samples/
+
 # VS Code
 .vscode/settings.json
 .vscode/launch.json
