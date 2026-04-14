@@ -1,0 +1,567 @@
+{
+  "ConnectorId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
+  "Definition": {
+    "Id": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
+    "Name": "shared_sharepointonline",
+    "Properties": {
+      "IsCustomApi": false,
+      "Swagger": {
+        "basePath": "/apim/sharepointonline",
+        "definitions": {
+          "SPBlobMetadataResponse": {
+            "additionalProperties": null,
+            "example": null,
+            "properties": {
+              "ItemId": {
+                "additionalProperties": null,
+                "example": null,
+                "type": "integer",
+                "default": null,
+                "description": "The value that can be used to Get or Update file properties in libraries.",
+                "format": "int64"
+              },
+              "Id": {
+                "additionalProperties": null,
+                "example": null,
+                "type": "string",
+                "default": null,
+                "description": "The unique id of the file or folder."
+              },
+              "Name": {
+                "additionalProperties": null,
+                "example": null,
+                "type": "string",
+                "default": null,
+                "description": "The name of the file or folder."
+              },
+              "DisplayName": {
+                "additionalProperties": null,
+                "example": null,
+                "type": "string",
+                "default": null,
+                "description": "The display name of the file or folder."
+              },
+              "Path": {
+                "additionalProperties": null,
+                "example": null,
+                "type": "string",
+                "default": null,
+                "description": "The path of the file or folder."
+              },
+              "LastModified": {
+                "additionalProperties": null,
+                "example": null,
+                "type": "string",
+                "default": null,
+                "description": "The date and time the file or folder was last modified.",
+                "format": "date-time"
+              },
+              "Size": {
+                "additionalProperties": null,
+                "example": null,
+                "type": "integer",
+                "default": null,
+                "description": "The size of the file or folder.",
+                "format": "int64"
+              },
+              "MediaType": {
+                "additionalProperties": null,
+                "example": null,
+                "type": "string",
+                "default": null,
+                "description": "The media type of the file or folder."
+              },
+              "IsFolder": {
+                "additionalProperties": null,
+                "example": null,
+                "type": "boolean",
+                "default": null,
+                "description": "A boolean value (true, false) to indicate whether or not the blob is a folder."
+              },
+              "ETag": {
+                "additionalProperties": null,
+                "example": null,
+                "type": "string",
+                "default": null,
+                "description": "The etag of the file or folder."
+              },
+              "FileLocator": {
+                "additionalProperties": null,
+                "example": null,
+                "type": "string",
+                "default": null,
+                "description": "The filelocator of the file or folder."
+              }
+            },
+            "type": "object",
+            "default": null,
+            "description": "The SharePoint version of the BlobMetadataResponse extends the object by adding some additional fields that we want serialized"
+          },
+          "BlobMetadata": {
+            "additionalProperties": null,
+            "example": null,
+            "properties": {
+              "Id": {
+                "additionalProperties": null,
+                "example": null,
+                "type": "string",
+                "default": null,
+                "description": "The unique id of the file or folder."
+              },
+              "Name": {
+                "additionalProperties": null,
+                "example": null,
+                "type": "string",
+                "default": null,
+                "description": "The name of the file or folder."
+              },
+              "DisplayName": {
+                "additionalProperties": null,
+                "example": null,
+                "type": "string",
+                "default": null,
+                "description": "The display name of the file or folder."
+              },
+              "Path": {
+                "additionalProperties": null,
+                "example": null,
+                "type": "string",
+                "default": null,
+                "description": "The path of the file or folder."
+              },
+              "LastModified": {
+                "additionalProperties": null,
+                "example": null,
+                "type": "string",
+                "default": null,
+                "description": "The date and time the file or folder was last modified.",
+                "format": "date-time"
+              },
+              "Size": {
+                "additionalProperties": null,
+                "example": null,
+                "type": "integer",
+                "default": null,
+                "description": "The size of the file or folder.",
+                "format": "int64"
+              },
+              "MediaType": {
+                "additionalProperties": null,
+                "example": null,
+                "type": "string",
+                "default": null,
+                "description": "The media type of the file or folder."
+              },
+              "IsFolder": {
+                "additionalProperties": null,
+                "example": null,
+                "type": "boolean",
+                "default": null,
+                "description": "A boolean value (true, false) to indicate whether or not the blob is a folder."
+              },
+              "ETag": {
+                "additionalProperties": null,
+                "example": null,
+                "type": "string",
+                "default": null,
+                "description": "The etag of the file or folder."
+              },
+              "FileLocator": {
+                "additionalProperties": null,
+                "example": null,
+                "type": "string",
+                "default": null,
+                "description": "The filelocator of the file or folder."
+              }
+            },
+            "type": "object",
+            "default": null,
+            "description": "Blob metadata"
+          }
+        },
+        "host": "europe-002.azure-apim.net",
+        "info": {
+          "title": "SharePoint",
+          "version": "1.0"
+        },
+        "parameters": {},
+        "paths": {
+          "/{connectionId}/datasets/{dataset}/files": {
+            "post": {
+              "x-ms-capabilities": {
+                "chunkTransfer": true
+              },
+              "consumes": [],
+              "deprecated": false,
+              "description": "Uploads a file to a SharePoint site. Make sure to pick an existing library.",
+              "externalDocs": {
+                "url": "https://docs.microsoft.com/connectors/sharepointonline/#create-file"
+              },
+              "operationId": "CreateFile",
+              "parameters": [
+                {
+                  "in": "path",
+                  "name": "connectionId",
+                  "required": true,
+                  "type": "string",
+                  "default": null,
+                  "x-ms-visibility": "internal"
+                },
+                {
+                  "x-ms-dynamic-list": {
+                    "itemsPath": "value",
+                    "itemTitlePath": "DisplayName",
+                    "itemValuePath": "Name",
+                    "operationId": "GetDataSets",
+                    "parameters": {}
+                  },
+                  "in": "path",
+                  "name": "dataset",
+                  "required": true,
+                  "type": "string",
+                  "default": null,
+                  "description": "Example: https://contoso.sharepoint.com/sites/sitename.",
+                  "x-ms-summary": "Site Address",
+                  "x-ms-url-encoding": "double",
+                  "x-ms-ai-sensitivity": "high"
+                },
+                {
+                  "x-ms-dynamic-tree": {
+                    "browse": {
+                      "itemFullTitlePath": "Path",
+                      "itemIsParent": "(IsFolder eq true)",
+                      "itemTitlePath": "DisplayName",
+                      "itemValuePath": "Path",
+                      "operationId": "ListFolder",
+                      "parameters": {
+                        "dataset": {
+                          "parameterReference": "dataset",
+                          "value": null
+                        },
+                        "id": {
+                          "selectedItemValuePath": "Id",
+                          "value": null
+                        }
+                      }
+                    },
+                    "open": {
+                      "itemFullTitlePath": "Path",
+                      "itemIsParent": "(IsFolder eq true)",
+                      "itemTitlePath": "DisplayName",
+                      "itemValuePath": "Path",
+                      "operationId": "ListAllRootFolders",
+                      "parameters": {
+                        "dataset": {
+                          "parameterReference": "dataset",
+                          "value": null
+                        }
+                      }
+                    },
+                    "settings": {
+                      "canSelectLeafNodes": false,
+                      "canSelectParentNodes": true
+                    }
+                  },
+                  "in": "query",
+                  "name": "folderPath",
+                  "required": true,
+                  "type": "string",
+                  "default": null,
+                  "description": "Must start with an existing library. Add folders if needed.",
+                  "x-ms-summary": "Folder Path"
+                },
+                {
+                  "in": "query",
+                  "name": "name",
+                  "required": true,
+                  "type": "string",
+                  "default": null,
+                  "description": "Name of the file.",
+                  "x-ms-summary": "File Name"
+                },
+                {
+                  "in": "body",
+                  "name": "body",
+                  "required": true,
+                  "schema": {
+                    "additionalProperties": null,
+                    "example": null,
+                    "type": "string",
+                    "default": null,
+                    "format": "binary"
+                  },
+                  "default": null,
+                  "description": "Content of the file.",
+                  "x-ms-summary": "File Content"
+                },
+                {
+                  "in": "query",
+                  "name": "queryParametersSingleEncoded",
+                  "required": false,
+                  "type": "boolean",
+                  "default": true,
+                  "x-ms-visibility": "internal"
+                }
+              ],
+              "produces": [
+                "application/json",
+                "text/json",
+                "application/xml",
+                "text/xml"
+              ],
+              "responses": {
+                "200": {
+                  "description": "OK",
+                  "schema": {
+                    "additionalProperties": null,
+                    "example": null,
+                    "$ref": "#/definitions/SPBlobMetadataResponse",
+                    "default": null
+                  }
+                },
+                "default": {
+                  "description": "Operation Failed."
+                }
+              },
+              "summary": "Create file",
+              "x-ms-visibility": "important"
+            }
+          },
+          "/{connectionId}/datasets/{dataset}/files/{id}/content": {
+            "get": {
+              "consumes": [],
+              "deprecated": false,
+              "description": "Gets file contents using the file identifier. The contents can be copied somewhere else, or be used as an attachment.",
+              "externalDocs": {
+                "url": "https://docs.microsoft.com/connectors/sharepointonline/#get-file-content"
+              },
+              "operationId": "GetFileContent",
+              "parameters": [
+                {
+                  "in": "path",
+                  "name": "connectionId",
+                  "required": true,
+                  "type": "string",
+                  "default": null,
+                  "x-ms-visibility": "internal"
+                },
+                {
+                  "x-ms-dynamic-list": {
+                    "itemsPath": "value",
+                    "itemTitlePath": "DisplayName",
+                    "itemValuePath": "Name",
+                    "operationId": "GetDataSets",
+                    "parameters": {}
+                  },
+                  "in": "path",
+                  "name": "dataset",
+                  "required": true,
+                  "type": "string",
+                  "default": null,
+                  "description": "Example: https://contoso.sharepoint.com/sites/sitename.",
+                  "x-ms-summary": "Site Address",
+                  "x-ms-url-encoding": "double",
+                  "x-ms-ai-sensitivity": "high"
+                },
+                {
+                  "x-ms-dynamic-tree": {
+                    "browse": {
+                      "itemFullTitlePath": "Path",
+                      "itemIsParent": "(IsFolder eq true)",
+                      "itemTitlePath": "DisplayName",
+                      "itemValuePath": "Id",
+                      "operationId": "ListFolder",
+                      "parameters": {
+                        "dataset": {
+                          "parameterReference": "dataset",
+                          "value": null
+                        },
+                        "id": {
+                          "selectedItemValuePath": "Id",
+                          "value": null
+                        }
+                      }
+                    },
+                    "open": {
+                      "itemFullTitlePath": "Path",
+                      "itemIsParent": "(IsFolder eq true)",
+                      "itemTitlePath": "DisplayName",
+                      "itemValuePath": "Id",
+                      "operationId": "ListAllRootFolders",
+                      "parameters": {
+                        "dataset": {
+                          "parameterReference": "dataset",
+                          "value": null
+                        }
+                      }
+                    },
+                    "settings": {
+                      "canSelectLeafNodes": true,
+                      "canSelectParentNodes": false
+                    }
+                  },
+                  "in": "path",
+                  "name": "id",
+                  "required": true,
+                  "type": "string",
+                  "default": null,
+                  "description": "Select a file.",
+                  "x-ms-summary": "File Identifier"
+                },
+                {
+                  "in": "query",
+                  "name": "inferContentType",
+                  "required": false,
+                  "type": "boolean",
+                  "default": true,
+                  "description": "Infer content-type based on extension.",
+                  "x-ms-summary": "Infer Content Type",
+                  "x-ms-visibility": "advanced"
+                }
+              ],
+              "produces": [],
+              "responses": {
+                "200": {
+                  "description": "OK",
+                  "schema": {
+                    "additionalProperties": null,
+                    "example": null,
+                    "type": "string",
+                    "default": null,
+                    "description": "The content of the file.",
+                    "format": "binary",
+                    "x-ms-summary": "File Content"
+                  }
+                },
+                "default": {
+                  "description": "Operation Failed."
+                }
+              },
+              "summary": "Get file content",
+              "x-ms-visibility": "important"
+            }
+          },
+          "/{connectionId}/datasets/{dataset}/folders/{id}": {
+            "get": {
+              "consumes": [],
+              "deprecated": false,
+              "description": "Returns files contained in a SharePoint folder.",
+              "externalDocs": {
+                "url": "https://docs.microsoft.com/connectors/sharepointonline/#list-folder"
+              },
+              "operationId": "ListFolder",
+              "parameters": [
+                {
+                  "in": "path",
+                  "name": "connectionId",
+                  "required": true,
+                  "type": "string",
+                  "default": null,
+                  "x-ms-visibility": "internal"
+                },
+                {
+                  "x-ms-dynamic-list": {
+                    "itemsPath": "value",
+                    "itemTitlePath": "DisplayName",
+                    "itemValuePath": "Name",
+                    "operationId": "GetDataSets",
+                    "parameters": {}
+                  },
+                  "in": "path",
+                  "name": "dataset",
+                  "required": true,
+                  "type": "string",
+                  "default": null,
+                  "description": "Example: https://contoso.sharepoint.com/sites/sitename.",
+                  "x-ms-summary": "Site Address",
+                  "x-ms-url-encoding": "double",
+                  "x-ms-ai-sensitivity": "high"
+                },
+                {
+                  "x-ms-dynamic-tree": {
+                    "browse": {
+                      "itemFullTitlePath": "Path",
+                      "itemIsParent": "(IsFolder eq true)",
+                      "itemTitlePath": "DisplayName",
+                      "itemValuePath": "Id",
+                      "operationId": "ListFolder",
+                      "parameters": {
+                        "dataset": {
+                          "parameterReference": "dataset",
+                          "value": null
+                        },
+                        "id": {
+                          "selectedItemValuePath": "Id",
+                          "value": null
+                        }
+                      }
+                    },
+                    "open": {
+                      "itemFullTitlePath": "Path",
+                      "itemIsParent": "(IsFolder eq true)",
+                      "itemTitlePath": "DisplayName",
+                      "itemValuePath": "Id",
+                      "operationId": "ListAllRootFolders",
+                      "parameters": {
+                        "dataset": {
+                          "parameterReference": "dataset",
+                          "value": null
+                        }
+                      }
+                    },
+                    "settings": {
+                      "canSelectLeafNodes": false,
+                      "canSelectParentNodes": true
+                    }
+                  },
+                  "in": "path",
+                  "name": "id",
+                  "required": true,
+                  "type": "string",
+                  "default": null,
+                  "description": "Unique identifier of the folder.",
+                  "x-ms-summary": "File Identifier"
+                }
+              ],
+              "produces": [
+                "application/json",
+                "text/json",
+                "application/xml",
+                "text/xml"
+              ],
+              "responses": {
+                "200": {
+                  "description": "Operation is successful",
+                  "schema": {
+                    "additionalProperties": null,
+                    "example": null,
+                    "items": {
+                      "additionalProperties": null,
+                      "example": null,
+                      "$ref": "#/definitions/BlobMetadata",
+                      "default": null
+                    },
+                    "type": "array",
+                    "default": null
+                  }
+                },
+                "default": {
+                  "description": "Operation Failed."
+                }
+              },
+              "summary": "List folder",
+              "x-ms-visibility": "important"
+            }
+          }
+        },
+        "responses": {},
+        "schemes": [
+          "https"
+        ],
+        "swagger": "2.0"
+      }
+    }
+  },
+  "DynamicSchemas": {},
+  "Locale": "en-US"
+}

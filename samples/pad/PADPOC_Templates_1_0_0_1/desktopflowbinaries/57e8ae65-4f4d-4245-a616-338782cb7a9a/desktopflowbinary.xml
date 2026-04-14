@@ -1,0 +1,14 @@
+<desktopflowbinary desktopflowbinaryid="57e8ae65-4f4d-4245-a616-338782cb7a9a">
+  <data mimetype="application/json">ConnectorDefinition_c931e39d-7261-4718-a6d8-74cf22ad6567.json</data>
+  <iscustomizable>1</iscustomizable>
+  <metadata>{}</metadata>
+  <mimetype>application/json</mimetype>
+  <name>Desktop flow connector definition</name>
+  <process>
+    <workflowid>a8bf1ac0-a1ed-4067-8434-82a3918b6d21</workflowid>
+  </process>
+  <reference>/providers/Microsoft.PowerApps/apis/shared_office365</reference>
+  <statecode>0</statecode>
+  <statuscode>1</statuscode>
+  <type>ConnectorDefinition</type>
+</desktopflowbinary>
