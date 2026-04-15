@@ -6,10 +6,16 @@ from flowsmith.mapper.config import (
     VBOEntry,
     load_rules,
 )
+from flowsmith.mapper.vbo_router import (
+    RoutingDecision,
+    VBORouter,
+)
 
 __all__ = [
     "StageRule",
     "VBOEntry",
     "MappingConfig",
     "load_rules",
+    "RoutingDecision",
+    "VBORouter",
 ]
