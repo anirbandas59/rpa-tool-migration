@@ -1,6 +1,11 @@
 """Engine module — transformation and annotation of Blue Prism stages."""
 
 from flowsmith.engine.annotator import StageAnnotator, create_annotator
+from flowsmith.engine.flag_index import (
+    FlagEntry,
+    FlagIndex,
+    FlagIndexBuilder,
+)
 from flowsmith.engine.scorer import (
     PageScore,
     ProcessScore,
@@ -15,4 +20,7 @@ __all__ = [
     "PageScore",
     "ProcessScore",
     "ProcessScorer",
+    "FlagEntry",
+    "FlagIndex",
+    "FlagIndexBuilder",
 ]
