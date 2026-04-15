@@ -1,0 +1,461 @@
+@@ConnectionString: ''
+@@Type: 'Local'
+@@DesktopType: 'local'
+@@DisplayName: 'Local computer'
+IMPORT 'controlRepo.appmask' AS appmask
+IMPORT 'imageRepo.imgrepo' AS imgrepo
+@SENSITIVE: [SAP_Password, DEX_Password]
+# ######################## Reusable Subflows ########################
+/# ############## Version: 1.0 - 02/2026 ##############
+############## Author: Murugan ###############/
+# ############## Wait Time ##############
+SET Delay_XS TO 1
+SET Delay_S TO 2
+SET Delay_M TO 5
+SET Delay_L TO 10
+SET Delay_XL TO 20
+# ############## SAP LOGIN ##############
+# ///////////////////////////// Input value for SAP login /////////////////////////////
+SET SAPLogin_Status TO False
+SET SAP_Cred_Error TO $'''Name or password is incorrect'''
+SET SAP_Description TO $'''C94'''
+SET SAP_ClientNo TO 110
+SET SAP_Language TO $'''EN'''
+SET SAP_Password TO $'''SAPPassword'''
+SET SAP_UserName TO $'''SAPUserName'''
+SET SAP_Child_Win TO $'''Initial window popup'''
+SET SAP_Home_Win TO $'''SAP Easy Access'''
+CALL 'SAP Login'
+# ############## MAINFRAME LOGIN ##############
+# ///////////////////////////// Input value for Mainframe login /////////////////////////////
+SET DEX_Retry_Flag TO True
+SET DEX_LoginStatus TO False
+SET DEX_ApplicationPath TO $'''C:\\ProgramData\\Hummingbird\\Connectivity\\15.00\\Shared\\Profile\\Default 3270.hep'''
+SET DEX_DLLFilePath TO $'''C:\\Program Files (x86)\\Power Automate Desktop\\ehlapi32.dll'''
+SET DEX_WindowTitle TO $'''A - Default 3270 (mvsa.europe.shell.com)'''
+SET DEX_SessionName TO $'''A'''
+SET DEX_UserName TO $'''USERNAME'''
+SET DEX_Password TO $'''PASSWORD'''
+SET DEX_LoginError TO $'''%''%'''
+SET DEX_SessionScreenName TO $'''CL/SuperSession Main Menu'''
+SET DEX_Environment TO $'''SITCOC'''
+SET DEX_MainScreen TO $'''OTIS Main Menu - DEX'''
+CALL 'Launch & Login DEX Application'
+# ############## Download File from SharePoint ##############
+# ///////////////////////////// Input value for SharePoint Download /////////////////////////////
+SET PROD_Run TO $'''No'''
+SET Input_FileName TO $'''Filename.xlsx'''
+SET DownloadFolderPath TO $'''C:\\Users\\INO827-F\\Documents\\FSD\\'''
+CALL 'Download File from SharePoint'
+# ############## Upload File To SharePoint ##############
+# ///////////////////////////// Input value for SharePoint Upload /////////////////////////////
+SET SharePoint_URL TO $'''https://eu023-sp.shell.com/sites/SPOAA1437'''
+SET SP_FolderPath TO $'''/Documents-Test'''
+SET Input_FileName TO $'''C:\\Users\\INO827-F\\Documents\\Book1.xlsx'''
+CALL 'Upload File to SharePoint'
+# ############## Read Excel File ##############
+# ///////////////////////////// Input value for Read Excel File /////////////////////////////
+SET Input_ExcelFile TO $'''Filename.xlsx'''
+SET Input_Sheet TO $'''WorkSheet'''
+CALL 'Read Excel Worksheet Data'
+# ############## Write DataTable to Excel File ##############
+# ///////////////////////////// Input value for Write to Excel File /////////////////////////////
+SET Input_ExcelFile TO $'''Filename.xlsx'''
+SET Input_Sheet TO $'''WorkSheet'''
+SET DataTable TO []
+CALL 'Write Data to Excel'
+# ############## Copy Paste from Source File to Destination File ##############
+# ///////////////////////////// Input value for Copy Paste /////////////////////////////
+SET Source_File TO $'''SourceFilePath'''
+SET Source_WS TO $'''Source Worksheet'''
+SET Destination_File TO $'''DestinationFilePath'''
+SET Destination_WS TO $'''Destination Worksheet'''
+CALL 'Excel Copy Paste to Destination File'
+# ############## Connect Excel as Database ##############
+# ///////////////////////////// Input value for Excel DB /////////////////////////////
+# ///////////////////////////// Use Query  SELECT / INSERT / UPDATE /////////////////////////////
+SET Excel_ConnectionString TO $'''Provider=Microsoft.ACE.OLEDB.12.0;Data Source=<Source>;Extended Properties=\"Excel 12.0 Xml;HDR=YES\";'''
+SET DBExcelFilePath TO $'''Excel File Path'''
+SET DB_Query TO $'''Select * from [Sheet1$]'''
+CALL 'Connect Excel as Database'
+# ##############Run Macro code ##############
+# ///////////////////////////// Input value for Macro /////////////////////////////
+SET Input_MacroFile TO $'''Macro Full File Path'''
+SET Macro_Execution_Flag TO False
+SET MacroRunStatus TO $'''%''%'''
+SET Input_Macro_Param TO $'''Macro Name;Param1;Param2'''
+SET Macro_Output_Sheet TO $'''Macro Result sheet'''
+CALL 'Run VBA Macro Execution'
+# ##############Basic API call - Generate Token##############
+# ///////////////////////////// Input value for API call /////////////////////////////
+SET Authentication_URL TO $'''URL'''
+SET Body_ContentType TO $'''application/x-www-form-urlencoded'''
+SET RequestBody TO $'''grant_type=client_credentials'''
+SET AcceptType TO $'''application/json'''
+CALL 'API Call - Generate Token'
+FUNCTION 'SAP Login' GLOBAL
+    BLOCK 'SAP Login'
+ON BLOCK ERROR REPEAT 3 TIMES WAIT 5
+ON BLOCK ERROR all
+    SET Screenshot_Flag TO True
+    CALL 'Error Handler'
+    THROW ERROR
+END
+        # ############## LAUNCH & LOGIN SAP APPLICATION##############
+        ERROR => SAPLoginLastError
+        # ############## Check Credential Error ##############
+        IF Contains(SAPLoginLastError, SAP_Cred_Error, True) THEN
+            SET ExceptionType TO $'''System Exception'''
+            SET ExceptionMessage TO $'''Error message :%SAPLoginLastError.Message% |
+Flow name : %SAPLoginLastError.SubflowName% |
+Action name :%SAPLoginLastError.ActionName%'''
+            EXIT FUNCTION
+        END
+        SET ExceptionType TO $'''%''%'''
+        SET ExceptionMessage TO $'''%''%'''
+        # ############## Kill SAP ##############
+        IF (System.IfProcess.ProcessIsRunning ProcessName: $'''saplogon''') THEN
+            System.TerminateProcess.TerminateProcessByName ProcessName: $'''saplogon'''
+            ON ERROR
+
+            END
+            WAIT Delay_M
+        END
+        # ############## Connect SAP System ##############
+        SAP.SapLogin.SapLogInOptionSingle Description: SAP_Description Client: SAP_ClientNo Username: SAP_UserName Password: SAP_Password Language: SAP_Language SapInstance=> SapInstance OtherSapLoginTerminated=> OtherSapLoginTerminated
+        WAIT Delay_S
+        # ############## Check Child window popup ##############
+        IF (UIAutomation.IfWindow.IsOpenByTitleClass Title: SAP_Child_Win Class: $'''''') THEN
+            SAP.ClickSapGuiElement.BasicElementSelected SapInstance: SapInstance ElementId: $'''/app/con[0]/ses[0]/wnd[1]/tbar[0]/btn[0]'''
+            WAIT Delay_S
+        END
+        # ############## Check Home window ##############
+        IF (UIAutomation.IfWindowContains.WindowContainsText Text: SAP_Home_Win Window: appmask['Window \'SAP Easy  ...  GL-FORPAMHI\'']['SAP Easy Access Window Titlebar \'titl\'']) THEN
+            UIAutomation.FocusWindow.Focus Window: appmask['Window \'SAP Easy  ...  GL-FORPAMHI\'']['SAP Easy Access Window Titlebar \'titl\'']
+            SET SAPLogin_Status TO True
+        END
+        # ############## Completed ##############
+    END
+END FUNCTION
+FUNCTION 'Error Handler' GLOBAL
+    ERROR => LastError
+    SET ExceptionType TO $'''System Exception'''
+    SET ExceptionMessage TO $'''Error message :%LastError.Message% |
+Flow name : %LastError.SubflowName% |
+Action name :%LastError.ActionName%'''
+END FUNCTION
+FUNCTION 'Launch & Login DEX Application' GLOBAL
+    BLOCK 'Launch & Login DEX Application'
+ON BLOCK ERROR REPEAT 3 TIMES WAIT 5
+ON BLOCK ERROR all
+    SET Screenshot_Flag TO True
+    CALL 'Error Handler'
+    THROW ERROR
+END
+        # ######### Launch and Login DEX Application #########
+        IF DEX_Retry_Flag = False THEN
+            SET ExceptionType TO ExceptionType
+            SET ExceptionMessage TO ExceptionMessage
+            SET DEX_LoginStatus TO False
+            SET Screenshot_Flag TO True
+            EXIT FUNCTION
+        END
+        SET ExceptionType TO $'''%''%'''
+        SET ExceptionMessage TO $'''%''%'''
+        # ######### Kill Mainframe #########
+        IF (System.IfProcess.ProcessIsRunning ProcessName: $'''hostex32''') THEN
+            System.TerminateProcess.TerminateProcessByName ProcessName: $'''hostex32'''
+            ON ERROR
+
+            END
+            WAIT Delay_M
+        END
+        # ######### Launch DEX application #########
+        System.RunApplication.RunApplicationAndWaitToLoad ApplicationPath: DEX_ApplicationPath WindowStyle: System.ProcessWindowStyle.Maximized Timeout: Delay_XL ProcessId=> AppProcessId WindowHandle=> DEX_WindowHandle
+        WAIT (UIAutomation.WaitForWindow.ToOpenByTitleClass Title: DEX_WindowTitle Class: $'''''' FocusWindow: True) FOR Delay_XL
+        IF (UIAutomation.IfWindow.IsOpenByTitleClass Title: DEX_WindowTitle Class: $'''''') THEN
+            # ######### Open Mainframe Session #########
+            TerminalEmulation.OpenTerminalSession.OpenSession HllapiPath: DEX_DLLFilePath SessionName: DEX_SessionName Session=> TerminalSession
+            WAIT Delay_S
+            # ######### Enter Username #########
+            TerminalEmulation.SetTextOnTerminalSession.SetTextOnCursorPosition Session: TerminalSession Text: DEX_UserName TreatAtCharacterAsLiteral: False
+            TerminalEmulation.MoveCursor Session: TerminalSession Row: 6 Column: 14
+            # ######### Enter Password #########
+            TerminalEmulation.SetTextOnTerminalSession.SetTextOnCursorPosition Session: TerminalSession Text: DEX_Password TreatAtCharacterAsLiteral: False
+            TerminalEmulation.SendKey Session: TerminalSession ControlKey: TerminalEmulation.ControlKey.Transmit
+            WAIT Delay_M
+            # ######### Read Message #########
+            TerminalEmulation.GetTextFromTerminalSession.GetTextFromPosition Session: TerminalSession TextLength: 47 Row: 23 Column: 2 Text=> DEX_LoginError
+        END
+        # ######### Error Related to User ID OR Password #########
+        IF (Contains(DEX_LoginError, 'USER') OR Contains(DEX_LoginError, 'PASSWORD') OR Contains(DEX_LoginError, 'CREDENTIAL')) = $'''True''' THEN
+            SET DEX_LoginStatus TO False
+            SET DEX_Retry_Flag TO False
+            SET ExceptionType TO $'''Business Exception'''
+            SET ExceptionMessage TO $'''DEX login failed due to User ID or Credential, screen text -  %DEX_LoginError%'''
+            Scripting.RunDotNetScript Language: System.DotNetActionLanguageType.CSharp Script: $'''throw new SystemException(\"%ExceptionMessage%\");'''
+        ELSE
+            # #########  Read Screenname #########
+            TerminalEmulation.GetTextFromTerminalSession.GetTextFromPosition Session: TerminalSession TextLength: 25 Row: 3 Column: 27 Text=> DEX_SessionScreen
+            IF DEX_SessionScreen.Trimmed = DEX_SessionScreenName THEN
+                SET StartLoop TO 9
+                SET EndLoop TO 15
+                # #########  Read Environment  #########
+                LOOP LoopIndex FROM StartLoop TO EndLoop STEP 1
+                    TerminalEmulation.GetTextFromTerminalSession.GetTextFromPosition Session: TerminalSession TextLength: 6 Row: LoopIndex Column: 5 Text=> DEX_SessionID
+                    TerminalEmulation.GetTextFromTerminalSession.GetTextFromPosition Session: TerminalSession TextLength: 11 Row: LoopIndex Column: 60 Text=> DEX_Session_Status
+                    IF DEX_SessionID.Trimmed = DEX_Environment THEN
+                        # ######### Environment Unavailable  #########
+                        IF Contains(DEX_Session_Status.Trimmed, $'''Unavailable''', False) THEN
+                            SET DEX_LoginStatus TO False
+                            SET DEX_Retry_Flag TO False
+                            SET ExceptionType TO $'''System Exception'''
+                            SET ExceptionMessage TO $'''DEX login failed, DEX Environment %DEX_SessionID% , DEX Session status - %DEX_Session_Status%'''
+                            Scripting.RunDotNetScript Language: System.DotNetActionLanguageType.CSharp Script: $'''throw new SystemException(\"%ExceptionMessage%\");'''
+                        END
+                        # #########  Select Environment #########
+                        TerminalEmulation.MoveCursor Session: TerminalSession Row: LoopIndex Column: 2
+                        WAIT Delay_XS
+                        TerminalEmulation.SendKey Session: TerminalSession ControlKey: TerminalEmulation.ControlKey.Transmit
+                        WAIT Delay_M
+                        EXIT LOOP
+                    END
+                END
+                TerminalEmulation.WaitForTextOnTerminalSession.WaitForTextOnScreen Session: TerminalSession Text: DEX_MainScreen IsRegEx: False Timeout: Delay_XL
+                SET DEX_LoginStatus TO True
+                TerminalEmulation.GetTextFromTerminalSession.GetTextFromPosition Session: TerminalSession TextLength: 6 Row: 1 Column: 62 Text=> DEX_ReportScreen
+            ELSE
+                SET DEX_LoginStatus TO False
+                SET ExceptionType TO $'''System Exception'''
+                SET ExceptionMessage TO $'''DEX login failed, Session screen not opened, screen text - %DEX_SessionScreen%'''
+                Scripting.RunDotNetScript Language: System.DotNetActionLanguageType.CSharp Script: $'''throw new SystemException(\"%ExceptionMessage%\");'''
+            END
+        END
+    END
+END FUNCTION
+FUNCTION 'Download File from SharePoint' GLOBAL
+    BLOCK 'Download Excel File from SharePoint'
+ON BLOCK ERROR REPEAT 3 TIMES WAIT 5
+ON BLOCK ERROR all
+    CALL 'Error Handler'
+    THROW ERROR
+END
+        # ######## Download Excel File from SharePoint ########
+        SET ExceptionType TO $'''%''%'''
+        SET ExceptionMessage TO $'''%''%'''
+        SET SP_Download_Status TO False
+        # ######## Get All files from SharePoint Folder ########
+        IF PROD_Run = $'''Yes''' THEN
+            # //////////////////////// Check and Add SharePoint detail ////////////////////////
+            # ######## PROD Env Connection ########
+            @@dataset: 'https://eu023-sp.shell.com/sites/SPOAA1437'
+@@id: '/Documents-Test/FSD - Invoice Processing/Excel Templates'
+@@connectionDisplayName: 'SharePoint'
+External.InvokeCloudConnector Connection: '2d8224e2-d9c0-466d-913c-5c5c27734fc7' ConnectorId: '/providers/Microsoft.PowerApps/apis/shared_sharepointonline' OperationId: 'ListFolder' @dataset: $'''https://eu023-sp.shell.com/sites/SPOAA1437''' @id: $'''%%252fDocuments-Test%%252fFSD%%2b-%%2bInvoice%%2bProcessing%%252fExcel%%2bTemplates''' @ListFolderResponse=> ListFolderResponse
+        ELSE
+            # //////////////////////// Check and Add SharePoint detail ////////////////////////
+            # ######## Lower Env Connection ########
+            @@dataset: 'https://eu023-sp.shell.com/sites/SPOAA1437'
+@@id: '/Documents-Test/FSD - Invoice Processing/Excel Templates'
+@@connectionDisplayName: 'SharePoint'
+External.InvokeCloudConnector Connection: '2d8224e2-d9c0-466d-913c-5c5c27734fc7' ConnectorId: '/providers/Microsoft.PowerApps/apis/shared_sharepointonline' OperationId: 'ListFolder' @dataset: $'''https://eu023-sp.shell.com/sites/SPOAA1437''' @id: $'''/Documents-Test/FSD - Invoice Processing/Excel Templates''' @ListFolderResponse=> ListFolderResponse
+        END
+        # ######## Loop Through Each File and Validate the FileName ########
+        LOOP FOREACH CurrentItem IN ListFolderResponse
+            SET SP_FileName TO CurrentItem.DisplayName
+            # ######## Download the File to local folder if Name matches ########
+            IF SP_FileName = Input_FileName THEN
+                @@dataset: 'https://eu023-sp.shell.com/sites/SPOAA1437'
+@@id: '%CurrentItem.Id%'
+@@connectionDisplayName: 'SharePoint'
+External.InvokeCloudConnector Connection: '2d8224e2-d9c0-466d-913c-5c5c27734fc7' ConnectorId: '/providers/Microsoft.PowerApps/apis/shared_sharepointonline' OperationId: 'GetFileContent' @dataset: $'''https://eu023-sp.shell.com/sites/SPOAA1437''' @id: CurrentItem.Id @inferContentType: True @GetFileContentResponse=> GetFileContentResponse
+                File.ConvertFromBinary BinaryData: GetFileContentResponse File: $'''%DownloadFolderPath%%Input_FileName%''' IfFileExists: File.IfExists.Overwrite
+                SET SP_Download_Status TO True
+            END
+        END
+        # ######## Business Exception - File not found in SharePoint ########
+        IF SP_Download_Status = False THEN
+            SET ExceptionType TO $'''Business Exception'''
+            SET ExceptionMessage TO $'''%Input_FileName% file not present in the SharePoint location.'''
+            GOTO 'End of the Loop'
+        END
+        LABEL 'End of the Loop'
+        SET DownloadFolderPath TO $'''%''%'''
+        SET Input_FileName TO $'''%''%'''
+    END
+END FUNCTION
+FUNCTION 'Read Excel Worksheet Data' GLOBAL
+    BLOCK 'Read Excel Worksheet'
+ON BLOCK ERROR all
+    CALL 'Error Handler'
+    THROW ERROR
+END
+        # ######## Read Excel worksheet ########
+        # ######## Open Excel - Activate sheet - Read Data -Close File ########
+        Excel.LaunchExcel.LaunchAndOpenUnderExistingProcess Path: Input_ExcelFile Visible: True ReadOnly: False UseMachineLocale: False Instance=> ExcelInstance
+        Excel.SetActiveWorksheet.ActivateWorksheetByName Instance: ExcelInstance Name: Input_Sheet
+        Excel.ReadFromExcel.ReadAllCells Instance: ExcelInstance GetCellContentsMode: Excel.GetCellContentsMode.TypedValues FirstLineIsHeader: True RangeValue=> Output_Data
+        Excel.CloseExcel.Close Instance: ExcelInstance
+    END
+END FUNCTION
+FUNCTION 'Excel Copy Paste to Destination File' GLOBAL
+    BLOCK 'Excel Copy Paste to Destination File'
+ON BLOCK ERROR all
+    CALL 'Error Handler'
+    THROW ERROR
+END
+        # ######## Copy Paste from Source workbook to Destination workbook. ########
+        # ######## Open Source Workbook name ########
+        Excel.LaunchExcel.LaunchAndOpenUnderExistingProcess Path: Source_File Visible: True ReadOnly: False UseMachineLocale: False Instance=> ExcelCopyPasteInstance_S
+        Excel.SetActiveWorksheet.ActivateWorksheetByName Instance: ExcelCopyPasteInstance_S Name: Source_WS
+        # ######## Count Rows ########
+        Excel.GetFirstFreeColumnRow Instance: ExcelCopyPasteInstance_S FirstFreeColumn=> TotalColumns_S FirstFreeRow=> TotalRows_S
+        SET TotalRows_S TO TotalRows_S - 1
+        # ######## Launch Destination File and Count Rows ########
+        IF (File.IfFile.Exists File: Destination_File) THEN
+            Excel.LaunchExcel.LaunchAndOpenUnderExistingProcess Path: Destination_File Visible: True ReadOnly: False UseMachineLocale: False Instance=> ExcelCopyPasteInstance_D
+            Excel.SetActiveWorksheet.ActivateWorksheetByName Instance: ExcelCopyPasteInstance_D Name: Destination_WS
+            Excel.GetFirstFreeColumnRow Instance: ExcelCopyPasteInstance_D FirstFreeColumn=> TotalColumns_D FirstFreeRow=> TotalRows_D
+        ELSE
+            # ######## Create Destination File ########
+            Excel.LaunchExcel.LaunchUnderExistingProcess Visible: True UseMachineLocale: False Instance=> ExcelCopyPasteInstance_D
+            Excel.AddWorksheet Instance: ExcelCopyPasteInstance_D Name: Destination_WS WorksheetPosition: Excel.WorksheetPosition.Last
+            Excel.SaveExcel.SaveAs Instance: ExcelCopyPasteInstance_D DocumentFormat: Excel.ExcelFormat.FromExtension DocumentPath: Destination_File
+            WAIT Delay_S
+        END
+        # ######## Copy and Paste from Source to Destination ########
+        Excel.CopyCellsFromExcel.CopyCells Instance: ExcelCopyPasteInstance_S StartColumn: $'''A''' StartRow: 1 EndColumn: TotalColumns_S EndRow: TotalRows_S
+        IF TotalRows_D > 1 THEN
+            Excel.PasteCellsToExcel.PasteAt Instance: ExcelCopyPasteInstance_D Column: $'''A''' Row: TotalRows_D
+        ELSE
+            Excel.PasteCellsToExcel.PasteAt Instance: ExcelCopyPasteInstance_D Column: $'''A''' Row: 1
+        END
+        # ######## Close Source File ########
+        Excel.CloseExcel.Close Instance: ExcelCopyPasteInstance_S
+        # ######## Close Destination File ########
+        Excel.CloseExcel.CloseAndSave Instance: ExcelCopyPasteInstance_D
+        WAIT Delay_S
+    END
+END FUNCTION
+FUNCTION 'Connect Excel as Database' GLOBAL
+    BLOCK 'Connect Excel as Database'
+ON BLOCK ERROR all
+    CALL 'Error Handler'
+    THROW ERROR
+END
+        # ######## Connect Excel as Database using connection string. ########
+        Variables.CreateNewDatatable InputTable: { } DataTable=> Out_ExcelDB_DataTable
+        # ######## Prepare connection string. ########
+        Text.Replace Text: Excel_ConnectionString TextToFind: $'''<Source>''' IsRegEx: False IgnoreCase: False ReplaceWith: DBExcelFilePath ActivateEscapeSequences: False Result=> GetData_ConnectionString
+        # ######## Connect and Execute Query SELECT/INSERT/UPDATE ########
+        Database.Connect ConnectionString: GetData_ConnectionString Connection=> DBConnection
+        Database.ExecuteSqlStatement.Execute Connection: DBConnection Statement: DB_Query Timeout: 30 Result=> Out_ExcelDB_DataTable
+        Database.Close Connection: DBConnection
+    END
+END FUNCTION
+FUNCTION 'Run VBA Macro Execution' GLOBAL
+    BLOCK 'Macro Execution Flow'
+ON BLOCK ERROR all
+    CALL 'Error Handler'
+    THROW ERROR
+END
+        # ######## Run VBA Macro ########
+        File.GetPathPart File: Input_MacroFile FileName=> Macro_WB
+        # ######## Check Macro file already opened ########
+        SET AttachFailed TO False
+        Excel.Attach DocumentName: Macro_WB Instance=> Excel_MacroInstance
+        ON ERROR
+            SET AttachFailed TO True
+        END
+        IF AttachFailed = True THEN
+            Excel.LaunchExcel.LaunchAndOpenUnderExistingProcess Path: Input_MacroFile Visible: True ReadOnly: False UseMachineLocale: False Instance=> Excel_MacroInstance
+        END
+        # ######## Execute Macro ########
+        Excel.RunMacro Instance: Excel_MacroInstance Macro: Input_Macro_Param
+        WAIT Delay_XS
+        Excel.SetActiveWorksheet.ActivateWorksheetByName Instance: Excel_MacroInstance Name: Macro_Output_Sheet
+        # ######## Check macro run status ########
+        # //////////////  Macro error should be handled inside the VBA procedure //////////////
+        Excel.ReadFromExcel.ReadCell Instance: Excel_MacroInstance StartColumn: $'''A''' StartRow: 1 GetCellContentsMode: Excel.GetCellContentsMode.TypedValues CellValue=> MacroRunStatus
+        IF (MacroRunStatus = 'Successful' OR MacroRunStatus = '') = $'''True''' THEN
+            SET Macro_Execution_Flag TO True
+            Excel.WriteToExcel.WriteCell Instance: Excel_MacroInstance Value: $'''%''%''' Column: $'''A''' Row: 1
+        ELSE
+            # ######## Throw Exception for Macro Error ########
+            Excel.SetActiveWorksheet.ActivateWorksheetByName Instance: Excel_MacroInstance Name: Macro_Output_Sheet
+            Excel.WriteToExcel.WriteCell Instance: Excel_MacroInstance Value: $'''%''%''' Column: $'''A''' Row: 1
+            SET ExceptionType TO $'''System Exception'''
+            SET ExceptionMessage TO $'''Excel Macro execution failed - Macro Parameters - %Input_Macro_Param%
+Macro error - %MacroRunStatus%'''
+            Text.Replace Text: ExceptionMessage TextToFind: $'''[^a-zA-Z0-9 :]''' IsRegEx: True IgnoreCase: False ReplaceWith: $'''|''' ActivateEscapeSequences: False Result=> ExceptionMessage
+            Scripting.RunDotNetScript Language: System.DotNetActionLanguageType.CSharp Script: $'''throw new SystemException(\"%ExceptionMessage%\");'''
+        END
+        # ######## Close Macro File ########
+        IF AttachFailed = True THEN
+            Excel.CloseExcel.Close Instance: Excel_MacroInstance
+        END
+        # ######## Reset Values ########
+        SET Input_Macro_Param TO $'''%''%'''
+        SET AttachFailed TO False
+    END
+END FUNCTION
+FUNCTION 'API Call - Generate Token' GLOBAL
+    BLOCK 'API call - Generate Token'
+ON BLOCK ERROR REPEAT 3 TIMES WAIT 5
+ON BLOCK ERROR all
+    CALL 'Error Handler'
+    THROW ERROR
+END
+        # ######### API  - Generate Access token #########
+        SET AccessToken TO $'''%''%'''
+        SET TokenType TO $'''%''%'''
+        Web.InvokeWebService.InvokeWebServicePost Url: Authentication_URL Accept: AcceptType ContentType: $'''%Body_ContentType%%RequestBody%''' ConnectionTimeout: 30 FollowRedirection: True ClearCookies: False FailOnErrorStatus: False EncodeRequestBody: False UserAgent: $'''Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.8.1.21) Gecko/20100312 Firefox/3.6''' Encoding: Web.Encoding.AutoDetect AcceptUntrustedCertificates: False TrimRequestBody: True ResponseHeaders=> WebServiceResponseHeaders Response=> TokenResponse StatusCode=> StatusCode
+        IF StatusCode = 200 THEN
+            Variables.ConvertJsonToCustomObject Json: TokenResponse CustomObject=> Token_CO
+            SET TokenType TO Token_CO['token_type']
+            SET AccessToken TO Token_CO['access_token']
+        ELSE
+            # ######### Throw Exception #########
+            SET ExceptionType TO $'''System Exception'''
+            SET ExceptionMessage TO $'''Failed to generate access token, API Status code - %StatusCode%, response message - %TokenResponse%'''
+            Text.Replace Text: ExceptionMessage TextToFind: $'''[^a-zA-Z0-9 ]''' IsRegEx: True IgnoreCase: False ReplaceWith: $'''%''%''' ActivateEscapeSequences: False Result=> ExceptionMessage
+            Scripting.RunDotNetScript Language: System.DotNetActionLanguageType.CSharp Script: $'''throw new SystemException(\"%ExceptionMessage%\");'''
+        END
+    END
+END FUNCTION
+FUNCTION 'Write Data to Excel' GLOBAL
+    BLOCK 'Write Data to Excel'
+ON BLOCK ERROR all
+    CALL 'Error Handler'
+    THROW ERROR
+END
+        # ######## Write DataTable to worksheet ########
+        # ######## Open Excel - Activate sheet -Write DataTable -Save & Close File ########
+        Excel.LaunchExcel.LaunchAndOpenUnderExistingProcess Path: Input_ExcelFile Visible: True ReadOnly: False UseMachineLocale: False Instance=> ExcelInstance
+        Excel.SetActiveWorksheet.ActivateWorksheetByName Instance: ExcelInstance Name: Input_Sheet
+        Excel.WriteToExcel.WriteCell Instance: ExcelInstance Value: DataTable Column: $'''A''' Row: 1
+        Excel.CloseExcel.CloseAndSave Instance: ExcelInstance
+    END
+END FUNCTION
+FUNCTION 'Upload File to SharePoint' GLOBAL
+    BLOCK 'Upload File to SharePoint'
+ON BLOCK ERROR REPEAT 3 TIMES WAIT 5
+ON BLOCK ERROR all
+CALL 'Error Handler'
+THROW ERROR
+END
+        # ######## Upload File to SharePoint ########
+        SET ExceptionType TO $'''%''%'''
+        SET ExceptionMessage TO $'''%''%'''
+        SET SP_Upload_Status TO False
+        File.GetPathPart File: Input_FileName FileName=> FileName
+        # //////////////////////// Check and Add SharePoint detail ////////////////////////
+        File.ConvertToBinary File: Input_FileName BinaryData=> BinaryData
+        @@dataset: '%SharePoint_URL%'
+@@folderPath: '%SP_FolderPath%'
+@@connectionDisplayName: 'SharePoint'
+External.InvokeCloudConnector Connection: '2d8224e2-d9c0-466d-913c-5c5c27734fc7' ConnectorId: '/providers/Microsoft.PowerApps/apis/shared_sharepointonline' OperationId: 'CreateFile' @dataset: SharePoint_URL @folderPath: SP_FolderPath @name: FileName @body: BinaryData @CreateFileResponse=> CreateFileResponse
+        SET SP_Upload_Status TO True
+        SET Input_FileName TO $'''%''%'''
+    END
+END FUNCTION

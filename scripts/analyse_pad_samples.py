@@ -261,6 +261,29 @@ _SKIP_PREFIXES = (
 )
 
 
+def _decode_robin(raw: str) -> str:
+    """Decode a JSON-encoded Robin script string.
+
+    Robin scripts in customizations.xml are stored as JSON-encoded strings
+    with \\r\\n escape sequences. This function decodes them to real newlines.
+
+    Args:
+        raw: Raw text content from the Definition element.
+
+    Returns:
+        Decoded Robin script with real newlines.
+    """
+    text = raw.strip()
+    # If it looks like a JSON string (starts and ends with quote), decode it
+    if text.startswith('"') and text.endswith('"'):
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+    # Fallback: replace literal escape sequences with real newlines
+    return text.replace("\\r\\n", "\n").replace("\\n", "\n")
+
+
 def _parse_robin_metadata(script: str) -> tuple[list[dict], list[dict], list[str]]:
     """Extract @INPUT, @OUTPUT and @SENSITIVE declarations from a Robin script.
 
@@ -387,6 +410,7 @@ def parse_robin_script(script: str, flow_name: str, flow_id: str) -> dict:
     return {
         "flow_name": flow_name,
         "flow_id": flow_id,
+        "script": script,
         "inputs": inputs,
         "outputs": outputs,
         "sensitive_vars": sensitive_vars,
@@ -420,10 +444,7 @@ def parse_customizations_xml(path: Path) -> list[dict]:
         if defn_el is None or not defn_el.text:
             continue
         raw = defn_el.text.strip()
-        try:
-            script: str = json.loads(raw) if raw.startswith('"') else raw
-        except json.JSONDecodeError:
-            script = raw
+        script = _decode_robin(raw)
         if not script:
             continue
         results.append(parse_robin_script(script, flow_name, flow_id))
@@ -539,6 +560,28 @@ def aggregate_robin_actions(desktop_flows: list[dict]) -> dict[str, int]:
         for action in df["actions"]:
             counter[action["module"]] += 1
     return dict(counter)
+
+
+def save_robin_sources(desktop_flows: list[dict], docs_dir: Path) -> list[Path]:
+    """Save decoded Robin scripts to .robin files in docs/.
+
+    Args:
+        desktop_flows: List of parsed desktop flow dicts (must include 'script' key).
+        docs_dir: Directory to write .robin files into.
+
+    Returns:
+        List of Paths written.
+    """
+    written: list[Path] = []
+    for df in desktop_flows:
+        script_text = df.get("script", "")
+        if not script_text:
+            continue
+        safe_name = df["flow_name"].replace(" ", "_").replace("/", "_")
+        out_path = docs_dir / f"robin_{safe_name}.robin"
+        out_path.write_text(script_text, encoding="utf-8")
+        written.append(out_path)
+    return written
 
 
 # ---------------------------------------------------------------------------
@@ -873,6 +916,11 @@ def main() -> None:
     if total_files == 0:
         console.print(f"[red]No recognised PAD artefact files found in {SAMPLES_DIR}[/red]")
         sys.exit(1)
+
+    DOCS_DIR.mkdir(parents=True, exist_ok=True)
+    robin_files = save_robin_sources(data.get("desktop_flows", []), DOCS_DIR)
+    for rf in robin_files:
+        console.print(f"[dim]Saved Robin source -> {rf}[/dim]")
 
     print_rich_report(data)
 

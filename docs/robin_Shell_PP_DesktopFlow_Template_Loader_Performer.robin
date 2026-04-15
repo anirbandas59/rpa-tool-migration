@@ -1,0 +1,446 @@
+@@ConnectionString: ''
+@@Type: 'Local'
+@@DesktopType: 'local'
+@@DisplayName: 'Local computer'
+IMPORT 'controlRepo.appmask' AS appmask
+IMPORT 'imageRepo.imgrepo' AS imgrepo
+@SENSITIVE: [Enc_Dec_Key]
+@INPUT ConfigData : { 'Description': '', 'FriendlyName': 'ConfigData', 'Type': 'CustomObject', 'IsOptional': False, 'DefaultValue': {{ }} }
+@INPUT Exception_EmailAddress : { 'Description': '', 'FriendlyName': 'Exception_EmailAddress', 'Type': 'String', 'IsOptional': False, 'DefaultValue': 'murugan.marimuthu@shell.com' }
+@INPUT Run_LoaderFlow_Flag : { 'Description': '', 'FriendlyName': 'Run_LoaderFlow_Flag', 'Type': 'Bool', 'IsOptional': False, 'DefaultValue': False }
+@INPUT Run_PerformerFlow_Flag : { 'Description': '', 'FriendlyName': 'Run_PerformerFlow_Flag', 'Type': 'Bool', 'IsOptional': False, 'DefaultValue': False }
+@INPUT Run_ReportFlow_Flag : { 'Description': '', 'FriendlyName': 'Run_ReportFlow_Flag', 'Type': 'Bool', 'IsOptional': False, 'DefaultValue': False }
+@INPUT Enc_Dec_Key : { 'Description': '', 'FriendlyName': 'Enc_Dec_Key', 'Type': 'String', 'IsOptional': False, 'DefaultValue': '12345' }
+BLOCK 'Main Desktop Flow - Loader & Performer'
+ON BLOCK ERROR all
+    SET SendExceptionEmail_Flag TO True
+    CALL 'Global Error Handler'
+END
+    # ############### Desktop Flow Template - Loader & Performer ###############
+    # ############### USECASE NAME ###############
+    # USE CASE DESCRIPTION
+    /# ############## Version: 1.0 - 02/2026 ##############
+############## Author: Murugan ###############/
+    # //////////////////////////// PROCESS NAME ////////////////////////////
+    SET ProcessName TO $'''Usecase Name'''
+    # ############### Initialize ###############
+    SET ExceptionType TO $'''%''%'''
+    SET ExceptionMessage TO $'''%''%'''
+    SET SendExceptionEmail_Flag TO False
+    SET Screenshot_Flag TO True
+    # ####################### Get Computer name and User name #######################
+    System.GetEnvironmentVariable.GetEnvironmentVariable Name: $'''USERNAME''' Value=> LoggedIn_UserName
+    System.GetEnvironmentVariable.GetEnvironmentVariable Name: $'''COMPUTERNAME''' Value=> RobotID
+    Text.Trim Text: LoggedIn_UserName TrimOption: Text.TrimOption.Both TrimmedText=> LoggedIn_UserName
+    Text.Trim Text: RobotID TrimOption: Text.TrimOption.Both TrimmedText=> RobotID
+    # ############### Close Applications ##################
+    CALL 'Close All Applications'
+    # ###############Read Config Temp Flow ##################
+    CALL ReadConfig_Temp
+    # ############# Config Exception #############
+    IF IsEmpty(ConfigData) THEN
+        SET Screenshot_Flag TO False
+        SET ExceptionMessage TO $'''No data present in config object input'''
+        SET SystemExceptionTo TO Exception_EmailAddress
+        SET SystemExceptionCC TO Exception_EmailAddress
+        SET Config_Email_Subject TO $'''%ProcessName% - Config Error'''
+        SET EmailBody_SystemException TO $'''Config Data custom object is empty in %ProcessName% Main Desktop Flow'''
+        Scripting.RunDotNetScript Language: System.DotNetActionLanguageType.CSharp Script: $'''throw new SystemException(\"%ExceptionMessage%\");'''
+    END
+    # ###############Assign values from config object##################
+    CALL 'Assign Values from Config'
+    # ############### Create Project Folders ##################
+    CALL 'Create Project Folders'
+    # //////////////////////////// Get Credential from Vault ////////////////////////////
+    # //////////////////////////// Launch Application ////////////////////////////
+    IF Run_LoaderFlow_Flag = True THEN
+        CALL 'Add Items to Work Queue'
+    END
+    # ############### Process Work Queue Items ##################
+    IF Run_PerformerFlow_Flag = True THEN
+        SET Consecutive_Exception_Count TO 0
+        SET Consecutive_Exception_Flag TO False
+        CALL 'Process Work Queue Items'
+        # ############### Email notification for consecutive exception ##################
+        IF Consecutive_Exception_Flag = True THEN
+            SET Email_To TO SystemExceptionTo
+            SET Email_CC TO SystemExceptionCC
+            SET Email_Body TO EmailBody_ConsecutiveException
+            SET Email_Subject TO $'''%Config_Email_Subject%  - Consecutive Exception'''
+            Text.Replace Text: Email_Body TextToFind: $'''<<ExceptionType>>''' IsRegEx: False IgnoreCase: False ReplaceWith: ExceptionType ActivateEscapeSequences: False Result=> Email_Body
+            Text.Replace Text: Email_Body TextToFind: $'''<<ExceptionMessage>>''' IsRegEx: False IgnoreCase: False ReplaceWith: ExceptionMessage ActivateEscapeSequences: False Result=> Email_Body
+            @@flowname: 'Shell_PP_SendEmail_Reusable_DesktopFlow'
+External.RunFlow FlowId: 'a8bf1ac0-a1ed-4067-8434-82a3918b6d21' WaitToComplete: True @Email_Subject: Email_Subject @Email_Body: Email_Body @SystemException_Flag: True @BusinessException_Flag: False @Email_To: Email_To @Email_CC: Email_CC @SS_FilePath: $'''\"%ScreenShotFolderPath%\"''' @ReportFilePath: Bot_Working_Folder @Report_Flag: False @Out_ExceptionType=> Out_SendEmailExceptionType @Out_ExceptionMessage=> Out_SendEmailExceptionMessage
+        END
+    END
+    # ############### Prepare Report and Send Email ###############
+    IF Run_ReportFlow_Flag = True THEN
+        CALL 'Prepare Queue Report'
+    END
+    # ############### Close Applications ##################
+    CALL 'Close All Applications'
+    # ############### Cleanup ##################
+    CALL 'Cleanup Folders'
+END
+FUNCTION ReadConfig_Temp GLOBAL
+    # ########### Read config file and create custom object ##############
+    # ########### START ##############
+    # ///////////////////////////// Change Input Values /////////////////////////////
+    SET Config_FileName TO $'''C:\\Users\\INO827-F\\Downloads\\Shell_PP_FO_Trading_Oil_Config.xlsx'''
+    SET Config_Sheet TO $'''Main'''
+    # ########### Launch Excel and Read Data ##############
+    Excel.LaunchExcel.LaunchAndOpenUnderExistingProcess Path: Config_FileName Visible: True ReadOnly: False UseMachineLocale: False Instance=> Config
+    Excel.SetActiveWorksheet.ActivateWorksheetByName Instance: Config Name: Config_Sheet
+    Excel.ReadFromExcel.ReadAllCells Instance: Config GetCellContentsMode: Excel.GetCellContentsMode.TypedValues FirstLineIsHeader: True RangeValue=> ConfigValuesData
+    Excel.CloseExcel.Close Instance: Config
+    # ########### Create Config Data custom Object ##############
+    SET ConfigData TO {{ }}
+    LOOP FOREACH CurrentItem IN ConfigValuesData
+        SET CurrentKey TO CurrentItem[0]
+        SET CurrentValue TO CurrentItem[1]
+        SET ConfigData[CurrentKey] TO CurrentValue
+    END
+    # ########### END ##############
+END FUNCTION
+FUNCTION 'Global Error Handler' GLOBAL
+    # ############### Error handler ###############
+    # ############### Capture Error Details ###############
+    ERROR => LastError
+    SET ExceptionType TO $'''System Exception'''
+    SET ExceptionMessage TO $'''Error message :%LastError.Message% |
+Flow name : %LastError.SubflowName% |
+Action name :%LastError.ActionName%'''
+    # ############### Capture Screenshot ###############
+    IF Screenshot_Flag = True THEN
+        DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> CurrentDateTimeVal
+        Text.ConvertDateTimeToText.FromCustomDateTime DateTime: CurrentDateTimeVal CustomFormat: $'''MMddyy_hhmmss''' Result=> ScreenShotTime
+        Workstation.TakeScreenshot.TakeScreenshotAndSaveToFile File: $'''%ScreenshotFolderPath%\\%ScreenShotTime%.png''' ImageFormat: System.ImageFormat.Png
+        ON ERROR
+
+        END
+        SET Screenshot_Flag TO False
+    END
+    # ############### Config Error ###############
+    IF ConfigError = True THEN
+        SET SystemExceptionTo TO Exception_EmailAddress
+        SET SystemExceptionCC TO Exception_EmailAddress
+        SET Config_Email_Subject TO $'''%ProcessName% - Config Error'''
+        SET EmailBody_SystemException TO $'''Exception Message : %ExceptionMessage%'''
+    END
+    # ############### Send Email ###############
+    IF SendExceptionEmail_Flag = True THEN
+        SET Email_To TO SystemExceptionTo
+        SET Email_CC TO SystemExceptionCC
+        SET Email_Subject TO $'''%Config_Email_Subject% - %ExceptionType%'''
+        SET Email_Body TO EmailBody_SystemException
+        Text.Replace Text: Email_Body TextToFind: $'''<<ExceptionType>>''' IsRegEx: False IgnoreCase: False ReplaceWith: ExceptionType ActivateEscapeSequences: False Result=> Email_Body
+        Text.Replace Text: Email_Body TextToFind: $'''<<ExceptionMessage>>''' IsRegEx: False IgnoreCase: False ReplaceWith: ExceptionMessage ActivateEscapeSequences: False Result=> Email_Body
+        @@flowname: 'Shell_PP_SendEmail_Reusable_DesktopFlow'
+External.RunFlow FlowId: 'a8bf1ac0-a1ed-4067-8434-82a3918b6d21' WaitToComplete: True @Email_Subject: Email_Subject @Email_Body: Email_Body @SystemException_Flag: True @BusinessException_Flag: False @Email_To: Email_To @Email_CC: Email_CC @SS_FilePath: $'''\"%ScreenShotFolderPath%\"''' @ReportFilePath: Bot_Working_Folder @Report_Flag: False @Out_ExceptionType=> Out_SendEmailExceptionType @Out_ExceptionMessage=> Out_SendEmailExceptionMessage
+        SET SendExceptionEmail_Flag TO False
+        # ############### Close All Applications ###############
+        CALL 'Close All Applications'
+        # ############### Cleanup Folders  ###############
+        CALL 'Cleanup Folders'
+    END
+END FUNCTION
+FUNCTION 'Assign Values from Config' GLOBAL
+    BLOCK 'Assign values from config'
+ON BLOCK ERROR all
+    SET Screenshot_Flag TO False
+    SET ConfigError TO True
+    CALL 'Global Error Handler'
+    THROW ERROR
+END
+        # #################### Assign Values from Config Data Custom Object ####################
+        SET PROD_Run TO ConfigData['PROD_Run']
+        SET ProcessName TO ConfigData['ProcessName']
+        SET WorkQueueID TO ConfigData['WorkQueueID']
+        SET RootFolder TO ConfigData['RootFolder']
+        Text.Replace Text: RootFolder TextToFind: $'''<<username>>''' IsRegEx: False IgnoreCase: False ReplaceWith: LoggedIn_UserName.Trimmed ActivateEscapeSequences: False Result=> RootFolder
+        SET ProjectFolderName TO ConfigData['ProjectFolder']
+        SET TempFolderName TO ConfigData['TempFolder']
+        SET ScreenshotFolder TO ConfigData['ScreenshotFolder']
+        SET Excel_ConnectionString TO ConfigData['Excel_ConnectionString']
+        SET Business_EmailAddressTo TO ConfigData['Business_EmailAddressTo']
+        SET Business_EmailAddressCC TO ConfigData['Business_EmailAddressCC']
+        SET SystemExceptionTo TO ConfigData['SystemExceptionTo']
+        SET SystemExceptionCC TO ConfigData['SystemExceptionCC']
+        SET Config_Email_Subject TO ConfigData['Email_Subject']
+        SET EmailBody_SystemException TO ConfigData['EmailBody_SystemException']
+        SET EmailBody_BusinessException TO ConfigData['EmailBody_BusinessException']
+        SET EmailBody_ConsecutiveException TO ConfigData['EmailBody_ConsecutiveException']
+        SET EmailBody_Report TO ConfigData['EmailBody_Report']
+        SET Delay_XS TO ConfigData['Delay_XS']
+        Text.ToNumber Text: Delay_XS Number=> Delay_XS
+        SET Delay_S TO ConfigData['Delay_S']
+        Text.ToNumber Text: Delay_S Number=> Delay_S
+        SET Delay_M TO ConfigData['Delay_M']
+        Text.ToNumber Text: Delay_M Number=> Delay_M
+        SET Delay_L TO ConfigData['Delay_L']
+        Text.ToNumber Text: Delay_L Number=> Delay_L
+        SET Delay_XL TO ConfigData['Delay_XL']
+        Text.ToNumber Text: Delay_XL Number=> Delay_XL
+        SET App_WaitTime TO ConfigData['App_WaitTime']
+        Text.ToNumber Text: App_WaitTime Number=> App_WaitTime
+        SET SecretName1 TO ConfigData['SecretName1']
+        SET SecretName2 TO ConfigData['SecretName2']
+        SET Consecutive_Exception_Limit TO ConfigData['Consecutive_Exception_Limit']
+        Text.ToNumber Text: Consecutive_Exception_Limit Number=> Consecutive_Exception_Limit
+    END
+END FUNCTION
+FUNCTION 'Process Work Queue Items' GLOBAL
+    BLOCK 'Process Work Queue Items'
+ON BLOCK ERROR all
+    CALL 'Global Error Handler'
+    CALL 'Update Work Queue'
+    REPEAT BLOCK
+END
+        # #################### Process Work Queue Items From PA Queue ####################
+        @@'InputSummaryValue:WORKQUEUE': '%WorkQueueID%'
+LOOP WHILE (WorkQueues.ProcessWorkQueueItem.ProcessWorkQueueItem WorkQueue: WorkQueueID WorkQueueItem=> WorkQueueItem)
+            # ################# Initialize #################
+            SET QueueJson TO $'''%''%'''
+            SET Completed_Flag TO False
+            # #################Consecutive exception limit validation#################
+            IF Consecutive_Exception_Count >= Consecutive_Exception_Limit THEN
+                SET ExceptionType TO $'''System Exception'''
+                SET ExceptionMessage TO Current_ExceptionMessage
+                SET Consecutive_Exception_Flag TO True
+                EXIT FUNCTION
+            END
+            SET ExceptionType TO $'''%''%'''
+            SET ExceptionMessage TO $'''%''%'''
+            # ################# Assign values from Queue #################
+            Cryptography.DecryptText.DecryptTextWithAES Encoding: Cryptography.EncryptionEncoding.Unicode TextToDecrypt: WorkQueueItem.Value DecryptionKey: Enc_Dec_Key Padding: Cryptography.PaddingMode.PKCS7 KeySize: Cryptography.AESKeySize.Bits256 DecryptedText=> Dec_QueueData
+            Variables.ConvertJsonToCustomObject Json: Dec_QueueData CustomObject=> WQJson_CO
+            SET QueueNotes TO WorkQueueItem.ProcessingNotes
+            # #################### Assign values from Queue Item ####################
+            # //////////////////////////// Call Subflows to process work Item  ////////////////////////////
+            # //////////////////////////// GoTo Label to Update Work Item status  ////////////////////////////
+            GOTO 'Update Queue Item Status'
+            # ################# Update Work Item Status #################
+            # //////////////////////////// Set Completed Flag value True to update the work Item as Processed  ////////////////////////////
+            LABEL 'Update Queue Item Status'
+            CALL 'Update Work Queue'
+        END
+    END
+END FUNCTION
+FUNCTION 'Update Work Queue' GLOBAL
+    # //////////////////////////// Prepare Queue Output Json format ////////////////////////////
+    SET QueueOutputJson TO $'''{
+}'''
+    Cryptography.EncryptText.EncryptTextWithAES Encoding: Cryptography.EncryptionEncoding.Unicode TextToEncrypt: QueueOutputJson EncryptionKey: Enc_Dec_Key PaddingMode: Cryptography.PaddingMode.PKCS7 KeySize: Cryptography.AESKeySize.Bits256 EncryptedText=> QueueOutputJson
+    IF ExceptionMessage <> $'''%''%''' THEN
+        SET Current_ExceptionMessage TO $'''%ExceptionType%-%ExceptionMessage%'''
+        SET Completed_Flag TO False
+        IF ExceptionType = $'''Business Exception''' THEN
+            WorkQueues.UpdateWorkQueueItem.UpdateWithProcessingNotes WorkQueueItem: WorkQueueItem Status: WorkQueues.WorkQueueItemStatus.BusinessException InputValue: QueueOutputJson ProcessingResult: ExceptionMessage
+            SET Email_To TO Business_EmailAddressTo
+            SET Email_CC TO Business_EmailAddressCC
+            SET Email_Body TO EmailBody_BusinessException
+            SET Email_Subject TO $'''%Config_Email_Subject%  - %ExceptionType%'''
+            Text.Replace Text: Email_Body TextToFind: $'''<<ExceptionType>>''' IsRegEx: False IgnoreCase: False ReplaceWith: ExceptionType ActivateEscapeSequences: False Result=> Email_Body
+            Text.Replace Text: Email_Body TextToFind: $'''<<ExceptionMessage>>''' IsRegEx: False IgnoreCase: False ReplaceWith: ExceptionMessage ActivateEscapeSequences: False Result=> Email_Body
+            @@flowname: 'Shell_PP_SendEmail_Reusable_DesktopFlow'
+External.RunFlow FlowId: 'a8bf1ac0-a1ed-4067-8434-82a3918b6d21' WaitToComplete: True @Email_Subject: Email_Subject @Email_Body: Email_Body @SystemException_Flag: False @BusinessException_Flag: True @Email_To: Email_To @Email_CC: Email_CC @SS_FilePath: $'''\"%ScreenShotFolderPath%\"''' @ReportFilePath: Bot_Working_Folder @Report_Flag: False @Out_ExceptionType=> Out_SendEmailExceptionType @Out_ExceptionMessage=> Out_SendEmailExceptionMessage
+        ELSE
+            WorkQueues.UpdateWorkQueueItem.UpdateWithProcessingNotes WorkQueueItem: WorkQueueItem Status: WorkQueues.WorkQueueItemStatus.GenericException InputValue: QueueOutputJson ProcessingResult: ExceptionMessage
+            SET Email_To TO SystemExceptionTo
+            SET Email_CC TO SystemExceptionCC
+            SET Email_Subject TO $'''%Config_Email_Subject% - %ExceptionType%'''
+            SET Email_Body TO EmailBody_SystemException
+            Text.Replace Text: Email_Body TextToFind: $'''<<ExceptionType>>''' IsRegEx: False IgnoreCase: False ReplaceWith: ExceptionType ActivateEscapeSequences: False Result=> Email_Body
+            Text.Replace Text: Email_Body TextToFind: $'''<<ExceptionMessage>>''' IsRegEx: False IgnoreCase: False ReplaceWith: ExceptionMessage ActivateEscapeSequences: False Result=> Email_Body
+            @@flowname: 'Shell_PP_SendEmail_Reusable_DesktopFlow'
+External.RunFlow FlowId: 'a8bf1ac0-a1ed-4067-8434-82a3918b6d21' WaitToComplete: True @Email_Subject: Email_Subject @Email_Body: Email_Body @SystemException_Flag: True @BusinessException_Flag: False @Email_To: Email_To @Email_CC: Email_CC @SS_FilePath: $'''\"%ScreenShotFolderPath%\"''' @ReportFilePath: Bot_Working_Folder @Report_Flag: False @Out_ExceptionType=> Out_SendEmailExceptionType @Out_ExceptionMessage=> Out_SendEmailExceptionMessage
+            IF Current_ExceptionMessage = Previous_ExceptionMessage THEN
+                Variables.IncreaseVariable Value: Consecutive_Exception_Count IncrementValue: 1
+            ELSE
+                SET Previous_ExceptionMessage TO Current_ExceptionMessage
+                SET Consecutive_Exception_Count TO 0
+            END
+        END
+    ELSE
+        IF Completed_Flag = True THEN
+            WorkQueues.UpdateWorkQueueItem.UpdateWithProcessingNotes WorkQueueItem: WorkQueueItem Status: WorkQueues.WorkQueueItemStatus.Processed InputValue: QueueOutputJson
+            SET Previous_ExceptionMessage TO $'''%''%'''
+        END
+    END
+END FUNCTION
+FUNCTION 'Close All Applications' GLOBAL
+    # ############### Close All Applications ##################
+    # ############### KILL EXCEL ##################
+    IF (System.IfProcess.ProcessIsRunning ProcessName: $'''EXCEL''') THEN
+        Scripting.RunPowershellScript.RunScript Script: $'''Stop-Process -Name \"EXCEL\" -Force''' ScriptOutput=> PowershellOutput
+        ON ERROR
+
+        END
+    END
+    # ############### KILL SAP ##################
+    IF (System.IfProcess.ProcessIsRunning ProcessName: $'''saplogon''') THEN
+        Scripting.RunPowershellScript.RunScript Script: $'''Stop-Process -Name \"saplogon\" -Force''' ScriptOutput=> PowershellOutput
+        ON ERROR
+
+        END
+    END
+    # ############### KILL EDGE BROWSER ##################
+    IF (System.IfProcess.ProcessIsRunning ProcessName: $'''msedge''') THEN
+        Scripting.RunPowershellScript.RunScript Script: $'''Stop-Process -Name \"msedge\" -Force''' ScriptOutput=> PowershellOutput
+        ON ERROR
+
+        END
+    END
+END FUNCTION
+FUNCTION 'Create Project Folders' GLOBAL
+    BLOCK 'Create Project Folder'
+ON BLOCK ERROR all
+    CALL 'Global Error Handler'
+    THROW ERROR
+END
+        # ############### Close All Applications ##################
+        # ############### Create project folder structutre based on the config value ###############
+        SET ExceptionType TO $'''%''%'''
+        SET ExceptionMessage TO $'''%''%'''
+        IF (Folder.IfFolderExists.DoesNotExist Path: $'''%RootFolder%\\%ProjectFolderName%''') THEN
+            Folder.Create FolderPath: RootFolder FolderName: ProjectFolderName Folder=> ProjectFolderPath
+        ELSE
+            SET ProjectFolderPath TO $'''%RootFolder%\\%ProjectFolderName%'''
+        END
+        IF (Folder.IfFolderExists.DoesNotExist Path: $'''%ProjectFolderPath%\\%TempFolderName%''') THEN
+            Folder.Create FolderPath: ProjectFolderPath FolderName: TempFolderName Folder=> Bot_Working_Folder
+        ELSE
+            SET Bot_Working_Folder TO $'''%ProjectFolderPath%\\%TempFolderName%'''
+        END
+        IF (Folder.IfFolderExists.DoesNotExist Path: $'''%ProjectFolderPath%\\%ScreenshotFolder%''') THEN
+            Folder.Create FolderPath: ProjectFolderPath FolderName: ScreenshotFolder Folder=> ScreenShotFolderPath
+        ELSE
+            SET ScreenShotFolderPath TO $'''%ProjectFolderPath%\\%ScreenshotFolder%'''
+        END
+    END
+END FUNCTION
+FUNCTION 'Cleanup Folders' GLOBAL
+    # ############ Cleanup Project Folders ############
+    # ############ Clear Bot working Folder ############
+    # ############ Applicable only for Performer flow ############
+    IF Run_PerformerFlow_Flag = True THEN
+        IF IsNotEmpty(Bot_Working_Folder) THEN
+            Folder.GetFiles Folder: Bot_Working_Folder FileFilter: $'''*''' IncludeSubfolders: False FailOnAccessDenied: True SortBy1: Folder.SortBy.NoSort SortDescending1: False SortBy2: Folder.SortBy.NoSort SortDescending2: False SortBy3: Folder.SortBy.NoSort SortDescending3: False Files=> TempFiles
+            File.Delete Files: TempFiles
+            ON ERROR
+
+            END
+        END
+        # ############ Clear Screenshot Folder ############
+        IF IsNotEmpty(ScreenShotFolderPath) THEN
+            Folder.GetFiles Folder: ScreenshotFolderPath FileFilter: $'''*''' IncludeSubfolders: False FailOnAccessDenied: True SortBy1: Folder.SortBy.NoSort SortDescending1: False SortBy2: Folder.SortBy.NoSort SortDescending2: False SortBy3: Folder.SortBy.NoSort SortDescending3: False Files=> ScreenshotFiles
+            File.Delete Files: ScreenshotFiles
+            ON ERROR
+
+            END
+        END
+        # ############ Delete Project Folder ############
+        IF (Folder.IfFolderExists.Exists Path: ProjectFolderPath) THEN
+            Folder.Delete Folder: ProjectFolderPath
+            ON ERROR
+
+            END
+        END
+        # ############ Clear config Data ############
+        SET ConfigData TO {{ }}
+    END
+END FUNCTION
+FUNCTION 'Prepare Queue Report' GLOBAL
+    BLOCK 'Prepare Daily Report'
+ON BLOCK ERROR all
+    CALL 'Global Error Handler'
+    THROW ERROR
+END
+        # //////////////////////////// Input - Queue Report Name ////////////////////////////
+        SET QueueReportName TO $'''Queue Report.xlsx'''
+        /# ############ Get Work Queue Report based on completed on field. ############
+############ Start Date - last month date and End Date - Current Date #############/
+        DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateOnly CurrentDateTime=> CurrentDate
+        # //////////////////////////// Change Duration  ////////////////////////////
+        DateTime.Add DateTime: CurrentDate TimeToAdd: -1 TimeUnit: DateTime.TimeUnit.Months ResultedDate=> QueueReport_StartDate
+        DateTime.Add DateTime: CurrentDate TimeToAdd: 1 TimeUnit: DateTime.TimeUnit.Days ResultedDate=> QueueReport_EndDate
+        Text.ConvertDateTimeToText.FromCustomDateTime DateTime: QueueReport_StartDate CustomFormat: $'''MM/dd/yyyy hh:mm:ss tt''' Result=> QueueReport_StartDate_Formatted
+        # //////////////////////////// Change Column Names in the Datatable ////////////////////////////
+        # ############ Create new table for Queue Report ############
+        Variables.CreateNewDatatable InputTable: { ^['Name', 'Start Time', 'End Time', 'Status'], [$'''''', $'''''', $'''''', $''''''] } DataTable=> QueueReport_DataTable
+        Text.ConvertDateTimeToText.FromCustomDateTime DateTime: QueueReport_EndDate CustomFormat: $'''MM/dd/yyyy hh:mm:ss tt''' Result=> QueueReport_EndDate_Formatted
+        # ############ Filter work queue items based on completed on field ############
+        # Maximum - 5000 records
+        @@'InputSummaryValue:WORKQUEUE': '%WorkQueueID%'
+WorkQueues.GetWorkQueueItems WorkQueue: WorkQueueID FilterRows: $'''<filter type=\"and\">
+          <condition attribute=\"completedon\" operator=\"on-or-after\" value=\"%QueueReport_StartDate_Formatted%\" />
+          <condition attribute=\"completedon\" operator=\"on-or-before\" value=\"%QueueReport_EndDate_Formatted%\" />
+  </filter>
+
+
+''' RowsToReturn: 5000 WorkQueueItems=> WorkQueueItems_Report
+        # ############ Loop through each item and include only Unreported process notes related work queue item ############
+        LOOP FOREACH CurrentWorkQueueItem IN WorkQueueItems_Report
+            DISABLE Variables.ConvertJsonToCustomObject Json: CurrentWorkQueueItem.Value CustomObject=> QueueReport_JsonAsCustomObject
+            # //////////////////////////// Add Decryption if any values needed from Queue Item value ////////////////////////////
+            # //////////////////////////// Update field name in the DataRow ////////////////////////////
+            SET CurrentDataRow TO [CurrentWorkQueueItem.Name, CurrentWorkQueueItem.ProcessingStartTime, CurrentWorkQueueItem.CompletedOn, CurrentWorkQueueItem.StatusCode]
+            Variables.AddRowToDataTable.AppendRowToDataTable DataTable: QueueReport_DataTable RowToAdd: CurrentDataRow
+        END
+        Variables.DeleteEmptyRowsFromDataTable DataTable: QueueReport_DataTable
+        # ############ Write to Excel file based on Row count ############
+        SET ReportFilePath TO $'''%Bot_Working_Folder%\\%QueueReportName%'''
+        IF QueueReport_DataTable.RowsCount > 0 THEN
+            # ############ Create New Excel and Write Data ############
+            Excel.LaunchExcel.LaunchUnderExistingProcess Visible: True UseMachineLocale: False Instance=> QueueReport_Instance
+            Excel.SaveExcel.SaveAs Instance: QueueReport_Instance DocumentFormat: Excel.ExcelFormat.OpenXmlWorkbook DocumentPath: ReportFilePath
+            Excel.WriteToExcel.WriteCell Instance: QueueReport_Instance Value: QueueReport_DataTable.ColumnHeadersRow Column: 1 Row: 1
+            Excel.WriteToExcel.WriteCell Instance: QueueReport_Instance Value: QueueReport_DataTable Column: 1 Row: 2
+            Excel.CloseExcel.CloseAndSave Instance: QueueReport_Instance
+            WAIT Delay_S
+            # ############ Send Report Email ############
+            SET Email_To TO Business_EmailAddressTo
+            SET Email_CC TO Business_EmailAddressCC
+            SET Email_Subject TO $'''%Config_Email_Subject% - Queue Report'''
+            SET Email_Body TO EmailBody_Report
+            @@flowname: 'Shell_PP_SendEmail_Reusable_DesktopFlow'
+External.RunFlow FlowId: 'a8bf1ac0-a1ed-4067-8434-82a3918b6d21' WaitToComplete: True @Email_Subject: Email_Subject @Email_Body: Email_Body @SystemException_Flag: False @BusinessException_Flag: False @Email_To: Email_To @Email_CC: Email_CC @SS_FilePath: $'''\"%ScreenShotFolderPath%\"''' @ReportFilePath: ReportFilePath @Report_Flag: True @Out_ExceptionType=> Out_SendEmailExceptionType @Out_ExceptionMessage=> Out_SendEmailExceptionMessage
+        END
+        # ############ Delete Report File ############
+        IF (File.IfFile.Exists File: ReportFilePath) THEN
+            File.Delete Files: ReportFilePath
+            ON ERROR
+
+            END
+        END
+    END
+END FUNCTION
+FUNCTION 'Add Items to Work Queue' GLOBAL
+    BLOCK 'Populate Work Queue'
+ON BLOCK ERROR all
+    CALL 'Global Error Handler'
+    THROW ERROR
+END
+        # //////////////////////////// Replace Queue Input Data value with actual DataTable ////////////////////////////
+        Variables.CreateNewDatatable InputTable: { } DataTable=> QueueInput_Data
+        LOOP FOREACH CurrentValue IN QueueInput_Data
+            # //////////////////////////// Queue Item 'Name' Column value ////////////////////////////
+            SET Input_Value TO $'''%''%'''
+            # ########## Check Item already exists in the Queue ##########
+            @@'InputSummaryValue:WORKQUEUE': '%WorkQueueID%'
+WorkQueues.GetWorkQueueItems WorkQueue: WorkQueueID FilterRows: $'''<filter type=\"and\">
+          <condition attribute=\"name\" operator=\"eq\" value=\"%Input_Value%\" />
+          <condition attribute=\"statuscode\" operator=\"eq\" value=\"0\" />
+</filter>''' RowsToReturn: 5000 WorkQueueItems=> FilteredWQItems
+            # //////////////////////////// Prepare Queue Input Json format from Data////////////////////////////
+            SET QueueInputJson TO $'''{
+}'''
+            # ########## Add Item to Work Queue ##########
+            IF FilteredWQItems.Count = 0 THEN
+                Cryptography.EncryptText.EncryptTextWithAES Encoding: Cryptography.EncryptionEncoding.Unicode TextToEncrypt: QueueInputJson EncryptionKey: Enc_Dec_Key PaddingMode: Cryptography.PaddingMode.PKCS7 KeySize: Cryptography.AESKeySize.Bits256 EncryptedText=> Enc_QueueInput
+                @@'InputSummaryValue:WORKQUEUE': '%WorkQueueID%'
+WorkQueues.EnqueueWorkQueueItem.WithoutUniqueId WorkQueue: WorkQueueID Status: WorkQueues.WorkQueueItemEnqueueStatus.Queued Priority: WorkQueues.WorkQueueItemPriority.Normal Name: Input_Value Value: Enc_QueueInput ProcessingResult: $'''Fresh''' WorkQueueItem=> NewWorkQueueItem
+            END
+        END
+    END
+END FUNCTION

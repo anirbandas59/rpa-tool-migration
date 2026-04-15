@@ -1,0 +1,96 @@
+@@ConnectionString: ''
+@@Type: 'Local'
+@@DesktopType: 'local'
+@@DisplayName: 'Local computer'
+IMPORT 'controlRepo.appmask' AS appmask
+IMPORT 'imageRepo.imgrepo' AS imgrepo
+@SENSITIVE: []
+@INPUT Email_Subject : { 'Description': '', 'FriendlyName': 'Email_Subject', 'Type': 'String', 'IsOptional': False, 'DefaultValue': '' }
+@INPUT Email_Body : { 'Description': '', 'FriendlyName': 'Email_Body', 'Type': 'String', 'IsOptional': False, 'DefaultValue': '' }
+@INPUT SystemException_Flag : { 'Description': '', 'FriendlyName': 'SystemException_Flag', 'Type': 'Bool', 'IsOptional': False, 'DefaultValue': False }
+@INPUT BusinessException_Flag : { 'Description': '', 'FriendlyName': 'BusinessException_Flag', 'Type': 'Bool', 'IsOptional': False, 'DefaultValue': False }
+@OUTPUT Out_ExceptionType : { 'Description': '', 'FriendlyName': 'Out_ExceptionType', 'Type': 'String' }
+@OUTPUT Out_ExceptionMessage : { 'Description': '', 'FriendlyName': 'Out_ExceptionMessage', 'Type': 'String' }
+@INPUT Email_To : { 'Description': '', 'FriendlyName': 'Email_To', 'Type': 'String', 'IsOptional': False, 'DefaultValue': '' }
+@INPUT Email_CC : { 'Description': '', 'FriendlyName': 'Email_CC', 'Type': 'String', 'IsOptional': False, 'DefaultValue': '' }
+@INPUT SS_FilePath : { 'Description': '', 'FriendlyName': 'SS_FilePath', 'Type': 'String', 'IsOptional': False, 'DefaultValue': '' }
+@INPUT ReportFilePath : { 'Description': '', 'FriendlyName': 'ReportFilePath', 'Type': 'String', 'IsOptional': False, 'DefaultValue': '' }
+@INPUT Report_Flag : { 'Description': '', 'FriendlyName': 'Report_Flag', 'Type': 'Bool', 'IsOptional': False, 'DefaultValue': False }
+BLOCK 'Send Email Notification'
+ON BLOCK ERROR REPEAT 3 TIMES WAIT 10
+ON BLOCK ERROR all
+CALL 'Capture Error Details'
+END
+    /# ############## Version: 1.0 - 02/2026 ##############
+############## Author: Murugan ###############/
+    # ######## Send Email Notification using Office 365###########
+    # Send Email for Business Exception / System Exception / Reporting
+    SET ExceptionType TO $'''%''%'''
+    SET ExceptionMessage TO $'''%''%'''
+    # ######## Get Username and System Name ###########
+    System.GetEnvironmentVariable.GetEnvironmentVariable Name: $'''COMPUTERNAME''' Value=> RobotID
+    System.GetEnvironmentVariable.GetEnvironmentVariable Name: $'''USERNAME''' Value=> SystemUserName
+    DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> CurrentDateTime
+    # ######## Include Username and System name in Email Body ###########
+    Text.Replace Text: Email_Body TextToFind: $'''<<ROBOTID>>''' IsRegEx: False IgnoreCase: False ReplaceWith: RobotID ActivateEscapeSequences: False Result=> Email_Body
+    Text.Replace Text: Email_Body TextToFind: $'''<<USERNAME>>''' IsRegEx: False IgnoreCase: False ReplaceWith: SystemUserName ActivateEscapeSequences: False Result=> Email_Body
+    SET Email_Subject TO $'''%Email_Subject% - %CurrentDateTime%'''
+    Text.Replace Text: SS_FilePath TextToFind: $'''\"''' IsRegEx: False IgnoreCase: False ReplaceWith: $'''%''%''' ActivateEscapeSequences: False Result=> SS_FilePath
+    # ######## BUSINESS EXCEPTION EMAIL ###########
+    IF BusinessException_Flag = True THEN
+        @@'emailMessage/Sensitivity': ''
+@@connectionDisplayName: 'Office 365 Outlook Fuel_Authorization_Process-030f2'
+External.InvokeCloudConnector Connection: 'e8de51af-6a46-4e20-902e-18fcfd7124a5' ConnectorId: '/providers/Microsoft.PowerApps/apis/shared_office365' OperationId: 'SendEmailV2' @'emailMessage/To': Email_To @'emailMessage/Subject': Email_Subject @'emailMessage/Body': Email_Body @'emailMessage/Cc': Email_CC
+    END
+    # ######## SYSTEM EXCEPTION EMAIL ###########
+    IF SystemException_Flag = True THEN
+        SET EmailAttachment TO $'''%''%'''
+        Variables.CreateNewList List=> AttachmentList_Contents
+        IF SS_FilePath <> $'''%''%''' THEN
+            Folder.GetFiles Folder: SS_FilePath FileFilter: $'''*PNG''' IncludeSubfolders: False FailOnAccessDenied: True SortBy1: Folder.SortBy.NoSort SortDescending1: False SortBy2: Folder.SortBy.NoSort SortDescending2: False SortBy3: Folder.SortBy.NoSort SortDescending3: False Files=> SSFiles
+            LOOP FOREACH Current_ScreenShotFile IN SSFiles
+                File.ConvertToBinary File: Current_ScreenShotFile BinaryData=> BinaryData
+                SET EmailAttachment TO { 'ContentBytes': BinaryData, 'Name': Current_ScreenShotFile.Name }
+                Variables.AddItemToList Item: EmailAttachment List: AttachmentList_Contents
+            END
+        END
+        @@'emailMessage/Sensitivity': ''
+@@connectionDisplayName: 'Office 365 Outlook Fuel_Authorization_Process-030f2'
+External.InvokeCloudConnector Connection: 'e8de51af-6a46-4e20-902e-18fcfd7124a5' ConnectorId: '/providers/Microsoft.PowerApps/apis/shared_office365' OperationId: 'SendEmailV2' @'emailMessage/To': Email_To @'emailMessage/Subject': Email_Subject @'emailMessage/Body': Email_Body @'emailMessage/Cc': Email_CC @'emailMessage/Attachments': AttachmentList_Contents
+        IF SS_FilePath <> $'''%''%''' THEN
+            File.Delete Files: SSFiles
+        END
+    END
+    # ######## REPORT EMAIL ###########
+    IF Report_Flag = True THEN
+        SET EmailAttachment TO {{ }}
+        IF ReportFilePath <> $'''%''%''' THEN
+            IF (File.IfFile.Exists File: ReportFilePath) THEN
+                File.ConvertToBinary File: ReportFilePath BinaryData=> BinaryData
+                SET EmailAttachment TO { 'ContentBytes': BinaryData, 'Name': ReportFilePath }
+                # ######## Send email with Attachment ###########
+                @@'emailMessage/Sensitivity': ''
+@@connectionDisplayName: 'Office 365 Outlook Fuel_Authorization_Process-030f2'
+External.InvokeCloudConnector Connection: 'e8de51af-6a46-4e20-902e-18fcfd7124a5' ConnectorId: '/providers/Microsoft.PowerApps/apis/shared_office365' OperationId: 'SendEmailV2' @'emailMessage/To': Email_To @'emailMessage/Subject': Email_Subject @'emailMessage/Body': Email_Body @'emailMessage/Cc': Email_CC @'emailMessage/Attachments': EmailAttachment
+            ELSE
+                GOTO 'No Attachment'
+            END
+        ELSE
+            # ######## Send email without Attachment ###########
+            LABEL 'No Attachment'
+            @@'emailMessage/Sensitivity': ''
+@@connectionDisplayName: 'Office 365 Outlook Fuel_Authorization_Process-030f2'
+External.InvokeCloudConnector Connection: 'e8de51af-6a46-4e20-902e-18fcfd7124a5' ConnectorId: '/providers/Microsoft.PowerApps/apis/shared_office365' OperationId: 'SendEmailV2' @'emailMessage/To': Email_To @'emailMessage/Subject': Email_Subject @'emailMessage/Body': Email_Body @'emailMessage/Cc': Email_CC
+        END
+    END
+END
+FUNCTION 'Capture Error Details' GLOBAL
+    # Capture Exception details and assign to variables
+    ERROR => LastError
+    SET ExceptionType TO $'''System Exception'''
+    SET ExceptionMessage TO $'''Error message: %LastError.Message%
+Flow name: %LastError.SubflowName%
+Action name:%LastError.ActionName%'''
+    SET Out_ExceptionType TO ExceptionType
+    SET Out_ExceptionMessage TO ExceptionMessage
+END FUNCTION
