@@ -280,43 +280,113 @@ def parse_process(path: Path) -> RawProcess:
             process_elem.get("version", "") or metadata_elem.get("version", "")
         ).strip()
 
-        # Parse all pages (subsheets) and collect stages
-        pages: list[RawPage] = []
-        all_stages: list[RawStage] = []
+        # Parse all pages (subsheets) and stages
+        # Support two formats:
+        # 1. Test format: stages nested within <subsheet> elements
+        # 2. Real format: stages flat with <subsheetid> children
+        subsheets_by_id: dict[str, Any] = {}
+        paged_stages: dict[str, list[RawStage]] = {}
+        extracted_stage_ids: set[str] = set()
 
         for subsheet_elem in process_elem.iter():
-            if _strip_ns(subsheet_elem.tag) == "subsheet":
-                page = _parse_page(subsheet_elem)
-                pages.append(page)
+            if _strip_ns(subsheet_elem.tag) != "subsheet":
+                continue
 
-        # Also collect stages that are direct children of process (flattened export format)
-        # These go into a main/default page
-        for stage_elem in process_elem:
-            if _strip_ns(stage_elem.tag) == "stage":
-                all_stages.append(_parse_stage(stage_elem))
+            page_id = subsheet_elem.get("subsheetid", "").strip()
+            if not page_id:
+                raise ParseError("subsheet missing required 'subsheetid' attribute")
 
-        # If we found stages at the process level and no pages with stages,
-        # create a default main page to hold them
-        if all_stages and (not pages or all(len(p["stages"]) == 0 for p in pages)):
-            pages = [
+            page_name = subsheet_elem.get("name", "").strip()
+            if not page_name:
+                page_name = page_id
+            subsheets_by_id[page_id] = {"name": page_name, "elem": subsheet_elem}
+
+            # Extract stages nested within this subsheet (test format)
+            for elem in subsheet_elem.iter():
+                if _strip_ns(elem.tag) == "stage":
+                    stage = _parse_stage(elem)
+                    extracted_stage_ids.add(stage["stage_id"])
+                    if page_id:
+                        if page_id not in paged_stages:
+                            paged_stages[page_id] = []
+                        paged_stages[page_id].append(stage)
+
+        # Also collect flat stages with <subsheetid> children (real export format)
+        main_stages: list[RawStage] = []
+        namespace = "http://www.blueprism.co.uk/product/process"
+
+        for stage_elem in process_elem.iter():
+            if _strip_ns(stage_elem.tag) != "stage":
+                continue
+
+            # Skip if already extracted as nested stage
+            stage_id = stage_elem.get("stageid", "").strip()
+            if stage_id in extracted_stage_ids:
+                continue
+
+            # Parse the stage
+            stage = _parse_stage(stage_elem)
+
+            # Determine which page this stage belongs to by checking subsheetid child
+            subsheetid = (
+                stage_elem.findtext(f"{{{namespace}}}subsheetid")
+                or stage_elem.findtext("subsheetid")
+                or ""
+            ).strip()
+
+            if subsheetid:
+                # Stage belongs to a subsheet
+                if subsheetid not in paged_stages:
+                    paged_stages[subsheetid] = []
+                paged_stages[subsheetid].append(stage)
+            else:
+                # Stage has no subsheetid → belongs to main page
+                main_stages.append(stage)
+
+        # Build pages: main page first, then sub-pages
+        pages: list[RawPage] = []
+
+        # Find the main page (matches process name, or first subsheet)
+        main_page_id = None
+        main_page_name = None
+        for page_id, info in subsheets_by_id.items():
+            if info["name"] == process_name:
+                main_page_id = page_id
+                main_page_name = info["name"]
+                break
+
+        # Fallback: use first subsheet as main
+        if main_page_id is None and subsheets_by_id:
+            main_page_id = next(iter(subsheets_by_id.keys()))
+            main_page_name = subsheets_by_id[main_page_id]["name"]
+
+        # If no subsheets exist, create a default main page
+        if not main_page_id:
+            main_page_id = "main"
+            main_page_name = process_name
+
+        # Add main page with stages that have no subsheetid
+        main_page_stages = main_stages + paged_stages.pop(main_page_id, [])
+        pages.append(
+            RawPage(
+                page_id=main_page_id,
+                name=main_page_name,
+                stages=main_page_stages,
+                is_main=True,
+            )
+        )
+
+        # Add remaining sub-pages
+        for page_id, stages in paged_stages.items():
+            page_name = subsheets_by_id[page_id]["name"] if page_id in subsheets_by_id else page_id
+            pages.append(
                 RawPage(
-                    page_id="main",
-                    name=process_name,
-                    stages=all_stages,
-                    is_main=True,
+                    page_id=page_id,
+                    name=page_name,
+                    stages=stages,
+                    is_main=False,
                 )
-            ]
-        else:
-            # Mark the main page by matching name or using the first page
-            main_page_found = False
-            for page in pages:
-                if page["name"] == process_name:
-                    page["is_main"] = True
-                    main_page_found = True
-                    break
-
-            if not main_page_found and pages:
-                pages[0]["is_main"] = True
+            )
 
         return RawProcess(
             process_id=process_id,

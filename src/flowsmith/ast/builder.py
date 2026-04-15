@@ -276,26 +276,21 @@ def _assign_block_pairs(stages: list[BPStage], page_name: str) -> None:
     Groups Block stages by name. Within each group, pairs are assigned
     in encounter order: first with second, third with fourth, etc.
     pair_id is the first stage's stage_id for each pair.
+    Singleton Blocks (unpaired) are left without a pair_id.
 
     Args:
         stages: Normalised stage list for one page (modified in-place).
         page_name: Page name used in error messages.
-
-    Raises:
-        ASTBuildError: If any Block name group has an odd count.
     """
     blocks_by_name: dict[str, list[BPStage]] = defaultdict(list)
     for stage in stages:
         if stage.stage_type == StageType.BLOCK:
             blocks_by_name[stage.name].append(stage)
 
-    for name, block_stages in blocks_by_name.items():
-        if len(block_stages) % 2 != 0:
-            raise ASTBuildError(
-                f"Unmatched Block stage with name '{name}' on page '{page_name}' "
-                f"(found {len(block_stages)} block(s), expected an even count)"
-            )
-        for i in range(0, len(block_stages), 2):
+    for _name, block_stages in blocks_by_name.items():
+        # Pair blocks in groups: first with second, third with fourth, etc.
+        # If there's an odd count, the last block remains unpaired (singleton).
+        for i in range(0, len(block_stages) - 1, 2):
             first = block_stages[i]
             second = block_stages[i + 1]
             pair_id = first.stage_id

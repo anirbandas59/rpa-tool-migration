@@ -262,12 +262,13 @@ def test_block_pair_assigned() -> None:
     assert stages[1].pair_id == "b1"
 
 
-def test_unmatched_block_raises() -> None:
+def test_singleton_block_allowed() -> None:
     raw = single_page_process(
         make_raw_stage(stage_id="b1", stage_type="Block", name="TryCatch"),
     )
-    with pytest.raises(ASTBuildError, match="TryCatch"):
-        build_ast(raw)
+    stage = build_ast(raw).pages[0].stages[0]
+    assert stage.stage_type == StageType.BLOCK
+    assert stage.pair_id is None
 
 
 # ── Error handling ───────────────────────────────────────────────────────────
