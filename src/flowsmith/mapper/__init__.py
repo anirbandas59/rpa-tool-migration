@@ -6,6 +6,10 @@ from flowsmith.mapper.config import (
     VBOEntry,
     load_rules,
 )
+from flowsmith.mapper.type_mapper import (
+    DataTypeMapper,
+    TypeMapping,
+)
 from flowsmith.mapper.vbo_router import (
     RoutingDecision,
     VBORouter,
@@ -18,4 +22,6 @@ __all__ = [
     "load_rules",
     "RoutingDecision",
     "VBORouter",
+    "TypeMapping",
+    "DataTypeMapper",
 ]
