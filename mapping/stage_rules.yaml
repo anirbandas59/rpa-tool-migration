@@ -25,7 +25,7 @@
 - bp_stage_type: Start
   canonical_type: START
   pa_target_action: ""
-  pa_module: ""
+  pa_module: "System"
   runtime: DESKTOP
   confidence_base: 0.95
   notes: "Entry point of a page/sub-sheet. Maps to flow begin node."
@@ -33,7 +33,7 @@
 - bp_stage_type: End
   canonical_type: END
   pa_target_action: ""
-  pa_module: ""
+  pa_module: "System"
   runtime: DESKTOP
   confidence_base: 0.95
   notes: "Exit point of a page/sub-sheet. Maps to flow end node."
@@ -41,7 +41,7 @@
 - bp_stage_type: Action
   canonical_type: ACTION
   pa_target_action: ""
-  pa_module: ""
+  pa_module: "External"
   runtime: DESKTOP
   confidence_base: 0.70
   notes: >
@@ -52,7 +52,7 @@
 - bp_stage_type: Decision
   canonical_type: DECISION
   pa_target_action: ""
-  pa_module: ""
+  pa_module: "System"
   runtime: DESKTOP
   confidence_base: 0.85
   notes: "Boolean branch. Maps to If/Condition in PAD or If action in Cloud Flow."
@@ -60,7 +60,7 @@
 - bp_stage_type: Calculation
   canonical_type: CALCULATION
   pa_target_action: ""
-  pa_module: ""
+  pa_module: "Variables"
   runtime: DESKTOP
   confidence_base: 0.80
   notes: >
@@ -70,7 +70,7 @@
 - bp_stage_type: Code
   canonical_type: CODE
   pa_target_action: ""
-  pa_module: ""
+  pa_module: "Scripting"
   runtime: DESKTOP
   confidence_base: 0.45
   notes: >
@@ -81,7 +81,7 @@
 - bp_stage_type: WaitStart
   canonical_type: WAIT
   pa_target_action: ""
-  pa_module: ""
+  pa_module: "System"
   runtime: DESKTOP
   confidence_base: 0.70
   pair_with: WaitEnd
@@ -93,7 +93,7 @@
 - bp_stage_type: WaitEnd
   canonical_type: WAIT
   pa_target_action: ""
-  pa_module: ""
+  pa_module: "System"
   runtime: DESKTOP
   confidence_base: 0.70
   pair_with: WaitStart
@@ -102,7 +102,7 @@
 - bp_stage_type: Navigate
   canonical_type: NAVIGATE
   pa_target_action: ""
-  pa_module: ""
+  pa_module: "UIAutomation"
   runtime: DESKTOP
   confidence_base: 0.65
   notes: >
@@ -112,7 +112,7 @@
 - bp_stage_type: Read
   canonical_type: READ
   pa_target_action: ""
-  pa_module: ""
+  pa_module: "UIAutomation"
   runtime: DESKTOP
   confidence_base: 0.65
   notes: >
@@ -122,7 +122,7 @@
 - bp_stage_type: Write
   canonical_type: WRITE
   pa_target_action: ""
-  pa_module: ""
+  pa_module: "UIAutomation"
   runtime: DESKTOP
   confidence_base: 0.65
   notes: >
@@ -132,7 +132,7 @@
 - bp_stage_type: LoopStart
   canonical_type: LOOP
   pa_target_action: ""
-  pa_module: ""
+  pa_module: "System"
   runtime: DESKTOP
   confidence_base: 0.80
   pair_with: LoopEnd
@@ -144,7 +144,7 @@
 - bp_stage_type: LoopEnd
   canonical_type: LOOP
   pa_target_action: ""
-  pa_module: ""
+  pa_module: "System"
   runtime: DESKTOP
   confidence_base: 0.80
   pair_with: LoopStart
@@ -153,7 +153,7 @@
 - bp_stage_type: Exception
   canonical_type: EXCEPTION
   pa_target_action: ""
-  pa_module: ""
+  pa_module: "System"
   runtime: DESKTOP
   confidence_base: 0.80
   exception_types:
@@ -175,7 +175,7 @@
 - bp_stage_type: Recover
   canonical_type: RECOVER
   pa_target_action: ""
-  pa_module: ""
+  pa_module: "System"
   runtime: DESKTOP
   confidence_base: 0.80
   notes: >
@@ -185,7 +185,7 @@
 - bp_stage_type: Resume
   canonical_type: RESUME
   pa_target_action: ""
-  pa_module: ""
+  pa_module: "System"
   runtime: DESKTOP
   confidence_base: 0.80
   notes: "Exits exception recovery and resumes normal flow. Paired with Recover."
@@ -195,7 +195,7 @@
 - bp_stage_type: Anchor
   canonical_type: ""
   pa_target_action: ""
-  pa_module: ""
+  pa_module: "System"
   runtime: DESKTOP
   confidence_base: 0.0
   notes: >
@@ -206,7 +206,7 @@
 - bp_stage_type: MultipleCalculation
   canonical_type: CALCULATION
   pa_target_action: ""
-  pa_module: ""
+  pa_module: "Variables"
   runtime: DESKTOP
   confidence_base: 0.75
   notes: >
@@ -216,7 +216,7 @@
 - bp_stage_type: Block
   canonical_type: BLOCK
   pa_target_action: ""
-  pa_module: ""
+  pa_module: "System"
   runtime: DESKTOP
   confidence_base: 0.70
   notes: >
@@ -227,7 +227,7 @@
 - bp_stage_type: Collection
   canonical_type: COLLECTION
   pa_target_action: ""
-  pa_module: ""
+  pa_module: "Variables"
   runtime: DESKTOP
   confidence_base: 0.60
   notes: >
@@ -238,7 +238,7 @@
 - bp_stage_type: Data
   canonical_type: ""
   pa_target_action: ""
-  pa_module: ""
+  pa_module: "Variables"
   runtime: DESKTOP
   confidence_base: 0.60
   notes: >
@@ -249,7 +249,7 @@
 - bp_stage_type: Note
   canonical_type: ""
   pa_target_action: ""
-  pa_module: ""
+  pa_module: "System"
   runtime: DESKTOP
   confidence_base: 0.0
   notes: >
@@ -260,7 +260,7 @@
 - bp_stage_type: Process
   canonical_type: ""
   pa_target_action: ""
-  pa_module: ""
+  pa_module: "System"
   runtime: DESKTOP
   confidence_base: 0.0
   notes: >
@@ -271,7 +271,7 @@
 - bp_stage_type: ProcessInfo
   canonical_type: ""
   pa_target_action: ""
-  pa_module: ""
+  pa_module: "System"
   runtime: DESKTOP
   confidence_base: 0.0
   notes: >
@@ -281,7 +281,7 @@
 - bp_stage_type: SubSheet
   canonical_type: ""
   pa_target_action: ""
-  pa_module: ""
+  pa_module: "External"
   runtime: DESKTOP
   confidence_base: 0.75
   notes: >
@@ -292,7 +292,7 @@
 - bp_stage_type: SubSheetInfo
   canonical_type: ""
   pa_target_action: ""
-  pa_module: ""
+  pa_module: "System"
   runtime: DESKTOP
   confidence_base: 0.0
   notes: >

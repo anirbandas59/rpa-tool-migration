@@ -29,7 +29,7 @@
     - "Save Workbook"
     - "Get Last Row Number"
     - "Create Worksheet"
-  pa_module: ""
+  pa_module: "Excel"
   runtime: DESKTOP
   confidence_base: 0.80
   notes: >
@@ -39,7 +39,7 @@
 - vbo_name: "MS Outlook Email VBO"
   method_patterns:
     - "Send Email"
-  pa_module: ""
+  pa_module: "shared_office365"
   runtime: DESKTOP
   confidence_base: 0.75
   notes: >
@@ -53,7 +53,7 @@
     - "Get Collection Size"
     - "Sort Collection"
     - "Create Collection From Collection"
-  pa_module: ""
+  pa_module: "Variables"
   runtime: DESKTOP
   confidence_base: 0.65
   notes: >
@@ -65,7 +65,7 @@
   method_patterns:
     - "Merge Collections"
     - "Remove Duplicates"
-  pa_module: ""
+  pa_module: "Variables"
   runtime: DESKTOP
   confidence_base: 0.55
   notes: >
@@ -77,7 +77,7 @@
     - "Get Value"
     - "Get Environment Variable"
     - "Get All Settings"
-  pa_module: ""
+  pa_module: "shared_sharepointonline"
   runtime: DESKTOP
   confidence_base: 0.70
   notes: >
@@ -89,7 +89,7 @@
   method_patterns:
     - "Get Value"
     - "Set Value"
-  pa_module: ""
+  pa_module: "shared_sharepointonline"
   runtime: DESKTOP
   confidence_base: 0.65
   notes: "Extended environment VBO — same mapping strategy as Utility - Environment."
@@ -105,7 +105,7 @@
     - "Get File Extension"
     - "Get Files In Directory"
     - "Read Text File"
-  pa_module: ""
+  pa_module: "File"
   runtime: DESKTOP
   confidence_base: 0.80
   notes: >
@@ -115,7 +115,7 @@
 - vbo_name: "Utility - File Management_Extended"
   method_patterns:
     - "Zip Files"
-  pa_module: ""
+  pa_module: "Scripting"
   runtime: DESKTOP
   confidence_base: 0.60
   notes: "Custom Shell extended file VBO. Zip action may need PAD Compression module."
@@ -124,7 +124,7 @@
   method_patterns:
     - "Sleep"
     - "Get Random Number"
-  pa_module: ""
+  pa_module: "System"
   runtime: DESKTOP
   confidence_base: 0.75
   notes: >
@@ -135,7 +135,7 @@
   method_patterns:
     - "GET Request"
     - "POST Request"
-  pa_module: ""
+  pa_module: "Web"
   runtime: CLOUD
   confidence_base: 0.70
   notes: >
@@ -146,7 +146,7 @@
   method_patterns:
     - "JSON to Collection"
     - "Collection to JSON"
-  pa_module: ""
+  pa_module: "Variables"
   runtime: CLOUD
   confidence_base: 0.75
   notes: >
@@ -161,7 +161,7 @@
     - "Replace Text"
     - "Contains Text"
     - "To Upper Case"
-  pa_module: ""
+  pa_module: "Text"
   runtime: DESKTOP
   confidence_base: 0.80
   notes: "Maps to PAD Text module. Good coverage of common string operations."
@@ -169,7 +169,7 @@
 - vbo_name: "Utility_DataGateways-CustomFramework"
   method_patterns:
     - "Execute Query"
-  pa_module: ""
+  pa_module: "Database"
   runtime: DESKTOP
   confidence_base: 0.55
   notes: >
@@ -179,7 +179,7 @@
 - vbo_name: "Utility_Generic_Process_General_Actions"
   method_patterns:
     - "Log Message"
-  pa_module: ""
+  pa_module: "System"
   runtime: DESKTOP
   confidence_base: 0.65
   notes: "Custom Shell process utilities. Log Message maps to System logging actions."
@@ -187,7 +187,7 @@
 - vbo_name: "Utility_Object_Format_Queue_Report"
   method_patterns:
     - "Format Report"
-  pa_module: ""
+  pa_module: "Variables"
   runtime: DESKTOP
   confidence_base: 0.45
   notes: "Custom Shell queue report formatter. Likely needs manual reimplementation."
@@ -200,7 +200,7 @@
     - "Upload File"
     - "Download File"
     - "Wait For Element"
-  pa_module: ""
+  pa_module: "shared_sharepointonline"
   runtime: DESKTOP
   confidence_base: 0.60
   notes: >
@@ -210,7 +210,7 @@
 - vbo_name: "Utility_Object_Generic_KillProcess"
   method_patterns:
     - "Kill Process"
-  pa_module: ""
+  pa_module: "System"
   runtime: DESKTOP
   confidence_base: 0.75
   notes: "Maps to PAD System.TerminateProcess action."
@@ -218,7 +218,7 @@
 - vbo_name: "Utility_Object_Generic_RandomNumberGenerator"
   method_patterns:
     - "Generate Random Number"
-  pa_module: ""
+  pa_module: "Variables"
   runtime: DESKTOP
   confidence_base: 0.75
   notes: "Maps to Variables module or scripted Random() in PAD."
@@ -230,7 +230,7 @@
     - "Get List Items"
     - "Update List Item"
     - "Delete List Item"
-  pa_module: ""
+  pa_module: "shared_sharepointonline"
   runtime: CLOUD
   confidence_base: 0.75
   notes: >
@@ -241,7 +241,7 @@
   method_patterns:
     - "Get Access Token"
     - "Authenticate"
-  pa_module: ""
+  pa_module: "shared_sharepointonline"
   runtime: CLOUD
   confidence_base: 0.55
   notes: >
@@ -251,7 +251,7 @@
 - vbo_name: "Utility_RunPowerShellScript_WithTimeOut"
   method_patterns:
     - "Run Script"
-  pa_module: ""
+  pa_module: "Scripting"
   runtime: DESKTOP
   confidence_base: 0.70
   notes: >
@@ -262,7 +262,7 @@
   method_patterns:
     - "Get Config Value"
     - "Update Config Value"
-  pa_module: ""
+  pa_module: "shared_sharepointonline"
   runtime: CLOUD
   confidence_base: 0.65
   notes: >
@@ -272,15 +272,15 @@
 - vbo_name: "DWF Utility - Screenshot"
   method_patterns:
     - "Take Screenshot"
-  pa_module: ""
+  pa_module: "Workstation"
   runtime: DESKTOP
   confidence_base: 0.60
-  notes: "Maps to PAD System.TakeScreenshot action."
+  notes: "Maps to PAD Workstation.TakeScreenshot.TakeScreenshotAndSaveToFile action."
 
 - vbo_name: "GET Http File - BLOB"
   method_patterns:
     - "Download BLOB"
-  pa_module: ""
+  pa_module: "Web"
   runtime: CLOUD
   confidence_base: 0.60
   notes: "HTTP binary download. Maps to Cloud Flow HTTP action with binary response."
@@ -288,7 +288,7 @@
 - vbo_name: "IBP Utility - Environment"
   method_patterns:
     - "Get Setting"
-  pa_module: ""
+  pa_module: "shared_sharepointonline"
   runtime: DESKTOP
   confidence_base: 0.65
   notes: "IBP (internal Blue Prism) environment settings VBO. Same pattern as Utility - Environment."
@@ -296,7 +296,7 @@
 - vbo_name: "RPA Sharepoint ACS Authentication"
   method_patterns:
     - "Authenticate"
-  pa_module: ""
+  pa_module: "shared_sharepointonline"
   runtime: CLOUD
   confidence_base: 0.45
   review_severity: error
@@ -308,7 +308,7 @@
 - vbo_name: "RPA Sharepoint Conifgfile Download"
   method_patterns:
     - "Download Config"
-  pa_module: ""
+  pa_module: "shared_sharepointonline"
   runtime: CLOUD
   confidence_base: 0.65
   notes: "SharePoint config file download VBO. Maps to Cloud Flow SharePoint GetFileContent."
@@ -331,7 +331,7 @@
     - "Unlock Queue Item"
     - "Defer Queue Item"
     - "Set Item Tags"
-  pa_module: ""
+  pa_module: "WorkQueues"
   runtime: CLOUD
   confidence_base: 0.70
   notes: >
@@ -347,7 +347,7 @@
     - "Get Credential"
     - "Get Credential Username"
     - "Get Credential Password"
-  pa_module: ""
+  pa_module: "shared_keyvault"
   runtime: CLOUD
   confidence_base: 0.65
   notes: >
@@ -357,7 +357,7 @@
 - vbo_name: "Blueprism.Automate.clsDataGatewaysActions"
   method_patterns:
     - "Execute Query"
-  pa_module: ""
+  pa_module: "Database"
   runtime: DESKTOP
   confidence_base: 0.60
   notes: "Blue Prism Data Gateways (database connector). Maps to PAD Database module."
@@ -368,7 +368,7 @@
     - "Add Row"
     - "Get Field Value"
     - "Get Row Count"
-  pa_module: ""
+  pa_module: "Variables"
   runtime: DESKTOP
   confidence_base: 0.70
   notes: >
@@ -379,7 +379,7 @@
   method_patterns:
     - "Acquire Lock"
     - "Release Lock"
-  pa_module: ""
+  pa_module: "shared_sharepointonline"
   runtime: CLOUD
   confidence_base: 0.45
   review_severity: warn

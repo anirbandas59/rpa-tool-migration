@@ -7,9 +7,11 @@ Inspects all artefact types present in samples/pad/:
   - ControlRepository JSON   → UI element count and automation protocol
   - desktopflowbinary XML    → Binary type registry
   - solution.xml             → Solution component summary
+  - customizations.xml        → Desktop flow Robin scripts (inputs, outputs, subflows, actions)
 
-No .robin source files are present in this package (compiled binaries
-only). Module names are inferred from ManifestFile references.
+Robin scripts are embedded in customizations.xml <Definition> elements.
+PAD module usage is derived from both ManifestFile references and Robin
+action calls. Cloud Flow actions come from Workflows/*.json definitions.
 
 Outputs:
   - Rich terminal report
@@ -22,6 +24,7 @@ Run with:
 from __future__ import annotations
 
 import json
+import re
 import sys
 from collections import Counter
 from pathlib import Path
@@ -214,6 +217,220 @@ def parse_solution_xml(path: Path) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Robin script parsers
+# ---------------------------------------------------------------------------
+
+_ACTION_RE = re.compile(r"^(?:DISABLE\s+)?([A-Z][A-Za-z]+\.[A-Z][A-Za-z]+(?:\.[A-Z][A-Za-z]+)?)\b")
+_FUNCTION_RE = re.compile(r"^FUNCTION\s+(?:'([^']+)'|(\w+))\s+(?:GLOBAL|LOCAL)", re.MULTILINE)
+_INPUT_RE = re.compile(
+    r"^@INPUT\s+(\w+)\s*:.*?'Type'\s*:\s*'([^']+)'.*?'IsOptional'\s*:\s*(True|False)",
+    re.MULTILINE | re.DOTALL,
+)
+_OUTPUT_RE = re.compile(r"^@OUTPUT\s+(\w+)\s*:.*?'Type'\s*:\s*'([^']+)'", re.MULTILINE | re.DOTALL)
+_SENSITIVE_RE = re.compile(r"^@SENSITIVE:\s*\[([^\]]*)\]", re.MULTILINE)
+_RUN_FLOW_RE = re.compile(r"External\.RunFlow\s+FlowId:\s*'([0-9a-f\-]+)'")
+_CONNECTOR_RE = re.compile(
+    r"External\.InvokeCloudConnector\s+.*?ConnectorId:\s*'([^']+)'\s+OperationId:\s*'([^']+)'"
+)
+
+_SKIP_PREFIXES = (
+    "#",
+    "/#",
+    "@@",
+    "@INPUT",
+    "@OUTPUT",
+    "@SENSITIVE",
+    "IF",
+    "ELSE",
+    "END",
+    "LOOP",
+    "BLOCK",
+    "ON",
+    "SET",
+    "CALL",
+    "WAIT",
+    "GOTO",
+    "LABEL",
+    "THROW",
+    "ERROR",
+    "EXIT",
+    "REPEAT",
+    "FUNCTION",
+    "IMPORT",
+    "DISABLE IF",
+)
+
+
+def _parse_robin_metadata(script: str) -> tuple[list[dict], list[dict], list[str]]:
+    """Extract @INPUT, @OUTPUT and @SENSITIVE declarations from a Robin script.
+
+    Args:
+        script: Raw Robin script text.
+
+    Returns:
+        Tuple of (inputs, outputs, sensitive_vars).
+    """
+    inputs: list[dict] = []
+    outputs: list[dict] = []
+    sensitive_vars: list[str] = []
+
+    for m in _INPUT_RE.finditer(script):
+        inputs.append(
+            {
+                "name": m.group(1),
+                "type": m.group(2),
+                "is_optional": m.group(3) == "True",
+            }
+        )
+    for m in _OUTPUT_RE.finditer(script):
+        outputs.append({"name": m.group(1), "type": m.group(2)})
+    for m in _SENSITIVE_RE.finditer(script):
+        raw = m.group(1).strip()
+        if raw:
+            sensitive_vars = [v.strip() for v in raw.split(",") if v.strip()]
+
+    return inputs, outputs, sensitive_vars
+
+
+def _parse_robin_subflows(script: str) -> list[str]:
+    """Extract FUNCTION declaration names from a Robin script.
+
+    Args:
+        script: Raw Robin script text.
+
+    Returns:
+        List of subflow (function) names.
+    """
+    names: list[str] = []
+    for m in _FUNCTION_RE.finditer(script):
+        name = m.group(1) or m.group(2)
+        if name:
+            names.append(name)
+    return names
+
+
+def _parse_robin_actions(script: str) -> list[dict]:
+    """Extract PAD module action calls from a Robin script.
+
+    A line is treated as a PAD action call if, after stripping leading
+    whitespace and an optional DISABLE prefix, it starts with two or three
+    dot-separated UpperCamelCase identifiers.
+
+    Args:
+        script: Raw Robin script text.
+
+    Returns:
+        List of dicts with keys 'module', 'full_action', 'line_no'.
+    """
+    actions: list[dict] = []
+    for line_no, raw_line in enumerate(script.splitlines(), start=1):
+        line = raw_line.lstrip()
+        # Quick pre-filter: skip lines that start with known non-action keywords
+        skip = False
+        for prefix in _SKIP_PREFIXES:
+            if line.startswith(prefix):
+                skip = True
+                break
+        if skip:
+            continue
+        m = _ACTION_RE.match(line)
+        if m:
+            full_action = m.group(1)
+            module = full_action.split(".")[0]
+            actions.append({"module": module, "full_action": full_action, "line_no": line_no})
+    return actions
+
+
+def _parse_robin_external_calls(
+    script: str,
+) -> tuple[list[str], list[dict]]:
+    """Extract External.RunFlow and External.InvokeCloudConnector calls.
+
+    Args:
+        script: Raw Robin script text.
+
+    Returns:
+        Tuple of (child_flow_ids, connector_calls).
+        child_flow_ids: list of target FlowId GUIDs.
+        connector_calls: list of {connector_id, operation_id} dicts.
+    """
+    child_flow_ids: list[str] = []
+    connector_calls: list[dict] = []
+    for m in _RUN_FLOW_RE.finditer(script):
+        child_flow_ids.append(m.group(1))
+    for m in _CONNECTOR_RE.finditer(script):
+        connector_calls.append(
+            {
+                "connector_id": m.group(1),
+                "operation_id": m.group(2),
+            }
+        )
+    return child_flow_ids, connector_calls
+
+
+def parse_robin_script(script: str, flow_name: str, flow_id: str) -> dict:
+    """Parse a Robin desktop flow script and extract structured metadata.
+
+    Args:
+        script: Raw Robin script text.
+        flow_name: Display name of the flow.
+        flow_id: Workflow GUID (without braces).
+
+    Returns:
+        Dict with keys: flow_name, flow_id, inputs, outputs, sensitive_vars,
+        subflows, actions, child_flow_calls, connector_calls.
+    """
+    inputs, outputs, sensitive_vars = _parse_robin_metadata(script)
+    subflows = _parse_robin_subflows(script)
+    actions = _parse_robin_actions(script)
+    child_flow_calls, connector_calls = _parse_robin_external_calls(script)
+    return {
+        "flow_name": flow_name,
+        "flow_id": flow_id,
+        "inputs": inputs,
+        "outputs": outputs,
+        "sensitive_vars": sensitive_vars,
+        "subflows": subflows,
+        "actions": actions,
+        "child_flow_calls": child_flow_calls,
+        "connector_calls": connector_calls,
+    }
+
+
+def parse_customizations_xml(path: Path) -> list[dict]:
+    """Extract desktop flow Robin scripts from customizations.xml.
+
+    Each <Workflow> element whose <Definition> is non-empty contains a
+    JSON-encoded Robin script string.  Workflows with an empty <Definition>
+    (cloud flows whose logic lives in the Workflows/*.json file) are skipped.
+
+    Args:
+        path: Path to customizations.xml.
+
+    Returns:
+        List of parsed desktop flow dicts (from parse_robin_script).
+    """
+    tree = etree.parse(str(path))
+    root = tree.getroot()
+    results: list[dict] = []
+    for wf in root.iter("Workflow"):
+        flow_name = wf.get("Name", "")
+        flow_id = wf.get("WorkflowId", "").strip("{}")
+        defn_el = wf.find("Definition")
+        if defn_el is None or not defn_el.text:
+            continue
+        raw = defn_el.text.strip()
+        try:
+            script: str = json.loads(raw) if raw.startswith('"') else raw
+        except json.JSONDecodeError:
+            script = raw
+        if not script:
+            continue
+        results.append(parse_robin_script(script, flow_name, flow_id))
+    return results
+
+
+# ---------------------------------------------------------------------------
 # Aggregation
 # ---------------------------------------------------------------------------
 
@@ -232,6 +449,7 @@ def analyse_all(samples_dir: Path) -> dict:
     cloud_flows: list[dict] = []
     control_repos: list[dict] = []
     df_binaries: list[dict] = []
+    desktop_flows: list[dict] = []
     solution: dict | None = None
 
     for path in sorted(samples_dir.rglob("*")):
@@ -250,7 +468,9 @@ def analyse_all(samples_dir: Path) -> dict:
             elif name.startswith("Shell_PP") or (
                 path.parent.name == "Workflows" and suffix == ".json"
             ):
-                cloud_flows.append(parse_cloud_flow(path))
+                parsed = parse_cloud_flow(path)
+                if parsed["actions"] or parsed["triggers"]:
+                    cloud_flows.append(parsed)
             # DependenciesFile and ImageRepository are skipped (no useful action data)
 
         elif suffix == ".xml":
@@ -258,7 +478,8 @@ def analyse_all(samples_dir: Path) -> dict:
                 df_binaries.append(parse_desktop_flow_binary(path))
             elif name == "solution.xml":
                 solution = parse_solution_xml(path)
-            # [Content_Types].xml and customizations.xml skipped
+            elif name == "customizations.xml":
+                desktop_flows.extend(parse_customizations_xml(path))
 
     return {
         "manifests": manifests,
@@ -266,6 +487,7 @@ def analyse_all(samples_dir: Path) -> dict:
         "cloud_flows": cloud_flows,
         "control_repos": control_repos,
         "df_binaries": df_binaries,
+        "desktop_flows": desktop_flows,
         "solution": solution,
     }
 
@@ -303,6 +525,22 @@ def aggregate_cloud_flow_actions(cloud_flows: list[dict]) -> dict[str, int]:
     return dict(counter)
 
 
+def aggregate_robin_actions(desktop_flows: list[dict]) -> dict[str, int]:
+    """Count Robin action calls by PAD module across all desktop flows.
+
+    Args:
+        desktop_flows: List of parsed desktop flow dicts.
+
+    Returns:
+        Dict mapping module name to total action call count.
+    """
+    counter: Counter[str] = Counter()
+    for df in desktop_flows:
+        for action in df["actions"]:
+            counter[action["module"]] += 1
+    return dict(counter)
+
+
 # ---------------------------------------------------------------------------
 # Reporting
 # ---------------------------------------------------------------------------
@@ -329,6 +567,40 @@ def print_rich_report(data: dict) -> None:
         for mod, cnt in sorted(pad_modules.items()):
             t.add_row(mod, str(cnt))
         console.print(t)
+
+    # Desktop flows from customizations.xml
+    if data.get("desktop_flows"):
+        console.print()
+        t_df = Table(
+            title=f"Desktop Flows ({len(data['desktop_flows'])} flows)",
+            header_style="bold magenta",
+        )
+        t_df.add_column("Flow Name", style="green")
+        t_df.add_column("Subflows", justify="right")
+        t_df.add_column("Actions", justify="right")
+        t_df.add_column("Inputs", justify="right")
+        t_df.add_column("Outputs", justify="right")
+        for df in data["desktop_flows"]:
+            t_df.add_row(
+                df["flow_name"],
+                str(len(df["subflows"])),
+                str(len(df["actions"])),
+                str(len(df["inputs"])),
+                str(len(df["outputs"])),
+            )
+        console.print(t_df)
+
+        console.print()
+        robin_modules = aggregate_robin_actions(data["desktop_flows"])
+        t_rm = Table(
+            title=f"Robin Action Module Usage ({len(robin_modules)} modules)",
+            header_style="bold magenta",
+        )
+        t_rm.add_column("Module", style="cyan")
+        t_rm.add_column("Action call count", justify="right")
+        for mod, cnt in sorted(robin_modules.items()):
+            t_rm.add_row(mod, str(cnt))
+        console.print(t_rm)
 
     # Cloud Flow action types
     if data["cloud_flows"]:
@@ -419,10 +691,73 @@ def build_md_report(data: dict) -> str:
     lines.append("# Power Automate Desktop — Sample Action Inventory\n")
     lines.append("_Generated by `scripts/analyse_pad_samples.py`_\n")
     lines.append(
-        "> Note: This package contains compiled desktop flow binaries (no .robin source).\n"
-        "> PAD module names are derived from `ManifestFile` references.\n"
+        "> Note: Robin scripts are embedded in `customizations.xml` `<Definition>` elements.\n"
+        "> PAD module usage is derived from both ManifestFile references and Robin action calls.\n"
         "> Cloud Flow actions are extracted from `Workflows/*.json` definitions.\n"
     )
+
+    # Desktop flows from customizations.xml
+    if data.get("desktop_flows"):
+        lines.append("## Desktop Flows\n")
+        lines.append(
+            f"Total desktop flows parsed from `customizations.xml`: **{len(data['desktop_flows'])}**\n"
+        )
+        for df in data["desktop_flows"]:
+            lines.append(f"### `{df['flow_name']}`\n")
+            lines.append(f"- Flow ID: `{df['flow_id']}`")
+            lines.append(f"- Subflows: {len(df['subflows'])}")
+            lines.append(f"- Action calls: {len(df['actions'])}")
+            if df["sensitive_vars"]:
+                lines.append(
+                    f"- Sensitive variables: {', '.join(f'`{v}`' for v in df['sensitive_vars'])}"
+                )
+            if df["inputs"]:
+                lines.append("")
+                lines.append("**Inputs:**")
+                lines.append("")
+                lines.append("| Name | Type | Optional |")
+                lines.append("| ---- | ---- | -------- |")
+                for inp in df["inputs"]:
+                    lines.append(f"| `{inp['name']}` | `{inp['type']}` | {inp['is_optional']} |")
+            if df["outputs"]:
+                lines.append("")
+                lines.append("**Outputs:**")
+                lines.append("")
+                lines.append("| Name | Type |")
+                lines.append("| ---- | ---- |")
+                for out in df["outputs"]:
+                    lines.append(f"| `{out['name']}` | `{out['type']}` |")
+            if df["subflows"]:
+                lines.append("")
+                lines.append("**Subflows:**")
+                lines.append("")
+                for sf in df["subflows"]:
+                    lines.append(f"- `{sf}`")
+            if df["child_flow_calls"]:
+                lines.append("")
+                lines.append("**Child flow calls (External.RunFlow):**")
+                lines.append("")
+                for fid in set(df["child_flow_calls"]):
+                    lines.append(f"- `{fid}`")
+            if df["connector_calls"]:
+                lines.append("")
+                lines.append("**Connector calls (External.InvokeCloudConnector):**")
+                lines.append("")
+                lines.append("| ConnectorId | OperationId |")
+                lines.append("| ----------- | ----------- |")
+                for cc in df["connector_calls"]:
+                    lines.append(f"| `{cc['connector_id']}` | `{cc['operation_id']}` |")
+            lines.append("")
+
+        # Robin action module usage
+        robin_modules = aggregate_robin_actions(data["desktop_flows"])
+        lines.append("## Robin Action Module Usage\n")
+        lines.append(f"Total unique modules called in Robin scripts: **{len(robin_modules)}**\n")
+        lines.append("| Module | Action call count |")
+        lines.append("| ------ | ----------------- |")
+        for mod, cnt in sorted(robin_modules.items()):
+            lines.append(f"| `{mod}` | {cnt} |")
+        lines.append("")
 
     # PAD modules
     pad_modules = aggregate_pad_modules(data["manifests"])
@@ -531,6 +866,7 @@ def main() -> None:
         + len(data["cloud_flows"])
         + len(data["control_repos"])
         + len(data["df_binaries"])
+        + len(data.get("desktop_flows", []))
         + (1 if data["solution"] else 0)
     )
 
