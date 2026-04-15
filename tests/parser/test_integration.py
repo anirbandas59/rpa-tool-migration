@@ -329,6 +329,63 @@ class TestNormalisedASTOutput:
         if unknown_types:
             pytest.warns(UserWarning, match="Unknown exception types")
 
+    def test_data_stages_have_data_items(self, real_process) -> None:
+        """All DATA stages have exactly 1 data_item with correct properties.
+
+        - Each DATA stage has exactly 1 data_item (synthesised from <datatype> element)
+        - data_item.name equals the stage name (the variable name)
+        - data_item.data_type is not empty (extracted from <datatype> text)
+        """
+        data_stages = [
+            s for p in real_process.pages for s in p.stages if s.stage_type == StageType.DATA
+        ]
+
+        assert len(data_stages) == 2254, f"Expected 2254 DATA stages, found {len(data_stages)}"
+
+        for stage in data_stages:
+            assert len(stage.data_items) == 1, (
+                f"DATA stage {stage.stage_id} ({stage.name}) should have exactly 1 data_item, "
+                f"got {len(stage.data_items)}"
+            )
+            item = stage.data_items[0]
+            assert item.name == stage.name, (
+                f"DATA stage {stage.stage_id}: data_item.name ({item.name}) "
+                f"should equal stage.name ({stage.name})"
+            )
+            assert item.data_type, (
+                f"DATA stage {stage.stage_id} ({stage.name}): data_item.data_type is empty"
+            )
+
+    def test_collection_stages_have_collection_type(self, real_process) -> None:
+        """All COLLECTION stages have data_type == 'collection'.
+
+        - Each COLLECTION stage has exactly 1 data_item (synthesised from <datatype> element)
+        - data_item.data_type equals 'collection'
+        - data_item.name equals the stage name (the collection name)
+        """
+        collection_stages = [
+            s for p in real_process.pages for s in p.stages if s.stage_type == StageType.COLLECTION
+        ]
+
+        assert len(collection_stages) == 262, (
+            f"Expected 262 COLLECTION stages, found {len(collection_stages)}"
+        )
+
+        for stage in collection_stages:
+            assert len(stage.data_items) == 1, (
+                f"COLLECTION stage {stage.stage_id} ({stage.name}) should have exactly 1 data_item, "
+                f"got {len(stage.data_items)}"
+            )
+            item = stage.data_items[0]
+            assert item.data_type == "collection", (
+                f"COLLECTION stage {stage.stage_id}: data_item.data_type should be 'collection', "
+                f"got '{item.data_type}'"
+            )
+            assert item.name == stage.name, (
+                f"COLLECTION stage {stage.stage_id}: data_item.name ({item.name}) "
+                f"should equal stage.name ({stage.name})"
+            )
+
     def test_vbo_catalogue_coverage(self, real_process) -> None:
         """All VBOs found in AST are in vbo_catalogue.yaml."""
         found_vbos = set()

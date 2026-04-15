@@ -121,6 +121,30 @@ def _parse_stage(stage_elem: Any) -> RawStage:
             for di_elem in stage_elem.findall("dataitem"):
                 data_items.append(_parse_data_item(di_elem))
 
+        # Synthesise BPDataItem for DATA and COLLECTION stages
+        # These stage types store their type in a <datatype> child element
+        # rather than <dataitem> children.
+        if stage_type in ("Data", "Collection"):
+            dt_elem = stage_elem.find(_ns("datatype"))
+            if dt_elem is None:
+                dt_elem = stage_elem.find("datatype")
+            if dt_elem is not None and dt_elem.text:
+                raw_type = dt_elem.text.strip().lower()
+            else:
+                # Collection stages may have no datatype element —
+                # default to "collection" which the type mapper handles
+                raw_type = "collection" if stage_type == "Collection" else "text"
+
+            data_items.append(
+                RawDataItem(
+                    name=name,  # variable name = stage name
+                    data_type=raw_type,
+                    initial_value=None,
+                    is_input=False,
+                    is_output=False,
+                )
+            )
+
         # Parse exception handler id from <onexception> child (namespace-aware)
         exception_handler_id: str | None = None
         onexc_elem = stage_elem.find(_ns("onexception"))
