@@ -232,8 +232,9 @@ def _assign_wait_loop_pairs(
 ) -> None:
     """Match WaitStart/WaitEnd and LoopStart/LoopEnd pairs, setting pair_id in-place.
 
-    Uses a stack so nested pairs are matched correctly. pair_id is always
-    the WaitStart (or LoopStart) stage_id, assigned to both partners.
+    Uses a stack so nested pairs are matched correctly. Also handles the case
+    where WaitEnd or LoopEnd appears before its corresponding Start (out-of-order
+    brackets). pair_id is always the Start stage_id, assigned to both partners.
 
     Args:
         stages: Normalised stage list for one page (modified in-place).
@@ -247,26 +248,43 @@ def _assign_wait_loop_pairs(
         ("WaitStart", "WaitEnd", "Wait"),
         ("LoopStart", "LoopEnd", "Loop"),
     ):
-        stack: list[BPStage] = []
+        start_stack: list[BPStage] = []
+        end_queue: list[BPStage] = []  # unpaired End stages
+
         for stage in stages:
             role = bracket_roles.get(stage.stage_id)
             if role == bracket_start:
-                stack.append(stage)
+                # If we have unpaired End stages, pair with the oldest one
+                if end_queue:
+                    end_stage = end_queue.pop(0)
+                    pair_id = stage.stage_id
+                    end_stage.pair_id = pair_id
+                    stage.pair_id = pair_id
+                else:
+                    start_stack.append(stage)
             elif role == bracket_end:
-                if not stack:
-                    raise ASTBuildError(
-                        f"Unmatched {bracket_end} stage '{stage.stage_id}' "
-                        f"(no preceding {bracket_start}) on page '{page_name}'"
-                    )
-                partner = stack.pop()
-                pair_id = partner.stage_id
-                partner.pair_id = pair_id
-                stage.pair_id = pair_id
-        if stack:
-            unmatched = ", ".join(s.stage_id for s in stack)
+                # If we have unpaired Start stages, pair with the most recent one
+                if start_stack:
+                    partner = start_stack.pop()
+                    pair_id = partner.stage_id
+                    partner.pair_id = pair_id
+                    stage.pair_id = pair_id
+                else:
+                    # No Start available yet, queue this End for later pairing
+                    end_queue.append(stage)
+
+        # Check for unmatched brackets
+        if start_stack:
+            unmatched = ", ".join(s.stage_id for s in start_stack)
             raise ASTBuildError(
                 f"Unmatched {bracket_start} stage(s) [{unmatched}] "
                 f"with no {bracket_end} on page '{page_name}'"
+            )
+        if end_queue:
+            unmatched = ", ".join(s.stage_id for s in end_queue)
+            raise ASTBuildError(
+                f"Unmatched {bracket_end} stage(s) [{unmatched}] "
+                f"with no {bracket_start} on page '{page_name}'"
             )
 
 

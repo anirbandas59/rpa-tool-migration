@@ -216,11 +216,47 @@ def test_wait_pair_assigned() -> None:
     assert stages[1].pair_id == "ws1"
 
 
+def test_wait_pair_out_of_order() -> None:
+    """Test that WaitEnd appearing before WaitStart is handled correctly."""
+    raw = single_page_process(
+        make_raw_stage(stage_id="we1", stage_type="WaitEnd", name="Wait"),
+        make_raw_stage(stage_id="ws1", stage_type="WaitStart", name="Wait"),
+    )
+    stages = build_ast(raw).pages[0].stages
+    assert stages[0].stage_type == StageType.WAIT
+    assert stages[1].stage_type == StageType.WAIT
+    assert stages[0].pair_id == "ws1"
+    assert stages[1].pair_id == "ws1"
+
+
+def test_wait_pair_multiple_out_of_order() -> None:
+    """Test multiple out-of-order Wait pairs in sequence."""
+    raw = single_page_process(
+        make_raw_stage(stage_id="we1", stage_type="WaitEnd", name="Wait1"),
+        make_raw_stage(stage_id="ws1", stage_type="WaitStart", name="Wait1"),
+        make_raw_stage(stage_id="we2", stage_type="WaitEnd", name="Wait2"),
+        make_raw_stage(stage_id="ws2", stage_type="WaitStart", name="Wait2"),
+    )
+    stages = build_ast(raw).pages[0].stages
+    assert stages[0].pair_id == "ws1"
+    assert stages[1].pair_id == "ws1"
+    assert stages[2].pair_id == "ws2"
+    assert stages[3].pair_id == "ws2"
+
+
 def test_unmatched_wait_raises() -> None:
     raw = single_page_process(
         make_raw_stage(stage_id="ws1", stage_type="WaitStart", name="Wait"),
     )
     with pytest.raises(ASTBuildError, match="ws1"):
+        build_ast(raw)
+
+
+def test_unmatched_wait_end_raises() -> None:
+    raw = single_page_process(
+        make_raw_stage(stage_id="we1", stage_type="WaitEnd", name="Wait"),
+    )
+    with pytest.raises(ASTBuildError, match="we1"):
         build_ast(raw)
 
 
@@ -239,11 +275,32 @@ def test_loop_pair_assigned() -> None:
     assert stages[1].pair_id == "ls1"
 
 
+def test_loop_pair_out_of_order() -> None:
+    """Test that LoopEnd appearing before LoopStart is handled correctly."""
+    raw = single_page_process(
+        make_raw_stage(stage_id="le1", stage_type="LoopEnd", name="Loop"),
+        make_raw_stage(stage_id="ls1", stage_type="LoopStart", name="Loop"),
+    )
+    stages = build_ast(raw).pages[0].stages
+    assert stages[0].stage_type == StageType.LOOP
+    assert stages[1].stage_type == StageType.LOOP
+    assert stages[0].pair_id == "ls1"
+    assert stages[1].pair_id == "ls1"
+
+
 def test_unmatched_loop_raises() -> None:
     raw = single_page_process(
         make_raw_stage(stage_id="ls1", stage_type="LoopStart", name="Loop"),
     )
     with pytest.raises(ASTBuildError, match="ls1"):
+        build_ast(raw)
+
+
+def test_unmatched_loop_end_raises() -> None:
+    raw = single_page_process(
+        make_raw_stage(stage_id="le1", stage_type="LoopEnd", name="Loop"),
+    )
+    with pytest.raises(ASTBuildError, match="le1"):
         build_ast(raw)
 
 
