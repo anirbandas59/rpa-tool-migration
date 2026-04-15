@@ -288,6 +288,9 @@ def parse_process(path: Path) -> RawProcess:
         paged_stages: dict[str, list[RawStage]] = {}
         extracted_stage_ids: set[str] = set()
 
+        # Namespace for process elements
+        ns = "http://www.blueprism.co.uk/product/process"
+
         for subsheet_elem in process_elem.iter():
             if _strip_ns(subsheet_elem.tag) != "subsheet":
                 continue
@@ -296,9 +299,20 @@ def parse_process(path: Path) -> RawProcess:
             if not page_id:
                 raise ParseError("subsheet missing required 'subsheetid' attribute")
 
-            page_name = subsheet_elem.get("name", "").strip()
+            # Extract name from child element (real format) or attribute (test format)
+            name_elem = subsheet_elem.find(f"{{{ns}}}name")
+            if name_elem is None:
+                name_elem = subsheet_elem.find("name")
+            page_name = (name_elem.text or "").strip() if name_elem is not None else ""
+
+            # Fall back to name attribute if child element not found
+            if not page_name:
+                page_name = subsheet_elem.get("name", "").strip()
+
+            # Fall back to page_id if still empty
             if not page_name:
                 page_name = page_id
+
             subsheets_by_id[page_id] = {"name": page_name, "elem": subsheet_elem}
 
             # Extract stages nested within this subsheet (test format)
@@ -313,7 +327,6 @@ def parse_process(path: Path) -> RawProcess:
 
         # Also collect flat stages with <subsheetid> children (real export format)
         main_stages: list[RawStage] = []
-        namespace = "http://www.blueprism.co.uk/product/process"
 
         for stage_elem in process_elem.iter():
             if _strip_ns(stage_elem.tag) != "stage":
@@ -329,7 +342,7 @@ def parse_process(path: Path) -> RawProcess:
 
             # Determine which page this stage belongs to by checking subsheetid child
             subsheetid = (
-                stage_elem.findtext(f"{{{namespace}}}subsheetid")
+                stage_elem.findtext(f"{{{ns}}}subsheetid")
                 or stage_elem.findtext("subsheetid")
                 or ""
             ).strip()
