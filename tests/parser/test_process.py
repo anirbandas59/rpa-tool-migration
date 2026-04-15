@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from flowsmith.exceptions import ParseError
-from flowsmith.parser import parse_process  # noqa: F401
+from flowsmith.parser import VBO_ACTION_KEY, VBO_OBJECT_KEY, parse_process  # noqa: F401
 
 # ── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -564,3 +564,63 @@ def test_real_sample_parses() -> None:
     assert len(result["pages"]) > 0
     total_stages = sum(len(p["stages"]) for p in result["pages"])
     assert total_stages > 0, "Expected at least one stage"
+
+
+# ── VBO resource extraction ────────────────────────────────────────
+
+
+def test_action_vbo_object_in_params_map(minimal_bprelease: Path) -> None:
+    """Action stage with <resource> element stores VBO object and action in params_map."""
+    result = parse_process(minimal_bprelease)
+    action_stage = result["pages"][0]["stages"][1]
+
+    assert action_stage["stage_type"] == "Action"
+    assert action_stage["name"] == "Call Action"
+    assert action_stage["params_map"]["_vbo_object"] == "Utility - Strings"
+    assert action_stage["params_map"]["_vbo_action"] == "Split Text"
+
+
+def test_non_action_stage_has_no_vbo_keys(multi_page_bprelease: Path) -> None:
+    """Non-Action stages (Start, End, Decision, etc.) do not have _vbo_* keys."""
+    result = parse_process(multi_page_bprelease)
+
+    for page in result["pages"]:
+        for stage in page["stages"]:
+            if stage["stage_type"] != "Action":
+                assert "_vbo_object" not in stage["params_map"]
+                assert "_vbo_action" not in stage["params_map"]
+
+
+def test_action_without_resource_has_no_vbo_keys(tmp_path: Path) -> None:
+    """Action stage without <resource> child does not have _vbo_* keys."""
+    xml_content = """\
+<?xml version="1.0" encoding="utf-8"?>
+<process id="proc_abc" name="NoResourceTest" version="1.0">
+  <subsheet subsheetid="pg_001" name="NoResourceTest" type="0">
+    <stage stageid="s_001" type="Start" name="Start"/>
+    <stage stageid="s_002" type="Action" name="Action Without Resource">
+      <inputs>
+        <input name="Param1" expr="Value1" type="text"/>
+      </inputs>
+    </stage>
+    <stage stageid="s_003" type="End" name="End"/>
+  </subsheet>
+</process>
+"""
+    filepath = tmp_path / "test_no_resource.bprelease"
+    filepath.write_text(xml_content, encoding="utf-8")
+
+    result = parse_process(filepath)
+    action_stage = result["pages"][0]["stages"][1]
+
+    assert action_stage["stage_type"] == "Action"
+    assert "_vbo_object" not in action_stage["params_map"]
+    assert "_vbo_action" not in action_stage["params_map"]
+    # But input params should still be present
+    assert action_stage["params_map"]["Param1"] == "Value1"
+
+
+def test_vbo_constants_exported() -> None:
+    """VBO constants are exported from flowsmith.parser."""
+    assert VBO_OBJECT_KEY == "_vbo_object"
+    assert VBO_ACTION_KEY == "_vbo_action"

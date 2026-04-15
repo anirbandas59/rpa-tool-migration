@@ -172,6 +172,18 @@ def _parse_stage(stage_elem: Any) -> RawStage:
             if calc_stage and calc_expr:
                 params_map[calc_stage] = calc_expr
 
+        # For Action stages: extract VBO object and action from <resource> child (namespace-aware)
+        resource_elem = stage_elem.find(_ns("resource"))
+        if resource_elem is None:
+            resource_elem = stage_elem.find("resource")
+        if resource_elem is not None:
+            vbo_object = resource_elem.get("object", "").strip()
+            vbo_action = resource_elem.get("action", "").strip()
+            if vbo_object:
+                params_map["_vbo_object"] = vbo_object
+            if vbo_action:
+                params_map["_vbo_action"] = vbo_action
+
         return RawStage(
             stage_id=stage_id,
             stage_type=stage_type,
