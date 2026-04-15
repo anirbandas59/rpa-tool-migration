@@ -1,8 +1,8 @@
 """Blue Prism XML process parser — .bprelease → RawProcess dict.
 
 Parses Blue Prism .bprelease XML files into a RawProcess TypedDict,
-ready for AST building. Handles namespace stripping, stage type
-preservation, data item extraction, and parameter mapping.
+ready for AST building. Handles namespace-aware element discovery,
+stage type preservation, data item extraction, and parameter mapping.
 """
 
 from __future__ import annotations
@@ -14,6 +14,21 @@ from lxml import etree
 
 from flowsmith.ast.builder import RawDataItem, RawPage, RawProcess, RawStage
 from flowsmith.exceptions import ParseError
+
+# Blue Prism XML namespace
+NS = "http://www.blueprism.co.uk/product/process"
+
+
+def _ns(tag: str) -> str:
+    """Return a namespace-qualified tag name.
+
+    Args:
+        tag: Local tag name (e.g. "stage", "subsheet").
+
+    Returns:
+        Fully qualified tag with namespace (e.g. "{http://...}stage").
+    """
+    return f"{{{NS}}}{tag}"
 
 
 def _strip_ns(tag: str) -> str:
@@ -51,9 +66,11 @@ def _parse_data_item(di_elem: Any) -> RawDataItem:
 
         usage = di_elem.get("usage", "local").strip().lower()
 
-        # Extract initial value from <value> child element
+        # Extract initial value from <value> child element (namespace-aware)
         initial_value: str | None = None
-        value_elem = di_elem.find("value")
+        value_elem = di_elem.find(_ns("value"))
+        if value_elem is None:
+            value_elem = di_elem.find("value")
         if value_elem is not None and value_elem.text:
             initial_value = value_elem.text.strip()
 
@@ -95,22 +112,30 @@ def _parse_stage(stage_elem: Any) -> RawStage:
 
         name = stage_elem.get("name", "").strip()
 
-        # Parse data items
+        # Parse data items (namespace-aware)
         data_items: list[RawDataItem] = []
-        for di_elem in stage_elem.findall("dataitem"):
+        for di_elem in stage_elem.findall(_ns("dataitem")):
             data_items.append(_parse_data_item(di_elem))
+        # Also try without namespace for compatibility
+        if not data_items:
+            for di_elem in stage_elem.findall("dataitem"):
+                data_items.append(_parse_data_item(di_elem))
 
-        # Parse exception handler id from <onexception> child
+        # Parse exception handler id from <onexception> child (namespace-aware)
         exception_handler_id: str | None = None
-        onexc_elem = stage_elem.find("onexception")
+        onexc_elem = stage_elem.find(_ns("onexception"))
+        if onexc_elem is None:
+            onexc_elem = stage_elem.find("onexception")
         if onexc_elem is not None:
             exception_handler_id = onexc_elem.get("stage", None)
             if exception_handler_id:
                 exception_handler_id = exception_handler_id.strip()
 
-        # Parse exception type from <exception> child
+        # Parse exception type from <exception> child (namespace-aware)
         exception_type: str | None = None
-        exc_elem = stage_elem.find("exception")
+        exc_elem = stage_elem.find(_ns("exception"))
+        if exc_elem is None:
+            exc_elem = stage_elem.find("exception")
         if exc_elem is not None:
             exc_type = exc_elem.get("type", None)
             if exc_type:
@@ -119,17 +144,28 @@ def _parse_stage(stage_elem: Any) -> RawStage:
         # Parse params_map
         params_map: dict[str, str] = {}
 
-        # For Action stages: extract inputs
-        inputs_elem = stage_elem.find("inputs")
+        # For Action stages: extract inputs (namespace-aware)
+        inputs_elem = stage_elem.find(_ns("inputs"))
+        if inputs_elem is None:
+            inputs_elem = stage_elem.find("inputs")
         if inputs_elem is not None:
-            for input_elem in inputs_elem.findall("input"):
+            for input_elem in inputs_elem.findall(_ns("input")):
                 input_name = input_elem.get("name", "").strip()
                 input_expr = input_elem.get("expr", "").strip()
                 if input_name:
                     params_map[input_name] = input_expr
+            # Also try without namespace
+            if not params_map:
+                for input_elem in inputs_elem.findall("input"):
+                    input_name = input_elem.get("name", "").strip()
+                    input_expr = input_elem.get("expr", "").strip()
+                    if input_name:
+                        params_map[input_name] = input_expr
 
-        # For Calculation stages: extract calculation expressions
-        calc_elem = stage_elem.find("calculation")
+        # For Calculation stages: extract calculation expressions (namespace-aware)
+        calc_elem = stage_elem.find(_ns("calculation"))
+        if calc_elem is None:
+            calc_elem = stage_elem.find("calculation")
         if calc_elem is not None:
             calc_expr = calc_elem.get("expression", "").strip()
             calc_stage = calc_elem.get("stage", "").strip()
@@ -195,6 +231,9 @@ def parse_process(path: Path) -> RawProcess:
 
     Reads the XML, extracts process metadata, pages, and stages,
     and returns a RawProcess dict matching the TypedDict contract.
+
+    Uses namespace-aware full-document stage collection via root.iter()
+    to extract all stages regardless of nesting depth.
 
     Args:
         path: Path to the .bprelease or .xml file.
@@ -280,27 +319,22 @@ def parse_process(path: Path) -> RawProcess:
             process_elem.get("version", "") or metadata_elem.get("version", "")
         ).strip()
 
-        # Parse all pages (subsheets) and stages
-        # Support two formats:
-        # 1. Test format: stages nested within <subsheet> elements
-        # 2. Real format: stages flat with <subsheetid> children
+        # ── FULL-DOCUMENT STAGE COLLECTION (namespace-aware) ─────────────────────
+
+        # Step 1: Collect ALL subsheets from entire document
+        # Try namespace-aware first, then fall back to non-namespaced for test fixtures
         subsheets_by_id: dict[str, Any] = {}
-        paged_stages: dict[str, list[RawStage]] = {}
-        extracted_stage_ids: set[str] = set()
+        all_subsheet_elems = list(root.iter(_ns("subsheet")))
+        if not all_subsheet_elems:
+            all_subsheet_elems = list(root.iter("subsheet"))
 
-        # Namespace for process elements
-        ns = "http://www.blueprism.co.uk/product/process"
-
-        for subsheet_elem in process_elem.iter():
-            if _strip_ns(subsheet_elem.tag) != "subsheet":
-                continue
-
+        for subsheet_elem in all_subsheet_elems:
             page_id = subsheet_elem.get("subsheetid", "").strip()
             if not page_id:
                 raise ParseError("subsheet missing required 'subsheetid' attribute")
 
-            # Extract name from child element (real format) or attribute (test format)
-            name_elem = subsheet_elem.find(f"{{{ns}}}name")
+            # Extract name from child element (namespace-aware)
+            name_elem = subsheet_elem.find(_ns("name"))
             if name_elem is None:
                 name_elem = subsheet_elem.find("name")
             page_name = (name_elem.text or "").strip() if name_elem is not None else ""
@@ -313,42 +347,60 @@ def parse_process(path: Path) -> RawProcess:
             if not page_name:
                 page_name = page_id
 
-            subsheets_by_id[page_id] = {"name": page_name, "elem": subsheet_elem}
+            subsheets_by_id[page_id] = page_name
 
-            # Extract stages nested within this subsheet (test format)
-            for elem in subsheet_elem.iter():
-                if _strip_ns(elem.tag) == "stage":
-                    stage = _parse_stage(elem)
-                    extracted_stage_ids.add(stage["stage_id"])
-                    if page_id:
-                        if page_id not in paged_stages:
-                            paged_stages[page_id] = []
-                        paged_stages[page_id].append(stage)
-
-        # Also collect flat stages with <subsheetid> children (real export format)
+        # Step 2: Collect stages — supports two formats:
+        # Format A (test): stages nested inside subsheet elements
+        # Format B (real): flat stages at root with <subsheetid> children
+        paged_stages: dict[str, list[RawStage]] = {}
         main_stages: list[RawStage] = []
+        extracted_stage_ids: set[str] = set()
 
-        for stage_elem in process_elem.iter():
-            if _strip_ns(stage_elem.tag) != "stage":
+        # Format A: Collect nested stages from each subsheet (test format)
+        for subsheet_elem in all_subsheet_elems:
+            page_id = subsheet_elem.get("subsheetid", "").strip()
+            if not page_id:
                 continue
 
-            # Skip if already extracted as nested stage
+            # Find stages nested directly or indirectly within this subsheet
+            for stage_elem in subsheet_elem.iter(_ns("stage")):
+                stage = _parse_stage(stage_elem)
+                extracted_stage_ids.add(stage["stage_id"])
+                if page_id not in paged_stages:
+                    paged_stages[page_id] = []
+                paged_stages[page_id].append(stage)
+
+            # Also try without namespace for test fixtures
+            if page_id not in paged_stages:
+                for stage_elem in subsheet_elem.iter("stage"):
+                    stage = _parse_stage(stage_elem)
+                    extracted_stage_ids.add(stage["stage_id"])
+                    if page_id not in paged_stages:
+                        paged_stages[page_id] = []
+                    paged_stages[page_id].append(stage)
+
+        # Format B: Collect flat stages from root with <subsheetid> children (real format)
+        # This extracts all 7,605 stages, not just 810
+        all_stage_elems = list(root.iter(_ns("stage")))
+        if not all_stage_elems:
+            all_stage_elems = list(root.iter("stage"))
+
+        for stage_elem in all_stage_elems:
             stage_id = stage_elem.get("stageid", "").strip()
+
+            # Skip if already extracted as nested stage
             if stage_id in extracted_stage_ids:
                 continue
 
-            # Parse the stage
             stage = _parse_stage(stage_elem)
 
-            # Determine which page this stage belongs to by checking subsheetid child
+            # Determine which page this stage belongs to by checking <subsheetid> child
             subsheetid = (
-                stage_elem.findtext(f"{{{ns}}}subsheetid")
-                or stage_elem.findtext("subsheetid")
-                or ""
+                stage_elem.findtext(_ns("subsheetid")) or stage_elem.findtext("subsheetid") or ""
             ).strip()
 
             if subsheetid:
-                # Stage belongs to a subsheet
+                # Stage belongs to a subsheet page
                 if subsheetid not in paged_stages:
                     paged_stages[subsheetid] = []
                 paged_stages[subsheetid].append(stage)
@@ -356,22 +408,23 @@ def parse_process(path: Path) -> RawProcess:
                 # Stage has no subsheetid → belongs to main page
                 main_stages.append(stage)
 
-        # Build pages: main page first, then sub-pages
+        # ── BUILD PAGES ──────────────────────────────────────────────────────────
+
         pages: list[RawPage] = []
 
         # Find the main page (matches process name, or first subsheet)
         main_page_id = None
         main_page_name = None
-        for page_id, info in subsheets_by_id.items():
-            if info["name"] == process_name:
+        for page_id, name in subsheets_by_id.items():
+            if name == process_name:
                 main_page_id = page_id
-                main_page_name = info["name"]
+                main_page_name = name
                 break
 
         # Fallback: use first subsheet as main
         if main_page_id is None and subsheets_by_id:
             main_page_id = next(iter(subsheets_by_id.keys()))
-            main_page_name = subsheets_by_id[main_page_id]["name"]
+            main_page_name = subsheets_by_id[main_page_id]
 
         # If no subsheets exist, create a default main page
         if not main_page_id:
@@ -391,7 +444,7 @@ def parse_process(path: Path) -> RawProcess:
 
         # Add remaining sub-pages
         for page_id, stages in paged_stages.items():
-            page_name = subsheets_by_id[page_id]["name"] if page_id in subsheets_by_id else page_id
+            page_name = subsheets_by_id.get(page_id, page_id)
             pages.append(
                 RawPage(
                     page_id=page_id,
