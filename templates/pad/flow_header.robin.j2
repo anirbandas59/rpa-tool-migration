@@ -1,0 +1,10 @@
+@@ConnectionString: ''
+@@Type: 'Local'
+@@DesktopType: 'local'
+@@DisplayName: 'Local computer'
+{% for input_var in inputs -%}
+@INPUT {{ input_var.name }} : { 'Type': '{{ input_var.data_type }}', 'IsOptional': {{ input_var.is_optional | lower }} }
+{% endfor -%}
+{% if sensitive_vars -%}
+@SENSITIVE: [{{ sensitive_vars | join(', ') }}]
+{% endif -%}

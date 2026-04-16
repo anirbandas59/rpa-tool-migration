@@ -1,0 +1,4 @@
+Excel.LaunchExcel.LaunchAndOpenUnderExistingProcess Path: {{ filepath }} Visible: True ReadOnly: False UseMachineLocale: False Instance=> {{ excel_var }}
+Excel.SetActiveWorksheet.ActivateWorksheetByName Instance: {{ excel_var }} Name: {{ sheet_name }}
+Excel.ReadFromExcel.ReadAllCells Instance: {{ excel_var }} GetCellContentsMode: Excel.GetCellContentsMode.TypedValues FirstLineIsHeader: True RangeValue=> {{ output_var }}
+Excel.CloseExcel.Close Instance: {{ excel_var }}

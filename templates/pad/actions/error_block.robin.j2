@@ -1,0 +1,5 @@
+BLOCK '{{ block_name }}'
+ON BLOCK ERROR all
+    CALL '{{ handler_name }}'
+    THROW ERROR
+END
