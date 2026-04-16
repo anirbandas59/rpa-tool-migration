@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ImportExportXml version="9.0.0.0"
+  SolutionPackageVersion="9.0"
+  languagecode="1033"
+  generatedBy="flowsmith">
+  <SolutionManifest>
+    <UniqueName>{{ solution_name }}</UniqueName>
+    <LocalizedNames>
+      <LocalizedName description="{{ solution_name }}"
+                     languagecode="1033"/>
+    </LocalizedNames>
+    <Version>{{ version }}</Version>
+    <Managed>0</Managed>
+    <Publisher>
+      <UniqueName>{{ publisher_prefix }}</UniqueName>
+    </Publisher>
+    <RootComponents>
+      {% for name in cloud_flow_names %}
+      <RootComponent type="29" schemaName="{{ name }}"
+                     behavior="0"/>
+      {% endfor %}
+      {% for name in desktop_flow_names %}
+      <RootComponent type="29" schemaName="{{ name }}"
+                     behavior="0"/>
+      {% endfor %}
+    </RootComponents>
+  </SolutionManifest>
+</ImportExportXml>

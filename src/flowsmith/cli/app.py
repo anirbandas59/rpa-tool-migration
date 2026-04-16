@@ -25,8 +25,43 @@ def convert(
     overrides: str = typer.Option(None, "--overrides", help="Path to overrides.yaml"),
 ):
     """Parse, transform and generate Power Automate flows from a .bprelease files"""
-    console.print(f"[bold]Flowsmith Report[/bold] - Input: {input}")
-    console.print("[yellow]Not yet implemented — Phase 7[/yellow]")
+    from pathlib import Path
+
+    from flowsmith.ast import build_ast, serialise
+    from flowsmith.engine import create_annotator
+    from flowsmith.generator import CloudFlowGenerator, PADGenerator, SolutionPackager
+    from flowsmith.parser import parse_process
+
+    input_path = Path(input)
+    output_dir = Path(output)
+
+    try:
+        console.print(f"[bold]Parsing[/bold] {input_path.name}...")
+        raw = parse_process(input_path)
+        process = build_ast(raw)
+
+        console.print("[bold]Annotating[/bold] stages...")
+        create_annotator().annotate_process(process)
+
+        console.print("[bold]Serialising[/bold] AST...")
+        serialise(process, output_dir / "ast.json")
+
+        console.print("[bold]Generating[/bold] PAD .robin files...")
+        robin_dir = output_dir / "robin"
+        PADGenerator().generate_process(process, robin_dir)
+
+        console.print("[bold]Generating[/bold] Cloud Flow JSON...")
+        cf_dir = output_dir / "cloudflow"
+        CloudFlowGenerator().generate_process(process, cf_dir)
+
+        console.print("[bold]Packaging[/bold] solution...")
+        zip_path = output_dir / f"{process.name}_solution.zip"
+        SolutionPackager().package(process, robin_dir, cf_dir, zip_path)
+
+        console.print(f"[green]Done[/green] -> {zip_path}")
+    except (ParseError, Exception) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from None
 
 
 @app.command()
