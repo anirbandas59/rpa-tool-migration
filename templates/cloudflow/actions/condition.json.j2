@@ -1,0 +1,24 @@
+"{{ action_name }}": {
+  "type": "If",
+  "expression": {
+    "equals": [
+      "@variables('{{ var_name }}')",
+      "{{ condition_value }}"
+    ]
+  },
+  "actions": {
+    "true_branch": {
+      "type": "Compose",
+      "inputs": "# TODO: implement true branch"
+    }
+  },
+  "else": {
+    "actions": {
+      "false_branch": {
+        "type": "Compose",
+        "inputs": "# TODO: implement false branch"
+      }
+    }
+  },
+  "runAfter": {{ run_after_json }}
+}

@@ -1,0 +1,16 @@
+"{{ action_name }}": {
+  "type": "OpenApiConnection",
+  "inputs": {
+    "host": {
+      "connectionName": "shared_sharepointonline",
+      "operationId": "{{ operation_id }}",
+      "apiId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline"
+    },
+    "parameters": {
+      "site": "@variables('SharePointSite')",
+      "library": "@variables('DocumentLibrary')"
+    },
+    "authentication": "@parameters('$authentication')"
+  },
+  "runAfter": {{ run_after_json }}
+}

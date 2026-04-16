@@ -1,0 +1,9 @@
+"{{ action_name }}": {
+  "type": "Http",
+  "inputs": {
+    "method": "{{ method }}",
+    "uri": "@variables('RequestUrl')",
+    "headers": {}
+  },
+  "runAfter": {{ run_after_json }}
+}

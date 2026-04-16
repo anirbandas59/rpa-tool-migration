@@ -1,0 +1,19 @@
+"{{ action_name }}": {
+  "type": "OpenApiConnection",
+  "inputs": {
+    "host": {
+      "connectionName": "shared_office365",
+      "operationId": "SendEmailV2",
+      "apiId": "/providers/Microsoft.PowerApps/apis/shared_office365"
+    },
+    "parameters": {
+      "emailMessage": {
+        "to": "@variables('EmailTo')",
+        "subject": "@variables('EmailSubject')",
+        "body": "@variables('EmailBody')"
+      }
+    },
+    "authentication": "@parameters('$authentication')"
+  },
+  "runAfter": {{ run_after_json }}
+}

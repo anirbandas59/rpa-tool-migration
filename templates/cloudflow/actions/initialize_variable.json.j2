@@ -1,0 +1,13 @@
+"{{ var_name }}": {
+  "type": "InitializeVariable",
+  "inputs": {
+    "variables": [
+      {
+        "name": "{{ var_name }}",
+        "type": "{{ var_type }}",
+        "value": "{{ initial_value }}"
+      }
+    ]
+  },
+  "runAfter": {{ run_after_json }}
+}
