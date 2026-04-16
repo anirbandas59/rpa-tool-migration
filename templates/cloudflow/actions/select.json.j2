@@ -1,0 +1,10 @@
+"{{ action_name }}": {
+  "type": "Select",
+  "inputs": {
+    "from": "@variables('{{ array_var }}')",
+    "select": {
+      "{{ select_field }}": "@item()?['{{ source_field }}']"
+    }
+  },
+  "runAfter": {{ run_after_json }}
+}

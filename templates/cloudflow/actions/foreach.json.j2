@@ -1,0 +1,12 @@
+"{{ action_name }}": {
+  "type": "Foreach",
+  "foreach": "@variables('{{ collection_var }}')",
+  "actions": {
+    "ForEach_Item": {
+      "type": "Compose",
+      "inputs": "@items('{{ action_name }}')",
+      "runAfter": {}
+    }
+  },
+  "runAfter": {{ run_after_json }}
+}

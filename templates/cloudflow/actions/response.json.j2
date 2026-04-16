@@ -1,0 +1,23 @@
+"{{ action_name }}": {
+  "type": "Response",
+  "kind": "http",
+  "inputs": {
+    "statusCode": 200,
+    "body": {
+      "status": "@variables('{{ result_var }}')",
+      "message": "@variables('{{ message_var }}')"
+    },
+    "schema": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "runAfter": {{ run_after_json }}
+}

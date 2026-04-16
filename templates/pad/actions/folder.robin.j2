@@ -1,0 +1,17 @@
+{% if target_type == "Create Folder" %}
+Folder.CreateFolder({{ folder_path }})
+{% elif target_type == "Delete Folder" %}
+Folder.DeleteFolder({{ folder_path }})
+{% elif target_type == "Folder Exists" %}
+SET {{ output_var }} TO Folder.FolderExists({{ folder_path }})
+{% elif target_type == "Get Subfolders" %}
+SET {{ output_var }} TO Folder.GetSubfolders({{ folder_path }})
+{% elif target_type == "Get Folders Size" %}
+SET {{ output_var }} TO Folder.GetFolderSize({{ folder_path }})
+{% elif target_type == "Empty Folder" %}
+Folder.EmptyFolder({{ folder_path }})
+{% elif target_type == "Rename Folder" %}
+Folder.RenameFolder({{ folder_path }}, {{ new_name }})
+{% else %}
+# TODO: Folder.{{ target_type }} — complete this action block
+{% endif %}

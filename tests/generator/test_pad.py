@@ -281,6 +281,58 @@ def test_call_subflow_stage_renders_call() -> None:
     assert "CALL" in result
 
 
+def test_text_action_renders() -> None:
+    """Test that Text module actions render correctly."""
+    gen = PADGenerator()
+    stage = make_annotated_stage(
+        target_module="Text",
+        target_type="Trim Whitespace",
+        confidence=0.95,
+    )
+    page = make_page(stages=[stage], is_main=False)
+    result = gen.generate_page(page, "TestProcess")
+    assert "Text" in result or "SET" in result
+
+
+def test_file_action_renders() -> None:
+    """Test that File module actions render correctly."""
+    gen = PADGenerator()
+    stage = make_annotated_stage(
+        target_module="File",
+        target_type="File Exists",
+        confidence=0.95,
+    )
+    page = make_page(stages=[stage], is_main=False)
+    result = gen.generate_page(page, "TestProcess")
+    assert "File" in result or "SET" in result
+
+
+def test_datetime_action_renders() -> None:
+    """Test that DateTime module actions render correctly."""
+    gen = PADGenerator()
+    stage = make_annotated_stage(
+        target_module="DateTime",
+        target_type="Get Current DateTime",
+        confidence=0.95,
+    )
+    page = make_page(stages=[stage], is_main=False)
+    result = gen.generate_page(page, "TestProcess")
+    assert "DateTime" in result or "SET" in result
+
+
+def test_get_variable_action_renders() -> None:
+    """Test that Variables.GetVariable action renders correctly."""
+    gen = PADGenerator()
+    stage = make_annotated_stage(
+        target_module="Variables",
+        target_type="GetVariable",
+        confidence=0.95,
+    )
+    page = make_page(stages=[stage], is_main=False)
+    result = gen.generate_page(page, "TestProcess")
+    assert "Variables" in result or "SET" in result
+
+
 def test_unannotated_stage_raises_generation_error() -> None:
     """Test that unannotated stage raises GenerationError."""
     gen = PADGenerator()

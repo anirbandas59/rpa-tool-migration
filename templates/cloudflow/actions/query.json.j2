@@ -1,0 +1,8 @@
+"{{ action_name }}": {
+  "type": "Query",
+  "inputs": {
+    "from": "@variables('{{ array_var }}')",
+    "where": "@equals(item()?['{{ filter_field }}'], '{{ filter_value }}')"
+  },
+  "runAfter": {{ run_after_json }}
+}

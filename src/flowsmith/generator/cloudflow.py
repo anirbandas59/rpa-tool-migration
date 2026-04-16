@@ -303,6 +303,110 @@ class CloudFlowGenerator:
                 }
             }
 
+        # Foreach (loop)
+        if target_type == "Foreach":
+            return {
+                action_name: {
+                    "type": "Foreach",
+                    "foreach": "@variables('ItemCollection')",
+                    "actions": {
+                        "ForEach_Item": {
+                            "type": "Compose",
+                            "inputs": "@items('" + action_name + "')",
+                            "runAfter": {},
+                        }
+                    },
+                    "runAfter": run_after_dict,
+                }
+            }
+
+        # ParseJson
+        if target_type == "ParseJson":
+            return {
+                action_name: {
+                    "type": "ParseJson",
+                    "inputs": {
+                        "content": "@variables('JsonContent')",
+                        "schema": {
+                            "type": "object",
+                            "properties": {"example": {"type": "string"}},
+                        },
+                    },
+                    "runAfter": run_after_dict,
+                }
+            }
+
+        # Query (array filter)
+        if target_type == "Query":
+            return {
+                action_name: {
+                    "type": "Query",
+                    "inputs": {
+                        "from": "@variables('ItemArray')",
+                        "where": "@equals(item()?['field'], 'value')",
+                    },
+                    "runAfter": run_after_dict,
+                }
+            }
+
+        # Response (respond to Power App)
+        if target_type == "Response":
+            return {
+                action_name: {
+                    "type": "Response",
+                    "kind": "http",
+                    "inputs": {
+                        "statusCode": 200,
+                        "body": {
+                            "status": "@variables('ResultStatus')",
+                        },
+                        "schema": {
+                            "type": "object",
+                            "properties": {"status": {"type": "string"}},
+                        },
+                    },
+                    "runAfter": run_after_dict,
+                }
+            }
+
+        # Select (select array fields)
+        if target_type == "Select":
+            return {
+                action_name: {
+                    "type": "Select",
+                    "inputs": {
+                        "from": "@variables('ItemArray')",
+                        "select": {
+                            "id": "@item()?['id']",
+                            "name": "@item()?['name']",
+                        },
+                    },
+                    "runAfter": run_after_dict,
+                }
+            }
+
+        # Workflow (call child flow)
+        if target_type == "Workflow":
+            return {
+                action_name: {
+                    "type": "OpenApiConnection",
+                    "inputs": {
+                        "host": {
+                            "apiId": "/providers/Microsoft.PowerApps/apis/shared_logicflows",
+                            "connectionName": "shared_logicflows",
+                            "operationId": "ExecuteFlow",
+                        },
+                        "parameters": {
+                            "flowId": "{{ child_flow_id }}",
+                            "body": {
+                                "param1": "@variables('Param1')",
+                            },
+                        },
+                    },
+                    "runAfter": run_after_dict,
+                }
+            }
+
         # HTTP (for Utility - HTTP VBOs)
         if target_module == "Utility" and "HTTP" in target_type:
             return {

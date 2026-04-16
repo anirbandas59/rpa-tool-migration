@@ -1,0 +1,17 @@
+"{{ action_name }}": {
+  "type": "OpenApiConnection",
+  "inputs": {
+    "host": {
+      "apiId": "/providers/Microsoft.PowerApps/apis/shared_logicflows",
+      "connectionName": "shared_logicflows",
+      "operationId": "ExecuteFlow"
+    },
+    "parameters": {
+      "flowId": "{{ child_flow_id }}",
+      "body": {
+        "{{ param_name }}": "@variables('{{ param_var }}')"
+      }
+    }
+  },
+  "runAfter": {{ run_after_json }}
+}

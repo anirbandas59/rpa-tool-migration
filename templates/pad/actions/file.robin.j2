@@ -1,0 +1,21 @@
+{% if target_type == "File Exists" %}
+SET {{ output_var }} TO File.FileExists({{ file_path }})
+{% elif target_type == "Delete File" %}
+File.DeleteFile({{ file_path }})
+{% elif target_type == "Copy File" %}
+File.CopyFile({{ source_path }}, {{ destination_path }})
+{% elif target_type == "Move File" %}
+File.MoveFile({{ source_path }}, {{ destination_path }})
+{% elif target_type == "Create Directory" %}
+File.CreateFolder({{ folder_path }})
+{% elif target_type == "Get File Name" %}
+SET {{ output_var }} TO File.GetFilename({{ file_path }})
+{% elif target_type == "Get File Extension" %}
+SET {{ output_var }} TO File.GetFileExtension({{ file_path }})
+{% elif target_type == "Get Files In Directory" %}
+SET {{ output_var }} TO File.GetFilesInFolder({{ folder_path }})
+{% elif target_type == "Read Text File" %}
+SET {{ output_var }} TO File.ReadAllText({{ file_path }})
+{% else %}
+# TODO: File.{{ target_type }} — complete this action block
+{% endif %}

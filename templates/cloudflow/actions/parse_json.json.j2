@@ -1,0 +1,15 @@
+"{{ action_name }}": {
+  "type": "ParseJson",
+  "inputs": {
+    "content": "@variables('{{ json_content_var }}')",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "example_property": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "runAfter": {{ run_after_json }}
+}

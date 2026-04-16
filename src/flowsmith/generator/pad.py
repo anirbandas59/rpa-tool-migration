@@ -267,6 +267,91 @@ class PADGenerator:
             )
             lines.append(rendered)
 
+        elif target_module == "Text":
+            text_template = self.env.get_template("actions/text.robin.j2")
+            rendered = text_template.render(
+                target_type=target_type,
+                input_var="%InputVar%",
+                output_var=stage.name.replace(" ", "_"),
+                delimiter="','",
+                find_text="'Old'",
+                replace_text="'New'",
+                search_text="'Pattern'",
+            )
+            lines.append(rendered)
+
+        elif target_module == "Variables" and target_type == "GetVariable":
+            get_var_template = self.env.get_template("actions/get_variable.robin.j2")
+            rendered = get_var_template.render(
+                variable_name="'VariableName'",
+                output_var=stage.name.replace(" ", "_"),
+            )
+            lines.append(rendered)
+
+        elif target_module == "File":
+            file_template = self.env.get_template("actions/file.robin.j2")
+            rendered = file_template.render(
+                target_type=target_type,
+                output_var=stage.name.replace(" ", "_"),
+                file_path="'C:\\\\path\\\\to\\\\file.txt'",
+                source_path="'C:\\\\source\\\\file.txt'",
+                destination_path="'C:\\\\dest\\\\file.txt'",
+                folder_path="'C:\\\\folder'",
+            )
+            lines.append(rendered)
+
+        elif target_module == "DateTime":
+            datetime_template = self.env.get_template("actions/datetime.robin.j2")
+            rendered = datetime_template.render(
+                target_type=target_type,
+                output_var=stage.name.replace(" ", "_"),
+                date_value="%DateVar%",
+                time_unit="'Days'",
+                amount="1",
+                date1="%Date1%",
+                date2="%Date2%",
+                from_format="'MM/dd/yyyy'",
+                to_format="'yyyy-MM-dd'",
+                date_string="'2025-04-16'",
+                format="'yyyy-MM-dd'",
+            )
+            lines.append(rendered)
+
+        elif target_module == "Folder":
+            folder_template = self.env.get_template("actions/folder.robin.j2")
+            rendered = folder_template.render(
+                target_type=target_type,
+                output_var=stage.name.replace(" ", "_"),
+                folder_path="'C:\\\\folder'",
+                new_name="'NewFolderName'",
+            )
+            lines.append(rendered)
+
+        elif target_module == "WorkQueues":
+            wq_template = self.env.get_template("actions/work_queues.robin.j2")
+            rendered = wq_template.render(
+                target_type=target_type,
+                output_var=stage.name.replace(" ", "_"),
+                queue_name="'QueueName'",
+                queue_id="%QueueId%",
+                item_data="%ItemData%",
+                item_id="%ItemId%",
+                updated_data="%UpdatedData%",
+            )
+            lines.append(rendered)
+
+        elif target_module == "Scripting":
+            scripting_template = self.env.get_template("actions/scripting.robin.j2")
+            rendered = scripting_template.render(
+                target_type=target_type,
+                output_var=stage.name.replace(" ", "_"),
+                script_content="'# Your script here'",
+                script_type="'PowerShell'",
+                vba_code="'Sub Main()...'",
+                workbook_path="'C:\\\\file.xlsx'",
+            )
+            lines.append(rendered)
+
         else:
             # Generic comment for unhandled types
             comment = f"# {target_module}.{target_type}"

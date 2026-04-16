@@ -1,0 +1,18 @@
+{% if target_type == "Create Queue" %}
+SET {{ output_var }} TO WorkQueues.CreateQueue({{ queue_name }})
+{% elif target_type == "Add Queue Item" %}
+SET {{ output_var }} TO WorkQueues.AddQueueItem({{ queue_id }}, {{ item_data }})
+{% elif target_type == "Get Queue Item" %}
+SET {{ output_var }} TO WorkQueues.GetQueueItem({{ queue_id }})
+{% elif target_type == "Remove Queue Item" %}
+WorkQueues.RemoveQueueItem({{ item_id }})
+{% elif target_type == "Get Queue Item Count" %}
+SET {{ output_var }} TO WorkQueues.GetQueueItemCount({{ queue_id }})
+{% elif target_type == "Update Queue Item" %}
+WorkQueues.UpdateQueueItem({{ item_id }}, {{ updated_data }})
+{% elif target_type == "Get Queue Items" %}
+SET {{ output_var }} TO WorkQueues.GetQueueItems({{ queue_id }})
+{% else %}
+# TODO: WorkQueues.{{ target_type }} — complete this action block
+SET {{ output_var }} TO ""
+{% endif %}

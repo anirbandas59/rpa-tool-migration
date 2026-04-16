@@ -1,0 +1,22 @@
+{% if target_type == "Trim Whitespace" %}
+SET {{ output_var }} TO Text.TrimWhitespace({{ input_var }})
+{% elif target_type == "Split Text" %}
+SET {{ output_var }} TO Text.SplitText({{ input_var }}, {{ delimiter }})
+{% elif target_type == "Replace Text" %}
+SET {{ output_var }} TO Text.ReplaceText({{ input_var }}, {{ find_text }}, {{ replace_text }})
+{% elif target_type == "Contains Text" %}
+SET {{ output_var }} TO Text.ContainsText({{ input_var }}, {{ search_text }})
+{% elif target_type == "To Upper Case" %}
+SET {{ output_var }} TO Text.ToUpperCase({{ input_var }})
+{% elif target_type == "To Lower Case" %}
+SET {{ output_var }} TO Text.ToLowerCase({{ input_var }})
+{% elif target_type == "Get Text Length" %}
+SET {{ output_var }} TO Text.GetLength({{ input_var }})
+{% elif target_type == "Get Text Occurrence" %}
+SET {{ output_var }} TO Text.GetOccurrenceCount({{ input_var }}, {{ search_text }})
+{% elif target_type == "Pad Text" %}
+SET {{ output_var }} TO Text.PadText({{ input_var }}, {{ length }}, {{ direction }}, {{ padding_char }})
+{% else %}
+# TODO: Text.{{ target_type }} — complete this action block
+SET {{ output_var }} TO ""
+{% endif %}

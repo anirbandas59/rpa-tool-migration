@@ -1,0 +1,13 @@
+{% if target_type == "Run PowerShell Script" %}
+SET {{ output_var }} TO Scripting.RunPowerShellScript({{ script_content }})
+{% elif target_type == "Run VBA Macro" %}
+SET {{ output_var }} TO Scripting.RunVBAMacro({{ vba_code }}, {{ workbook_path }})
+{% elif target_type == "Run Script" %}
+# TODO: Scripting action — complete this action block
+SET {{ output_var }} TO ""
+{% elif target_type == "Execute Script" %}
+SET {{ output_var }} TO Scripting.ExecuteScript({{ script_content }}, {{ script_type }})
+{% else %}
+# TODO: Scripting.{{ target_type }} — complete this action block
+SET {{ output_var }} TO ""
+{% endif %}

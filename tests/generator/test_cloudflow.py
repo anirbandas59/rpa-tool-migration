@@ -295,6 +295,72 @@ def test_catch_runs_after_try_on_failure() -> None:
     assert "Failed" in catch_action["runAfter"]["Try"]
 
 
+def test_foreach_action_renders() -> None:
+    """Test that Foreach action type renders correctly."""
+    gen = CloudFlowGenerator()
+    stage = make_cloud_stage(target_type="Foreach", confidence=0.95)
+    page = make_page_with_cloud(stages=[stage], is_main=False)
+    result = gen.generate_page(page, "TestProcess")
+    assert result is not None
+    data = json.loads(result)
+    assert "Try" in data["properties"]["definition"]["actions"]
+
+
+def test_parse_json_action_renders() -> None:
+    """Test that ParseJson action type renders correctly."""
+    gen = CloudFlowGenerator()
+    stage = make_cloud_stage(target_type="ParseJson", confidence=0.95)
+    page = make_page_with_cloud(stages=[stage], is_main=False)
+    result = gen.generate_page(page, "TestProcess")
+    assert result is not None
+    data = json.loads(result)
+    assert "Try" in data["properties"]["definition"]["actions"]
+
+
+def test_query_action_renders() -> None:
+    """Test that Query action type renders correctly."""
+    gen = CloudFlowGenerator()
+    stage = make_cloud_stage(target_type="Query", confidence=0.95)
+    page = make_page_with_cloud(stages=[stage], is_main=False)
+    result = gen.generate_page(page, "TestProcess")
+    assert result is not None
+    data = json.loads(result)
+    assert "Try" in data["properties"]["definition"]["actions"]
+
+
+def test_response_action_renders() -> None:
+    """Test that Response action type renders correctly."""
+    gen = CloudFlowGenerator()
+    stage = make_cloud_stage(target_type="Response", confidence=0.95)
+    page = make_page_with_cloud(stages=[stage], is_main=False)
+    result = gen.generate_page(page, "TestProcess")
+    assert result is not None
+    data = json.loads(result)
+    assert "Try" in data["properties"]["definition"]["actions"]
+
+
+def test_select_action_renders() -> None:
+    """Test that Select action type renders correctly."""
+    gen = CloudFlowGenerator()
+    stage = make_cloud_stage(target_type="Select", confidence=0.95)
+    page = make_page_with_cloud(stages=[stage], is_main=False)
+    result = gen.generate_page(page, "TestProcess")
+    assert result is not None
+    data = json.loads(result)
+    assert "Try" in data["properties"]["definition"]["actions"]
+
+
+def test_workflow_action_renders() -> None:
+    """Test that Workflow (child flow) action type renders correctly."""
+    gen = CloudFlowGenerator()
+    stage = make_cloud_stage(target_type="Workflow", confidence=0.95)
+    page = make_page_with_cloud(stages=[stage], is_main=False)
+    result = gen.generate_page(page, "TestProcess")
+    assert result is not None
+    data = json.loads(result)
+    assert "Try" in data["properties"]["definition"]["actions"]
+
+
 def test_unannotated_stage_raises_generation_error() -> None:
     """Test that unannotated stage with CLOUD stages raises GenerationError."""
     gen = CloudFlowGenerator()

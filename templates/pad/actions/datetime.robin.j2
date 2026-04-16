@@ -1,0 +1,16 @@
+{% if target_type == "Get Current DateTime" %}
+SET {{ output_var }} TO DateTime.GetCurrentDateTime()
+{% elif target_type == "Add to DateTime" %}
+SET {{ output_var }} TO DateTime.AddToDateTime({{ date_value }}, {{ time_unit }}, {{ amount }})
+{% elif target_type == "Subtract Dates" %}
+SET {{ output_var }} TO DateTime.SubtractDates({{ date1 }}, {{ date2 }})
+{% elif target_type == "Convert DateTime Format" %}
+SET {{ output_var }} TO DateTime.ConvertDateTimeFormat({{ date_value }}, {{ from_format }}, {{ to_format }})
+{% elif target_type == "Get Day Of Week" %}
+SET {{ output_var }} TO DateTime.GetDayOfWeek({{ date_value }})
+{% elif target_type == "Parse DateTime" %}
+SET {{ output_var }} TO DateTime.ParseDateTime({{ date_string }}, {{ format }})
+{% else %}
+# TODO: DateTime.{{ target_type }} — complete this action block
+SET {{ output_var }} TO ""
+{% endif %}
