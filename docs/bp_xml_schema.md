@@ -1,11 +1,16 @@
 # Blue Prism XML Schema — Ground Truth
-> Derived from empirical analysis of `sample-process.xml` (2174 lines) and
-> `sample-object.xml` (217 lines), cross-referenced against the official
-> Blue Prism 6.10 documentation stage-type list.
+> Derived from empirical analysis of `sample-process.xml` (2174 lines),
+> `sample-object.xml` (217 lines), and `sample-release.xml`,
+> cross-referenced against the official Blue Prism 6.10 documentation stage-type list.
 > This document is the authoritative parser contract for Flowsmith.
 >
-> **Revision note:** `Choice` promoted to its own canonical AST type (`CHOICE`, #18).
-> `Alert` and `Skill` confirmed as `ACTION` normalisations. See §5b and §6.16.
+> **Revision notes:**
+> - `Choice` promoted to its own canonical AST type (`CHOICE`, #18). See §5b and §6.4a.
+> - `Alert` and `Skill` confirmed as `ACTION` normalisations. See §5b, §6.16, §6.17.
+> - `.bprelease` file format documented: release namespace, content types, env vars, groups. See §2b–§2d.
+> - `WaitStart`/`WaitEnd` child elements (`<timeout>`, `<groupid>`, `<choices>`) documented. See §6.14.
+> - `parse_element()` API documented (§10 note #9).
+> - Section numbering in §10 corrected.
 
 ---
 
@@ -67,7 +72,161 @@ level). This inner `<process>` carries the metadata.
 
 ---
 
-## 3. Subsheet Schema
+## 2b. `.bprelease` File Format
+
+A `.bprelease` file is an export container. It holds one or more processes,
+objects, environment variables, and group definitions in a single XML file.
+
+### Release namespace
+
+The release root and its metadata children use a **separate namespace** from
+the process/object content:
+
+```
+http://www.blueprism.co.uk/product/release   (bpr:)
+```
+
+The `<process>` and `<object>` content items inside the release use the
+**standard BP process namespace** (`http://www.blueprism.co.uk/product/process`).
+Environment variables use their own namespace:
+```
+http://www.blueprism.co.uk/product/environment-variable   (env:)
+```
+
+### Root structure
+
+```xml
+<bpr:release xmlns:bpr="http://www.blueprism.co.uk/product/release">
+  <bpr:name>PID_0127_Process_US_BulkUnlock_23March2026_Export</bpr:name>
+  <bpr:release-notes/>
+  <bpr:created>2026-03-23 07:35:34Z</bpr:created>
+  <bpr:package-id>890</bpr:package-id>
+  <bpr:package-name>PID_0127_Process_US_BulkUnlock_23March2026_Export</bpr:package-name>
+  <bpr:user-created-by>user@domain.com</bpr:user-created-by>
+  <bpr:contents count="47">
+    <!-- N items: process | object | environment-variable | process-group | object-group -->
+  </bpr:contents>
+</bpr:release>
+```
+
+### Release metadata fields
+
+| Element | Type | Notes |
+|---------|------|-------|
+| `<bpr:name>` | string | Release display name |
+| `<bpr:created>` | datetime | ISO format with Z suffix |
+| `<bpr:package-id>` | integer | Numeric package identifier |
+| `<bpr:package-name>` | string | Usually same as name |
+| `<bpr:user-created-by>` | email | Creator's BP login |
+| `<bpr:contents count="N">` | container | N = declared total item count |
+
+> **`count` attribute:** The declared count includes ALL item types (processes,
+> objects, env vars, groups). Validate that `process_count + object_count +
+> env_var_count + group_count + error_count` equals this `declared_count` —
+> any gap means an unrecognised content type was silently skipped.
+
+### Content item types
+
+| XML tag | Namespace | Parser disposition |
+|---------|-----------|-------------------|
+| `<process>` | BP process NS | Parse via `parse_element()` — full artefact |
+| `<object>` | BP process NS | Parse via `parse_element()` — full artefact |
+| `<environment-variable>` | env: NS | Parse directly — see §2c |
+| `<process-group>` | own NS | Parse for cross-reference only — not migrated |
+| `<object-group>` | own NS | Parse for cross-reference only — not migrated |
+
+### `<process>` and `<object>` in a release
+
+The `<process>` and `<object>` elements inside a release are structurally
+identical to their standalone file counterparts — same namespace, same inner
+`<process>` child, same stage structure. The only additions are release-level
+wrapper attributes:
+
+```xml
+<process xmlns="http://www.blueprism.co.uk/product/process"
+         id="21fbccd0-f313-4ed2-adf7-39625af1ed85"
+         name="PID_0127_Process_US_BulkUnlock"
+         published="true">
+  <process name="..." version="1.0" bpversion="7.3.1.15031" ...>
+    <!-- full process content -->
+  </process>
+</process>
+```
+
+**Additional wrapper attributes (not present in standalone files):**
+
+| Attribute | Present on | Notes |
+|-----------|-----------|-------|
+| `id` | process, object | UUID — unique within the BP environment |
+| `published` | process only | `"true"` / `"false"` (lowercase) |
+
+---
+
+## 2c. Environment Variable Schema
+
+Environment variables are key-value configuration pairs exported as part of a
+release. They are referenced by processes at runtime via the BP credential/env
+store. They have their own namespace: `http://www.blueprism.co.uk/product/environment-variable`.
+
+```xml
+<environment-variable
+    xmlns="http://www.blueprism.co.uk/product/environment-variable"
+    id="Generic_RPA_Sharepoint_API_Config_File_Folder_Path"
+    name="Generic_RPA_Sharepoint_API_Config_File_Folder_Path"
+    type="text"
+    value="/sites/AAFAA5234/RPA Config File/Prod Config File API/">
+  <description>SharePoint Config file Path</description>
+</environment-variable>
+```
+
+**Attributes:**
+
+| Attribute | Required | Notes |
+|-----------|----------|-------|
+| `id` | Yes | Typically same as `name`; used as the env var key |
+| `name` | Yes | Display name |
+| `type` | Yes | BP data type — same enum as stage data types (§9) |
+| `value` | Yes | Current value as plain text |
+
+**Children:**
+
+| Child | Required | Notes |
+|-------|----------|-------|
+| `<description>` | No | Human-readable description of what the variable is used for |
+
+> **Namespace note:** the `<description>` child uses the same env-var namespace.
+> Some BP versions may omit the namespace on the description element — parsers
+> must try both `{NS}description` and bare `description`.
+
+---
+
+## 2d. Group Schema (process-group / object-group)
+
+Groups organise processes and objects into folder-like structures in the BP
+Studio tree view. They are reference metadata only — not migrated to Power
+Automate. Useful for understanding deployment structure.
+
+```xml
+<process-group id="19a73585-..." name="PROJECTS/GF-IT/Upstream/PID_0127"
+               isDefaultGroup="False"
+               xmlns="http://www.blueprism.co.uk/product/process-group">
+  <members>
+    <member id="21fbccd0-f313-4ed2-adf7-39625af1ed85" />
+  </members>
+</process-group>
+```
+
+**Attributes:**
+
+| Attribute | Notes |
+|-----------|-------|
+| `id` | UUID of the group |
+| `name` | Full path name (slash-delimited hierarchy) |
+| `isDefaultGroup` | `"True"` for the "Default" group that catches ungrouped items |
+
+**`<members>`:** list of `<member id="..."/>` elements referencing process/object
+UUIDs. Use these to build a group membership cross-reference — which processes
+and objects belong to which group path.
 
 Each `<subsheet>` represents one **page** of the process/object.
 
@@ -499,9 +658,43 @@ Two modes: `usecurrent="yes"` (rethrow, `type`/`detail` empty) vs explicit (`typ
 
 ---
 
-### 6.14 `Navigate` / `Read` / `Write` / `Wait` (UI Automation — object-only)
+### 6.14 `WaitStart` / `WaitEnd` → normalised to `WAIT` (bracket pair, object-only)
 
-These share similar structure with `<steps>` containing UI actions.
+`WaitStart` and `WaitEnd` are a matched bracket pair used in VBO pages to pause
+execution and wait for a UI condition. They always appear together on the same
+page and share a `<groupid>` that pairs them.
+
+```xml
+<stage stageid="..." name="Wait1" type="WaitStart">
+  <subsheetid> ... </subsheetid>
+  <groupid>  {same UUID as paired WaitEnd}  </groupid>
+  <choices />                               <!-- always present, may be empty -->
+  <timeout>  10  </timeout>                 <!-- timeout in seconds (integer) -->
+</stage>
+
+<stage stageid="..." name="Time Out1" type="WaitEnd">
+  <subsheetid> ... </subsheetid>
+  <groupid>  {same UUID as paired WaitStart}  </groupid>
+  <onsuccess>  {next stageid}  </onsuccess>
+</stage>
+```
+
+**`WaitStart`-only children:**
+- `<timeout>` — integer seconds before timeout; only on `WaitStart`
+- `<choices>` — UI condition definitions (empty element if no conditions set)
+
+**Shared children:**
+- `<groupid>` — UUID that pairs `WaitStart` with its matching `WaitEnd`;
+  analogous to how `LoopStart`/`LoopEnd` are paired
+
+**Capture:** `timeout_seconds` (int|None from `<timeout>`), `group_id` (str from `<groupid>`).
+`WaitEnd` has `<onsuccess>` only; `WaitStart` has no `<onsuccess>` (flow continues from `WaitEnd`).
+
+---
+
+### 6.14b `Navigate` / `Read` / `Write` / `Wait` (UI Automation stages — object-only)
+
+These share similar structure with `<steps>` containing UI element actions.
 Exact child schema is application-model-dependent and **not required for
 process migration** — capture as opaque blobs with `runtime=DESKTOP` flag.
 
@@ -515,6 +708,11 @@ process migration** — capture as opaque blobs with `runtime=DESKTOP` flag.
 
 **Capture:** Mark as `runtime=DESKTOP`, preserve `<steps>` as raw XML string
 for STUB generation. Set confidence band = MANUAL.
+
+> **Note:** `Wait` (without Start/End suffix) is a UI Automation stage that
+> waits for an element condition. It is structurally different from the
+> `WaitStart`/`WaitEnd` bracket pair. Both normalise to the `WAIT` canonical
+> type, but with different child schemas.
 
 ---
 
@@ -730,6 +928,16 @@ These are confirmed bugs / gaps to fix before using this schema:
    inbound edge as a parser gap — the `Block → Recover` edge is always implicit
    and must be constructed, not read from XML (see §7 process map algorithm).
 
+6. **`WaitStart`/`WaitEnd` — note the exact XML strings** — the official
+   docs UI shows "Wait start" / "Wait end" but the XML `type` attribute is
+   `WaitStart` and `WaitEnd` (no space, PascalCase). Same for `LoopStart`
+   / `LoopEnd`. Both normalise to `WAIT` / `LOOP` canonical types. Capture
+   `<timeout>` (WaitStart only) and `<groupid>` (both) — see §6.14.
+
+7. **`<o>` tag exists** — empirically observed in output elements (probable
+   abbreviation artefact in some BP versions). Parser must handle both
+   `<output>` and `<o>` as equivalent.
+
 8. **`ProcessInfo` is the implicit page marker** — every process and object
    has exactly one `ProcessInfo` stage, and it always lives on the implicit
    Main/Initialize page (no `<subsheetid>`). Use its presence as the signal
@@ -737,11 +945,9 @@ These are confirmed bugs / gaps to fix before using this schema:
    `<subsheetid>` that are NOT `ProcessInfo` (e.g. a bare `Start`/`End` pair,
    `Note` stages) also belong to this implicit page.
 
-6. **`WaitStart`/`WaitEnd` — note the exact XML strings** — the official
-   docs UI shows "Wait start" / "Wait end" but the XML `type` attribute is
-   `WaitStart` and `WaitEnd` (no space, PascalCase). Same for `LoopStart`
-   / `LoopEnd`.
-
-7. **`<o>` tag exists** — empirically observed in output elements (probable
-   abbreviation artefact in some BP versions). Parser must handle both
-   `<output>` and `<o>` as equivalent.
+9. **`parse_element()` is the canonical entry point** — the parser exposes
+   both `parse(filepath)` (file-based) and `parse_element(root_el, release_id)`
+   (element-based). `parse(filepath)` is a thin wrapper around `parse_element`.
+   Use `parse_element` directly when extracting artefacts from a release file
+   to avoid writing temp files. The `release_id` parameter tags the result with
+   the UUID from the release `<contents>` wrapper.

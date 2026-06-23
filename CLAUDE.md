@@ -98,21 +98,74 @@ uv run python -c "from flowsmith.<module> import <Class>; print('OK')"
 | 0.50-0.69| PARTIAL    | Scaffold + TODO: complete this block   |
 | < 0.50   | MANUAL     | Stub only + ReviewFlag(severity=error) |
 
+## XML namespace contract
+
+Three namespaces appear in `.bprelease` files. Every parser must register or strip
+them before any XPath or `find()` call — failure returns empty results silently.
+
+| Prefix | URI | Used on |
+|--------|-----|---------|
+| (none) | `http://www.blueprism.co.uk/product/process` | All `<process>`, `<object>`, and every stage element |
+| `bpr:` | `http://www.blueprism.co.uk/product/release` | Release root and metadata (`<bpr:name>`, `<bpr:contents>`, etc.) |
+| `env:` | `http://www.blueprism.co.uk/product/environment-variable` | `<environment-variable>` items |
+
+```python
+NS  = "http://www.blueprism.co.uk/product/process"
+BP  = f"{{{NS}}}"          # prepend: f"{BP}stage"
+BPR = "http://www.blueprism.co.uk/product/release"
+ENV = "http://www.blueprism.co.uk/product/environment-variable"
+```
+
+## .bprelease container structure
+
+A `.bprelease` is a multi-artefact export container, not a single process file.
+The parser entry point is `parse_element(root_el, release_id)` — use it directly
+when extracting artefacts from a release to avoid writing temp files.
+`parse(filepath)` is a thin wrapper around `parse_element`.
+
+```
+<bpr:release>
+  <bpr:contents count="N">   ← N = total item count across ALL types
+    <process>  … </process>          ← parse via parse_element()
+    <object>   … </object>           ← parse via parse_element()
+    <environment-variable … />       ← parse directly
+    <process-group … />              ← cross-reference only, not migrated
+    <object-group  … />              ← cross-reference only, not migrated
+  </bpr:contents>
+</bpr:release>
+```
+
+Validate: `process_count + object_count + env_var_count + group_count == declared_count`.
+Any gap means an unrecognised content type was silently skipped — raise ConfigError.
+
+Root discriminator: `<process>` root = Process artefact; `<object>` root = VBO.
+
 ## Stage type enum reference
 
-Canonical AST types (17 total):
-START, END, ACTION, DECISION, CALCULATION, CODE, WAIT,
+Canonical AST types (18 total):
+START, END, ACTION, DECISION, CHOICE, CALCULATION, CODE, WAIT,
 NAVIGATE, READ, WRITE, LOOP, EXCEPTION, RECOVER, RESUME,
 BLOCK, COLLECTION, DATA
 
+⚠️ CHOICE is the 18th type. It is NOT a normalisation of DECISION. It maps N
+named branches to chained if/else-if/else in .robin. Do not collapse it.
+⚠️ CHOICE XML structure is NOT yet empirically verified against a real sample —
+do not implement the Choice parser until a real sample is obtained (see bp_xml_schema §6.4a).
+
 Skip types (no AST node, no generated output):
-ANCHOR, NOTE, SUBSHEETINFO, PROCESSINFO, PROCESS
+ANCHOR, NOTE, SUBSHEETINFO, PROCESSINFO
+
+Note: SubSheetInfo ≠ SubSheet. SubSheetInfo is a skip/page-header marker.
+SubSheet is a callable stage that normalises to ACTION (is_subsheet_call=True).
 
 Normalised on parse (collapsed into existing types):
 MULTIPLECALCULATION → CALCULATION  (fan-out as N nodes)
 SUBSHEET            → ACTION       (is_subsheet_call=True)
-WAITSTART/WAITEND   → WAIT         (paired bracket, 74 each)
-LOOPSTART/LOOPEND   → LOOP         (paired bracket, 20 each)
+PROCESS             → ACTION       (is_process_call=True)
+ALERT               → ACTION       (is_alert=True)
+SKILL               → ACTION       (is_skill=True, confidence forced to MANUAL)
+WAITSTART/WAITEND   → WAIT         (paired bracket, matched by <groupid>)
+LOOPSTART/LOOPEND   → LOOP         (paired bracket, matched by shared subsheetid)
 
 BLOCK ≠ EXCEPTION:
   BLOCK     = scope boundary (try/catch wrapper)
@@ -123,6 +176,33 @@ Exception type strings (preserve in AST on every EXCEPTION stage):
   File Not Found, Invalid Direction Parameter, Invalid Input Parameter,
   System Unavailable Exception, UtilityException,
   Workbook Not Found, Worksheet Not Found
+
+## Parser critical rules
+
+1. `published` must be case-normalised — always `.lower() == "true"`. Never compare
+   directly to `"true"` or `"True"` — casing varies between process and object files.
+
+2. Page identity is determined by `<subsheetid>` presence, not stage order:
+   - Stage has `<subsheetid>` → belongs to that named subsheet
+   - Stage has no `<subsheetid>` + root is `<process>` → Main page (implicit)
+   - Stage has no `<subsheetid>` + root is `<object>` → Initialize page (implicit)
+   - ProcessInfo is the reliable marker that the implicit page exists.
+
+3. `Recover`/`Resume` missing `<subsheetid>` is NOT a bug — confirmed BP behaviour.
+   Assign them to the same page as the Block they guard. Do NOT raise on missing
+   subsheetid for these types.
+
+4. Block → Recover edge is always implicit — it is never in the XML. The parser
+   must construct this edge (`on_exception` label) for every Block/Recover pair
+   on the same page. Omitting it produces an incomplete process map.
+
+5. `Resume`'s `<onsuccess>` is a normal explicit edge — capture it as usual.
+
+6. `<o>` tag is equivalent to `<output>` — empirically observed in some BP versions.
+   Parser must handle both.
+
+7. WaitStart/WaitEnd XML type strings are `WaitStart`/`WaitEnd` (PascalCase, no space).
+   Same for `LoopStart`/`LoopEnd`. Match by `<groupid>` for Wait pairs.
 
 ## Key Pydantic models (Phase 3 reference)
 
