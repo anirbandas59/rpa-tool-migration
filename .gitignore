@@ -16,6 +16,7 @@ wheels/
 
 # Testing & coverage
 .pytest_cache/
+.ruff_cache/
 .coverage
 htmlcov/
 coverage.xml
@@ -40,3 +41,4 @@ Thumbs.db
 
 # Claude (local)
 .claude/
+graphify-out/cache/
