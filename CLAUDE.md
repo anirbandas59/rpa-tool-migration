@@ -123,7 +123,7 @@ The parser entry point is `parse_element(root_el, release_id)` — use it direct
 when extracting artefacts from a release to avoid writing temp files.
 `parse(filepath)` is a thin wrapper around `parse_element`.
 
-```
+```xml
 <bpr:release>
   <bpr:contents count="N">   ← N = total item count across ALL types
     <process>  … </process>          ← parse via parse_element()

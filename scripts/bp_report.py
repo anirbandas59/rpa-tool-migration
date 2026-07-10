@@ -13,7 +13,7 @@ import sys
 from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(__file__))
-from bp_parser import IMPLICIT_PAGE_ID, parse
+from bp_parser_v2 import IMPLICIT_PAGE_ID, parse
 
 # ---------------------------------------------------------------------------
 # Helpers
