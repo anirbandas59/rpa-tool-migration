@@ -1,0 +1,327 @@
+# ============================================================================
+# PID171 LOADER - FIXED VERSION
+# Original: samples/pad/PID171_loader.txt (unchanged)
+# Fixes applied: F2, F4, F5, F9, F12  (see docs/PID171_PAD_FIX_NOTES.md)
+# Lines marked "# FIX Fx:" are new or changed; everything else is verbatim.
+#
+# NOTE: ControlRepository / ConnectionReferences JSON blocks are intentionally
+# omitted. Paste these function bodies into the EXISTING flows, where the
+# Office 365 connection reference (480424f2-a42e-4e13-9e4f-5c212c2dfa3c)
+# already exists. Do not paste into a brand-new empty flow.
+# ============================================================================
+
+FUNCTION Main_copy GLOBAL
+    # ############### Initialize ###############
+    **REGION Initialise Values
+    SET txt_ExceptionType TO $'''%''%'''
+    SET txt_ExceptionMessage TO $'''%''%'''
+    SET flg_SendExceptionEmail TO False
+    SET flg_Screenshot TO True
+    SET obj_Config TO {{ }}
+    SET num_ItemsAdded TO 0
+    SET txt_FailedItemsLog TO $'''%''%'''
+    SET Out_num_MailItemCount TO 0
+    SET Out_txt_ExceptionDetail TO $'''%''%'''
+    # FIX F9: guard for the Dataverse work-queue-item Value column capacity.
+    # Encrypted payload (JSON + base64 attachments + AES) longer than this is
+    # rejected before enqueue. Move to config (e.g. Ctrl_MaxQueueValueLength)
+    # once the key is added to the config file.
+    SET num_MaxQueueValueLength TO 1000000
+    Variables.ConvertJsonToCustomObject Json: In_txt_Config CustomObject=> obj_Config
+    IF IsEmpty(obj_Config) THEN
+        SET flg_Screenshot TO False
+        SET txt_ExceptionMessage TO $'''No data present in config object input'''
+        FlowControl.ThrowCustomError CustomErrorCode: $'''System Exception''' CustomErrorMessage: txt_ExceptionMessage
+    END
+    **ENDREGION
+    # # Load all Config data
+    CALL 'Load Config Data'
+    # # ── Phase 1: Fetch Emails (with pagination + retry) ─────────────
+    BLOCK 'Get unprocessed emails'
+ON BLOCK ERROR 'Business Exception' IsUserDefinedErrorCode: True
+    SET txt_ExceptionType TO $'''Business Exception'''
+    GOTO 'End'
+ON BLOCK ERROR 'System Unavailable Exception' IsUserDefinedErrorCode: True
+    # FIX F2: preserve the System Unavailable classification raised by
+    # 'Fetch Emails from Mailbox' after the Outlook retries are exhausted.
+    CALL 'Get Error'
+    SET txt_ExceptionType TO $'''System Unavailable Exception'''
+    SET txt_ExceptionMessage TO 'Failed to fetch emails from mailbox - ' + obj_LastError.Message
+    GOTO 'Error Block'
+ON BLOCK ERROR
+    CALL 'Get Error'
+    SET txt_ExceptionMessage TO 'Failed to fetch emails from mailbox - ' + obj_LastError.Message
+    GOTO 'Error Block'
+END
+        CALL 'Fetch Emails from Mailbox'
+    END
+    IF lst_MailItems.Count = 0 THEN
+        SET flg_Screenshot TO False
+        SET txt_ExceptionMessage TO $'''No mail found after %num_MailRetryLimit% attempts.'''
+        CALL 'Send Business Exception Mail' In_txt_To_Email: obj_Config['Mail_BusinessExceptionTo'] In_txt_Cc_Email: obj_Config['Mail_BusinessExceptionCc'] In_txt_Subject: $'''%txt_ProcessName% - Business Error''' In_txt_ErrorMessage: txt_ExceptionMessage In_lst_Attachments: []
+        GOTO 'End'
+    END
+    # # ── Phase 2: Per-Email Processing (isolated, hash-keyed, scoped folders) ──
+    BLOCK 'Add to Queue Block'
+ON BLOCK ERROR all
+    SET flg_Screenshot TO False
+    CALL 'Get Error'
+    GOTO 'Error Block'
+END
+        LOOP FOREACH obj_CurrentMail IN lst_MailItems
+            # # --- 2a: Move mails with attachment to process folder, else move to exception folder ---
+            IF obj_CurrentMail.hasAttachments = False THEN
+                SET txt_ExceptionMessage TO $'''Mail found with subject: <b>%obj_Config['Mail_EmailSubject']%</b> from <b>%obj_Config['Mail_SenderMailId']%</b> has no attachments. Moved to Exception folder.'''
+                CALL 'Send Business Exception Mail' In_txt_To_Email: obj_Config['Mail_BusinessExceptionTo'] In_txt_Cc_Email: obj_Config['Mail_BusinessExceptionCc'] In_txt_Subject: $'''%txt_ProcessName% - Business Error''' In_txt_ErrorMessage: txt_ExceptionMessage In_lst_Attachments: []
+                @@folderPath: '%txt_MailExceptionFolder%'
+@@connectionDisplayName: 'Office 365 Outlook'
+External.InvokeCloudConnector Connection: '480424f2-a42e-4e13-9e4f-5c212c2dfa3c' ConnectorId: '/providers/Microsoft.PowerApps/apis/shared_office365' OperationId: 'MoveV2' @messageId: obj_CurrentMail.id @folderPath: txt_MailExceptionFolder @mailboxAddress: obj_Config['Mail_MailboxName'] @MoveV2Response=> obj_MailResponse
+                NEXT LOOP
+            END
+            @@folderPath: '%txt_MailProcessFolder%'
+@@connectionDisplayName: 'Office 365 Outlook'
+DISABLE External.InvokeCloudConnector Connection: '480424f2-a42e-4e13-9e4f-5c212c2dfa3c' ConnectorId: '/providers/Microsoft.PowerApps/apis/shared_office365' OperationId: 'MoveV2' @messageId: obj_CurrentMail.id @folderPath: txt_MailProcessFolder @mailboxAddress: obj_Config['Mail_MailboxName'] @MoveV2Response=> obj_MailResponse
+            # # --- 2b: Compute SHA-256 hash of Mail id, truncated to 40 chars ---
+            BLOCK 'Run Hash script'
+ON BLOCK ERROR
+    CALL 'Get Error'
+    SET txt_FailedItemsLog TO txt_FailedItemsLog + obj_CurrentMail.id + ': Hash generation failed - ' + obj_LastError.Message
+    GOTO 'Next loop - Mail Items'
+END
+                Scripting.RunDotNetScript Imports: $'''System.Security.Cryptography
+System.Text
+System.Linq''' Language: System.DotNetActionLanguageType.CSharp Script: $'''using (SHA256 sha256 = SHA256.Create())  {
+            byte[] bytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(emailId));
+            hashResult = string.Concat(bytes.Select(b => b.ToString(\"x2\"))).Substring(0, 40);
+}''' @'name:emailId': obj_CurrentMail.id @'type:emailId': $'''String''' @'direction:emailId': $'''In''' @'name:hashResult': $'''''' @'type:hashResult': $'''String''' @'direction:hashResult': $'''Out''' @hashResult=> txt_HashOutput
+                SET txt_MailIdHash TO txt_HashOutput
+            END
+            # # --- 2c: Duplicate check against hashed name of Queued item  ---
+            BLOCK 'Duplicate Item Check'
+ON BLOCK ERROR
+    CALL 'Get Error'
+    SET txt_FailedItemsLog TO txt_FailedItemsLog + obj_CurrentMail.id + ': Duplicate check failed - ' + obj_LastError.Message
+    # FIX F12: skip this mail on dedup-check failure instead of falling through
+    # to an IF that evaluates the PREVIOUS mail's (or an undefined) result.
+    # The mail stays unread in the source folder and is retried on the next run.
+    GOTO 'Next loop - Mail Items'
+END
+                @@'InputSummaryValue:WORKQUEUE': '%obj_Config[\'Ctrl_WorkQueueId\']%'
+WorkQueues.GetWorkQueueItems WorkQueue: obj_Config['Ctrl_WorkQueueId'] FilterRows: $'''<attribute name=\"name\" />
+<attribute name=\"statecode\" />
+<filter type=\"and\">
+    <condition attribute=\"name\" operator=\"eq\" value=\"%txt_MailIdHash%\" />
+    <condition attribute=\"statecode\" operator=\"in\">
+         <value>0</value><value>1</value>
+    </condition>
+</filter>''' RowsToReturn: 5000 WorkQueueItems=> lst_WorkQueueItems
+            END
+            IF lst_WorkQueueItems.Count > 0 THEN
+                NEXT LOOP
+            END
+            # # --- 2d: Per-email scoped download folder
+            **REGION Prepare mail folders
+            SET txt_EmailInputsPath TO txt_DownloadPath + '\\' + txt_MailIdHash + obj_Config['Path_InputFile']
+            **ENDREGION
+            Variables.CreateNewList List=> lst_Attachments
+            LOOP FOREACH obj_CurrentItem IN obj_CurrentMail.attachments
+                SET obj_Attachment TO { 'Id': obj_CurrentItem.id, 'Name': obj_CurrentItem.name, 'Filepath': txt_EmailInputsPath + '\\' + obj_CurrentItem.name, 'ContentBytes': obj_CurrentItem.contentBytes }
+                Variables.AddItemToList Item: obj_Attachment List: lst_Attachments
+            END
+            # # --- 2e: Create input values for queue item ---
+            SET obj_QueueInputs TO { 'Id': obj_CurrentMail.id, 'Subject': obj_CurrentMail.subject, 'ReceivedOn': obj_CurrentMail.receivedDateTime, 'MailAttachments': lst_Attachments }
+            Variables.ConvertCustomObjectToJson CustomObject: obj_QueueInputs Json=> txt_QueueInputsObject
+            Cryptography.EncryptText.EncryptTextWithAES Encoding: Cryptography.EncryptionEncoding.Unicode TextToEncrypt: txt_QueueInputsObject EncryptionKey: obj_Config['Sec_EncDecSecret'] PaddingMode: Cryptography.PaddingMode.PKCS7 KeySize: Cryptography.AESKeySize.Bits256 EncryptedText=> txt_Enc_QueueInput
+            # FIX F9: reject payloads that exceed the work-queue-item Value
+            # capacity BEFORE enqueue, treat like an invalid mail (notify +
+            # move to exception folder) instead of failing at enqueue time.
+            IF txt_Enc_QueueInput.Length > num_MaxQueueValueLength THEN
+                SET txt_ExceptionMessage TO $'''Mail with subject: <b>%obj_CurrentMail.subject%</b> has attachments too large for a work queue item (%txt_Enc_QueueInput.Length% chars encrypted). Moved to Exception folder.'''
+                CALL 'Send Business Exception Mail' In_txt_To_Email: obj_Config['Mail_BusinessExceptionTo'] In_txt_Cc_Email: obj_Config['Mail_BusinessExceptionCc'] In_txt_Subject: $'''%txt_ProcessName% - Business Error''' In_txt_ErrorMessage: txt_ExceptionMessage In_lst_Attachments: []
+                @@folderPath: '%txt_MailExceptionFolder%'
+@@connectionDisplayName: 'Office 365 Outlook'
+External.InvokeCloudConnector Connection: '480424f2-a42e-4e13-9e4f-5c212c2dfa3c' ConnectorId: '/providers/Microsoft.PowerApps/apis/shared_office365' OperationId: 'MoveV2' @messageId: obj_CurrentMail.id @folderPath: txt_MailExceptionFolder @mailboxAddress: obj_Config['Mail_MailboxName'] @MoveV2Response=> obj_MailResponse
+                SET txt_FailedItemsLog TO txt_FailedItemsLog + obj_CurrentMail.id + ': Payload too large for work queue item. '
+                NEXT LOOP
+            END
+            BLOCK 'Add to Work Queue'
+ON BLOCK ERROR
+    CALL 'Get Error'
+    SET txt_FailedItemsLog TO txt_FailedItemsLog + obj_CurrentMail.id + ': Enqueue failed - ' + obj_LastError.Message
+    GOTO 'Next loop - Mail Items'
+END
+                @@'InputSummaryValue:WORKQUEUE': '%obj_Config[\'Ctrl_WorkQueueId\']%'
+WorkQueues.EnqueueWorkQueueItem.WithoutUniqueId WorkQueue: obj_Config['Ctrl_WorkQueueId'] Status: WorkQueues.WorkQueueItemEnqueueStatus.Queued Priority: WorkQueues.WorkQueueItemPriority.Normal Name: txt_MailIdHash Value: txt_Enc_QueueInput WorkQueueItem=> obj_NewWorkQueueItem
+                Variables.IncreaseVariable Value: num_ItemsAdded IncrementValue: 1
+            END
+            LABEL 'Next loop - Mail Items'
+        END
+    END
+    GOTO 'End'
+    LABEL 'Error Block'
+    # FIX F2: propagate the real exception classification to the parent cloud
+    # flow (System Exception vs System Unavailable Exception).
+    FlowControl.ThrowCustomError CustomErrorCode: txt_ExceptionType CustomErrorMessage: txt_ExceptionMessage
+    LABEL 'End'
+    SET Out_num_MailItemCount TO num_ItemsAdded
+    SET Out_txt_ExceptionDetail TO txt_FailedItemsLog
+END FUNCTION
+
+==================================>
+
+FUNCTION 'Get Error' GLOBAL
+    # ############### Capture Error Details ###############
+    ERROR => obj_LastError
+    SET txt_ExceptionType TO $'''System Exception'''
+    SET txt_ExceptionMessage TO $'''Error message :%obj_LastError.Message% |
+Flow name : %obj_LastError.SubflowName% |
+Action name :%obj_LastError.ActionName%'''
+    # ############### Capture Screenshot ###############
+    IF flg_Screenshot = True THEN
+        DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> dt_CurrentDateTimeVal
+        Text.ConvertDateTimeToText.FromCustomDateTime DateTime: dt_CurrentDateTimeVal CustomFormat: $'''MMddyy_hhmmss''' Result=> txt_ScreenShotTime
+        Workstation.TakeScreenshot.TakeScreenshotAndSaveToFile File: $'''%txt_ScreenshotPath%\\%txt_ScreenShotTime%.png''' ImageFormat: System.ImageFormat.Png
+        ON ERROR
+
+        END
+        SET flg_Screenshot TO False
+    END
+END FUNCTION
+
+==================================>
+
+FUNCTION 'Send Business Exception Mail' In_txt_To_Email, In_txt_Cc_Email, In_txt_Subject, In_txt_ErrorMessage, In_lst_Attachments
+    SET txt_ErrorMessage TO $'''%''%'''
+    DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> dt_CurrentDateTime
+    Text.ConvertDateTimeToText.FromDateTime DateTime: dt_CurrentDateTime StandardFormat: Text.WellKnownDateTimeFormat.LongDate Result=> txt_FormattedDateTime
+    SET txt_MailBody TO GLOBAL.obj_Config['Mail_EmailBodyBusinessException']
+    Text.Replace.ReplaceText Text: txt_MailBody TextToFind: $'''{{RunDate}}''' IgnoreCase: False ReplaceWith: txt_FormattedDateTime ActivateEscapeSequences: False ComparisonType: Text.TextComparisonType.CultureSensitive Result=> txt_MailBody
+    Text.Replace.ReplaceText Text: txt_MailBody TextToFind: $'''{{ErrorMessage}}''' IgnoreCase: False ReplaceWith: In_txt_ErrorMessage ActivateEscapeSequences: False ComparisonType: Text.TextComparisonType.CultureSensitive Result=> txt_MailBody
+    Text.Replace.ReplaceText Text: txt_MailBody TextToFind: $'''{{QueueName}}''' IgnoreCase: False ReplaceWith: GLOBAL.obj_Config['Ctrl_QueueName'] ActivateEscapeSequences: False ComparisonType: Text.TextComparisonType.CultureSensitive Result=> txt_MailBody
+    Text.Replace.ReplaceText Text: txt_MailBody TextToFind: $'''{{ResourceName}}''' IgnoreCase: False ReplaceWith: GLOBAL.txt_ResourceName ActivateEscapeSequences: False ComparisonType: Text.TextComparisonType.CultureSensitive Result=> txt_MailBody
+    Text.Replace.ReplaceText Text: txt_MailBody TextToFind: $'''{{Username}}''' IgnoreCase: False ReplaceWith: GLOBAL.txt_UserName ActivateEscapeSequences: False ComparisonType: Text.TextComparisonType.CultureSensitive Result=> txt_MailBody
+    Text.Replace.ReplaceText Text: txt_MailBody TextToFind: $'''{{ProcessName}}''' IgnoreCase: False ReplaceWith: GLOBAL.txt_ProcessName ActivateEscapeSequences: False ComparisonType: Text.TextComparisonType.CultureSensitive Result=> txt_MailBody
+    IF (In_txt_To_Email + In_txt_Cc_Email) = $'''%''%''' THEN
+        FlowControl.ThrowCustomError CustomErrorCode: $'''Business Exception''' CustomErrorMessage: $'''Recipients cannot be empty or blank'''
+    END
+    IF In_txt_Subject = $'''%''%''' THEN
+        FlowControl.ThrowCustomError CustomErrorCode: $'''Business Exception''' CustomErrorMessage: $'''Subject cannot be empty or blank'''
+    END
+    Variables.CreateNewList List=> lst_AttachmentsList
+    SET lst_AttachmentsList TO []
+    IF In_lst_Attachments.Count > 0 THEN
+        LOOP FOREACH CurrentItem IN In_lst_Attachments
+            File.GetPathPart File: CurrentItem RootPath=> txt_RootPath Directory=> txt_Directory FileName=> txt_FileName FileNameWithoutExtension=> FileNameNoExtension Extension=> txt_FileExtension
+            File.ConvertToBase64 File: CurrentItem Base64Text=> txt_Base64Text
+            SET obj_AttachmentObject TO { 'Name': txt_FileName, 'ContentBytes': txt_Base64Text }
+            Variables.AddItemToList Item: obj_AttachmentObject List: lst_AttachmentsList
+        END
+    END
+    @@'emailMessage/Sensitivity': ''
+@@connectionDisplayName: 'Office 365 Outlook'
+External.InvokeCloudConnector Connection: '480424f2-a42e-4e13-9e4f-5c212c2dfa3c' ConnectorId: '/providers/Microsoft.PowerApps/apis/shared_office365' OperationId: 'SendEmailV2' @'emailMessage/To': In_txt_To_Email @'emailMessage/Subject': In_txt_Subject @'emailMessage/Body': txt_MailBody @'emailMessage/From': GLOBAL.obj_Config['Mail_MailboxName'] @'emailMessage/Cc': In_txt_Cc_Email @'emailMessage/Attachments': lst_AttachmentsList @'emailMessage/Importance': $'''Normal'''
+    ON ERROR
+        CALL 'Get Error'
+        SET txt_ErrorMessage TO 'Could not send email - ' + GLOBAL.obj_LastError.Message
+        GOTO 'Error File Process'
+    END
+    EXIT FUNCTION
+    LABEL 'Error File Process'
+    FlowControl.ThrowCustomError CustomErrorCode: $'''Business Exception''' CustomErrorMessage: txt_ErrorMessage
+END FUNCTION
+
+==================================>
+
+FUNCTION 'Load Config Data' GLOBAL
+    BLOCK 'Assign values from config'
+ON BLOCK ERROR all
+    SET flg_Screenshot TO False
+    SET flg_ConfigError TO True
+    CALL 'Get Error'
+    THROW ERROR
+END
+        # ####################### Get Computer name and User name #######################
+        System.GetEnvironmentVariable.GetEnvironmentVariable Name: $'''USERNAME''' Value=> txt_UserName
+        SET txt_ProcessName TO obj_Config['Ctrl_ProcessName']
+        System.GetEnvironmentVariable.GetEnvironmentVariable Name: $'''COMPUTERNAME''' Value=> txt_ResourceName
+        Text.Trim Text: txt_ProcessName TrimOption: Text.TrimOption.Both TrimmedText=> txt_ProcessName
+        Text.Trim Text: txt_ResourceName TrimOption: Text.TrimOption.Both TrimmedText=> txt_ResourceName
+        # ####################### Get Limits and Wait times #######################
+        Text.ToNumber Text: obj_Config['App_WaitTime'] Number=> num_App_WaitTime
+        Text.ToNumber Text: obj_Config['App_MailFetchLimit'] Number=> num_MailFetchLimit
+        SET num_MailRunCount TO 0
+        Text.ToNumber Text: obj_Config['Ctrl_ConsecutiveExceptionLimit'] Number=> num_MailRetryLimit
+        SET lst_MailItems TO []
+        # ####################### Set mail folder paths #######################
+        SET txt_MailProcessFolder TO obj_Config['Mail_SubFolder']
+        SET txt_MailCompletedFolder TO obj_Config['Mail_OutlookFolder'] + '/' + obj_Config['Mail_EmailCompleted']
+        SET txt_MailExceptionFolder TO obj_Config['Mail_OutlookFolder'] + '/' + obj_Config['Mail_EmailException']
+        Text.Replace.ReplaceText Text: txt_MailCompletedFolder TextToFind: $'''\\''' IgnoreCase: False ReplaceWith: $'''/''' ActivateEscapeSequences: False ComparisonType: Text.TextComparisonType.CultureSensitive Result=> txt_MailCompletedFolder
+        Text.Replace.ReplaceText Text: txt_MailExceptionFolder TextToFind: $'''\\''' IgnoreCase: False ReplaceWith: $'''/''' ActivateEscapeSequences: False ComparisonType: Text.TextComparisonType.CultureSensitive Result=> txt_MailExceptionFolder
+        # ####################### Set local folder paths #######################
+        Text.Replace.ReplaceText Text: obj_Config['Path_RootFolder'] TextToFind: $'''<<username>>''' IgnoreCase: False ReplaceWith: txt_UserName ActivateEscapeSequences: False ComparisonType: Text.TextComparisonType.CultureSensitive Result=> txt_RootPath
+        IF (Folder.IfFolderExists.DoesNotExist Path: txt_RootPath) THEN
+            SET txt_ExceptionMessage TO 'Folder not found: ' + txt_RootPath
+            FlowControl.ThrowCustomError CustomErrorCode: $'''System Exception''' CustomErrorMessage: txt_ExceptionMessage
+        END
+        Text.Replace.ReplaceText Text: obj_Config['Path_ProjectFolder'] TextToFind: $'''<<processname>>''' IgnoreCase: False ReplaceWith: txt_ProcessName ActivateEscapeSequences: False ComparisonType: Text.TextComparisonType.CultureSensitive Result=> txt_ProjectFolder
+        IF (Folder.IfFolderExists.DoesNotExist Path: txt_RootPath + txt_ProjectFolder) THEN
+            Text.CropText.CropTextAfterFlag Text: txt_ProjectFolder FromFlag: $'''\\''' IgnoreCase: False CroppedText=> txt_NewFolder
+            Folder.Create FolderPath: txt_RootPath FolderName: txt_NewFolder Folder=> txt_NewFolder
+        END
+        SET txt_DownloadPath TO $'''%txt_RootPath%%txt_ProjectFolder%%obj_Config['Path_EmailDownload']%'''
+        IF (Folder.IfFolderExists.DoesNotExist Path: txt_DownloadPath) THEN
+            Text.CropText.CropTextAfterFlag Text: txt_ProjectFolder FromFlag: $'''\\''' IgnoreCase: False CroppedText=> txt_NewFolder
+            Folder.Create FolderPath: txt_RootPath FolderName: $'''%txt_NewFolder%%obj_Config['Path_EmailDownload']%''' Folder=> txt_NewFolder
+        END
+        SET txt_SummaryReportPath TO $'''%txt_RootPath%%txt_ProjectFolder%%obj_Config['Path_SummaryReport']%'''
+        IF (Folder.IfFolderExists.DoesNotExist Path: txt_SummaryReportPath) THEN
+            Text.CropText.CropTextAfterFlag Text: txt_ProjectFolder FromFlag: $'''\\''' IgnoreCase: False CroppedText=> txt_NewFolder
+            Folder.Create FolderPath: txt_RootPath FolderName: $'''%txt_NewFolder%%obj_Config['Path_SummaryReport']%''' Folder=> txt_NewFolder
+        END
+        SET txt_ScreenshotPath TO $'''%txt_RootPath%%txt_ProjectFolder%%obj_Config['Path_ScreenshotFolder']%'''
+        IF (Folder.IfFolderExists.DoesNotExist Path: txt_ScreenshotPath) THEN
+            Text.CropText.CropTextAfterFlag Text: txt_ProjectFolder FromFlag: $'''\\''' IgnoreCase: False CroppedText=> txt_NewFolder
+            Folder.Create FolderPath: txt_RootPath FolderName: $'''%txt_NewFolder%%obj_Config['Path_ScreenshotFolder']%''' Folder=> txt_NewFolder
+        END
+    END
+END FUNCTION
+
+==================================>
+
+FUNCTION 'Fetch Emails from Mailbox' GLOBAL
+    SET flg_Success TO False
+    LOOP num_MailRunCount FROM 1 TO num_MailRetryLimit STEP 1
+        BLOCK 'Get Email block'
+ON BLOCK ERROR
+    # FIX F4/F2: retry Outlook API failures up to num_MailRetryLimit attempts
+    # (no logging per design decision), then raise System Unavailable
+    # Exception. The old handler rethrew on the FIRST failure, defeating the
+    # retry loop.
+    SET flg_Screenshot TO False
+    CALL 'Get Error'
+    IF num_MailRunCount >= num_MailRetryLimit THEN
+        FlowControl.ThrowCustomError CustomErrorCode: $'''System Unavailable Exception''' CustomErrorMessage: 'Outlook is not reachable after ' + num_MailRetryLimit + ' attempts - ' + obj_LastError.Message
+    END
+END
+            @@folderPath: '%obj_Config[\'Mail_OutlookFolder\']%'
+@@connectionDisplayName: 'Office 365 Outlook'
+External.InvokeCloudConnector Connection: '480424f2-a42e-4e13-9e4f-5c212c2dfa3c' ConnectorId: '/providers/Microsoft.PowerApps/apis/shared_office365' OperationId: 'GetEmailsV3' @folderPath: obj_Config['Mail_OutlookFolder'] @fetchOnlyWithAttachment: False @subjectFilter: obj_Config['Mail_EmailSubject'] @fetchOnlyUnread: True @mailboxAddress: obj_Config['Mail_MailboxName'] @includeAttachments: True @top: num_MailFetchLimit @GetEmailsV3Response=> obj_ReceivedEmails
+            IF obj_ReceivedEmails.value.Count > 0 THEN
+                SET lst_MailItems TO obj_ReceivedEmails.value
+                LOOP num_ItemIndex FROM lst_MailItems.Count - 1 TO 0 STEP -1
+                    SET txt_FromAddress TO lst_MailItems[num_ItemIndex]['from']
+                    IF txt_FromAddress <> obj_Config['Mail_SenderMailId'] THEN
+                        Variables.RemoveItemFromList.RemoveItemFromListByIndex ItemIndex: num_ItemIndex List: lst_MailItems
+                    END
+                END
+                SET flg_Success TO True
+                EXIT LOOP
+            END
+        END
+        # FIX F5: incremental back-off between attempts. The old code multiplied
+        # by num_ConnectionRetryCount which was initialised to 0 and never
+        # incremented, so every retry waited 0 seconds.
+        WAIT num_MailRunCount * num_App_WaitTime
+    END
+END FUNCTION
