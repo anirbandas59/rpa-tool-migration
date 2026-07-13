@@ -577,22 +577,34 @@ FUNCTION 'Mark Complete' In_obj_WorkQueueItem
     SET obj_WorkQueueItem TO In_obj_WorkQueueItem
     DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> dt_CurrentDateTime
     Text.ConvertDateTimeToText.FromDateTime DateTime: dt_CurrentDateTime StandardFormat: Text.WellKnownDateTimeFormat.SortableDateTime Result=> txt_FormattedDateTime
-    # FIX EB-2: PAD queue updates are Dataverse Web API calls subject to
-    # transient failures (service-protection 429s, token refresh, network) -
-    # unlike BP's in-process clsWorkQueuesActions. Retry with incremental
-    # back-off; a persistent failure still bubbles to the global handler.
+    # FIX EB-2 (corrected): ON BLOCK ERROR handlers cannot carry conditional
+    # logic - PAD runs the handler body as a fixed action sequence, not a
+    # branch (see 'Launch Application's flg_IsAppRunning pattern: the
+    # retries-exhausted decision is always made AFTER the loop, never inside
+    # the handler). The handler below is a pure swallow (do nothing, let the
+    # loop retry) - it deliberately does NOT call 'Get Error', since that
+    # would overwrite GLOBAL.txt_ExceptionType / txt_ExceptionMessage with the
+    # QUEUE UPDATE's own error and clobber the item's exception context.
+    SET flg_QueueUpdateSuccess TO False
     LOOP num_QueueUpdateRetryCount FROM 1 TO GLOBAL.num_MaxRetryLimit STEP 1
         BLOCK 'Queue update block - Complete'
 ON BLOCK ERROR
-    IF num_QueueUpdateRetryCount >= GLOBAL.num_MaxRetryLimit THEN
-        THROW ERROR
-    END
+
 END
             WorkQueues.UpdateProcessingNotes.WithProcessingNotes WorkQueueItem: obj_WorkQueueItem ProcessingNotes: 'Processing completed at ' + txt_FormattedDateTime
             WorkQueues.UpdateWorkQueueItem.UpdateWithProcessingNotes WorkQueueItem: obj_WorkQueueItem Status: WorkQueues.WorkQueueItemStatus.Processed
+            SET flg_QueueUpdateSuccess TO True
             EXIT LOOP
         END
         WAIT GLOBAL.num_Delay_S * num_QueueUpdateRetryCount
+    END
+    IF flg_QueueUpdateSuccess = False THEN
+        # NOTE (open question, see fix notes): unlike EB-1, a Mark-Complete
+        # failure after retries bubbles straight to Main_copy's global
+        # handler - the item is NOT explicitly routed through 'Mark
+        # Exception'. Left as-is pending a decision on whether to close this
+        # symmetric gap.
+        FlowControl.ThrowCustomError CustomErrorCode: $'''System Unavailable Exception''' CustomErrorMessage: 'Unable to mark work queue item complete after ' + GLOBAL.num_MaxRetryLimit + ' attempts.'
     END
     # FIX F15: success/exception counters are maintained with plain SET in
     # 'Process Work Queue Items' (GLOBAL scope). Variables.IncreaseVariable on
@@ -615,19 +627,27 @@ FUNCTION 'Mark Exception' In_obj_WorkQueueItem
             Variables.AddItemToList Item: GLOBAL.txt_LastScreenshotPath List: lst_ScreenshotAttachments
         END
     END
+    # FIX EB-2 (corrected): same pattern as 'Mark Complete' above - empty
+    # (swallow) handlers, a success flag, and the retries-exhausted decision
+    # made AFTER each loop. None of these handlers call 'Get Error', so
+    # GLOBAL.txt_ExceptionType / txt_ExceptionMessage (the ITEM's original
+    # exception, read below for ProcessingResult and mail bodies) are never
+    # touched by a queue-update retry.
     IF GLOBAL.txt_ExceptionType.ToLower = $'''business exception''' THEN
-        # FIX EB-2: retry transient Dataverse failures on the status update.
+        SET flg_QueueUpdateSuccess TO False
         LOOP num_QueueUpdateRetryCount FROM 1 TO GLOBAL.num_MaxRetryLimit STEP 1
             BLOCK 'Queue update block - BE'
 ON BLOCK ERROR
-    IF num_QueueUpdateRetryCount >= GLOBAL.num_MaxRetryLimit THEN
-        THROW ERROR
-    END
+
 END
                 WorkQueues.UpdateWorkQueueItem.UpdateWithProcessingNotes WorkQueueItem: obj_WorkQueueItem Status: WorkQueues.WorkQueueItemStatus.BusinessException ProcessingResult: GLOBAL.txt_ExceptionMessage
+                SET flg_QueueUpdateSuccess TO True
                 EXIT LOOP
             END
             WAIT GLOBAL.num_Delay_S * num_QueueUpdateRetryCount
+        END
+        IF flg_QueueUpdateSuccess = False THEN
+            FlowControl.ThrowCustomError CustomErrorCode: $'''System Unavailable Exception''' CustomErrorMessage: 'Unable to update work queue item status after ' + GLOBAL.num_MaxRetryLimit + ' attempts.'
         END
         CALL 'Send Business Exception Mail' In_txt_To_Email: GLOBAL.obj_Config['Mail_BusinessExceptionTo'] In_txt_Cc_Email: GLOBAL.obj_Config['Mail_BusinessExceptionCc'] In_txt_Subject: $'''%GLOBAL.txt_ProcessName% - Business Error''' In_txt_ErrorMessage: GLOBAL.txt_ExceptionMessage In_lst_Attachments: []
     ELSE IF GLOBAL.txt_ExceptionType.ToLower = $'''system unavailable exception''' THEN
@@ -636,18 +656,20 @@ END
         # notification (with screenshot) is sent once by Main_copy's
         # 'System Error' path after this item is marked, so
         # flg_SendExceptionEmail stays True here.
-        # FIX EB-2: retry transient Dataverse failures on the status update.
+        SET flg_QueueUpdateSuccess TO False
         LOOP num_QueueUpdateRetryCount FROM 1 TO GLOBAL.num_MaxRetryLimit STEP 1
             BLOCK 'Queue update block - SUE'
 ON BLOCK ERROR
-    IF num_QueueUpdateRetryCount >= GLOBAL.num_MaxRetryLimit THEN
-        THROW ERROR
-    END
+
 END
                 WorkQueues.UpdateWorkQueueItem.UpdateWithProcessingNotes WorkQueueItem: obj_WorkQueueItem Status: WorkQueues.WorkQueueItemStatus.ITException ProcessingResult: GLOBAL.txt_ExceptionMessage
+                SET flg_QueueUpdateSuccess TO True
                 EXIT LOOP
             END
             WAIT GLOBAL.num_Delay_S * num_QueueUpdateRetryCount
+        END
+        IF flg_QueueUpdateSuccess = False THEN
+            FlowControl.ThrowCustomError CustomErrorCode: $'''System Unavailable Exception''' CustomErrorMessage: 'Unable to update work queue item status after ' + GLOBAL.num_MaxRetryLimit + ' attempts.'
         END
     ELSE
         # FIX F3: a System Exception only reaches here after
@@ -655,18 +677,20 @@ END
         # is the consecutive-failure terminal path (BP: TERMINATE). The
         # consecutive mail replaces the generic system mail - disarm the
         # System Error path's mail to avoid a duplicate notification.
-        # FIX EB-2: retry transient Dataverse failures on the status update.
+        SET flg_QueueUpdateSuccess TO False
         LOOP num_QueueUpdateRetryCount FROM 1 TO GLOBAL.num_MaxRetryLimit STEP 1
             BLOCK 'Queue update block - SE'
 ON BLOCK ERROR
-    IF num_QueueUpdateRetryCount >= GLOBAL.num_MaxRetryLimit THEN
-        THROW ERROR
-    END
+
 END
                 WorkQueues.UpdateWorkQueueItem.UpdateWithProcessingNotes WorkQueueItem: obj_WorkQueueItem Status: WorkQueues.WorkQueueItemStatus.GenericException ProcessingResult: GLOBAL.num_ConsecutiveExcLimit + ' consecutive incidents of ' + GLOBAL.txt_ExceptionType + ': ' + GLOBAL.txt_ExceptionMessage
+                SET flg_QueueUpdateSuccess TO True
                 EXIT LOOP
             END
             WAIT GLOBAL.num_Delay_S * num_QueueUpdateRetryCount
+        END
+        IF flg_QueueUpdateSuccess = False THEN
+            FlowControl.ThrowCustomError CustomErrorCode: $'''System Unavailable Exception''' CustomErrorMessage: 'Unable to update work queue item status after ' + GLOBAL.num_MaxRetryLimit + ' attempts.'
         END
         CALL 'Send Consecutive Exception Mail' In_txt_To_Email: GLOBAL.obj_Config['Mail_SystemExceptionTo'] In_txt_Cc_Email: GLOBAL.obj_Config['Mail_SystemExceptionCc'] In_txt_Subject: $'''%GLOBAL.txt_ProcessName% - Consecutive error encountered''' In_txt_ErrorMessage: GLOBAL.txt_ExceptionMessage In_lst_Attachments: lst_ScreenshotAttachments
         SET GLOBAL.flg_SendExceptionEmail TO False
@@ -677,25 +701,37 @@ END FUNCTION
 
 FUNCTION 'Move Emails' In_txt_MessageId, In_txt_DestinationFolder
     IF (In_txt_DestinationFolder <> '' AND In_txt_MessageId <> '') = True THEN
-        # FIX F2: Outlook API calls retry num_MaxRetryLimit times with
-        # incremental back-off, then raise System Unavailable Exception.
+        # FIX F2 (corrected): ON BLOCK ERROR handlers cannot carry conditional
+        # logic - the handler swallows and lets the loop retry; the
+        # retries-exhausted decision is made AFTER the loop (same pattern as
+        # 'Launch Application's flg_IsAppRunning check). Called both from
+        # inside 'Process items block' (caught, routes the item through
+        # 'Mark Exception') and once from the already-marked exception path,
+        # BEFORE 'Reset All' builds the Data Gateway telemetry payload from
+        # GLOBAL.txt_ExceptionMessage. The handler deliberately does NOT call
+        # 'Get Error' - that would overwrite txt_ExceptionMessage with the
+        # mail-move's own error and corrupt the telemetry FinalOutcome field
+        # with the wrong failure reason if this retry later succeeds.
+        SET flg_MoveSuccess TO False
         LOOP num_MoveRetryCount FROM 1 TO GLOBAL.num_MaxRetryLimit STEP 1
             BLOCK 'Move email block'
 ON BLOCK ERROR
-    SET GLOBAL.flg_Screenshot TO False
-    CALL 'Get Error'
-    IF num_MoveRetryCount >= GLOBAL.num_MaxRetryLimit THEN
-        FlowControl.ThrowCustomError CustomErrorCode: $'''System Unavailable Exception''' CustomErrorMessage: 'Outlook is not reachable after ' + GLOBAL.num_MaxRetryLimit + ' attempts - ' + GLOBAL.txt_ExceptionMessage
-    END
+
 END
                 @@connectionDisplayName: 'Office 365 Outlook'
 External.InvokeCloudConnector Connection: '767fb7db-cc2e-48de-b921-e838c647a4e1' ConnectorId: '/providers/Microsoft.PowerApps/apis/shared_office365' OperationId: 'MarkAsRead_V3' @messageId: In_txt_MessageId @mailboxAddress: GLOBAL.txt_MailboxName @'body/isRead': $'''True'''
                 @@folderPath: '%In_txt_DestinationFolder%'
 @@connectionDisplayName: 'Office 365 Outlook'
 External.InvokeCloudConnector Connection: '767fb7db-cc2e-48de-b921-e838c647a4e1' ConnectorId: '/providers/Microsoft.PowerApps/apis/shared_office365' OperationId: 'MoveV2' @messageId: In_txt_MessageId @folderPath: In_txt_DestinationFolder @mailboxAddress: GLOBAL.txt_MailboxName @MoveV2Response=> obj_MoveMailResponse
+                SET flg_MoveSuccess TO True
                 EXIT LOOP
             END
             WAIT GLOBAL.num_Delay_S * num_MoveRetryCount
+        END
+        IF flg_MoveSuccess = False THEN
+            # Message intentionally omits the connector error detail (not
+            # captured, to protect GLOBAL.txt_ExceptionMessage - see above).
+            FlowControl.ThrowCustomError CustomErrorCode: $'''System Unavailable Exception''' CustomErrorMessage: 'Outlook is not reachable after ' + GLOBAL.num_MaxRetryLimit + ' attempts while moving message ' + In_txt_MessageId
         END
     END
 END FUNCTION

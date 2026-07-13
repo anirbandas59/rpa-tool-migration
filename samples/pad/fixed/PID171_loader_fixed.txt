@@ -292,21 +292,26 @@ END FUNCTION
 FUNCTION 'Fetch Emails from Mailbox' GLOBAL
     SET flg_Success TO False
     LOOP num_MailRunCount FROM 1 TO num_MailRetryLimit STEP 1
+        # FIX F4/F2 (corrected): ON BLOCK ERROR handlers cannot carry
+        # conditional logic - PAD runs the handler body as a fixed action
+        # sequence, not a branch. flg_FetchApiSuccess records whether THIS
+        # attempt's connector call completed without error; the
+        # retries-exhausted decision is made AFTER the loop, mirroring the
+        # original 'Launch Application' pattern (flg_IsAppRunning checked
+        # once the loop ends, never inside the handler).
+        SET flg_FetchApiSuccess TO False
         BLOCK 'Get Email block'
 ON BLOCK ERROR
-    # FIX F4/F2: retry Outlook API failures up to num_MailRetryLimit attempts
-    # (no logging per design decision), then raise System Unavailable
-    # Exception. The old handler rethrew on the FIRST failure, defeating the
-    # retry loop.
+    # Retry Outlook API failures up to num_MailRetryLimit attempts (no
+    # logging per design decision); flg_FetchApiSuccess stays False so the
+    # post-loop check below raises after the final attempt.
     SET flg_Screenshot TO False
     CALL 'Get Error'
-    IF num_MailRunCount >= num_MailRetryLimit THEN
-        FlowControl.ThrowCustomError CustomErrorCode: $'''System Unavailable Exception''' CustomErrorMessage: 'Outlook is not reachable after ' + num_MailRetryLimit + ' attempts - ' + obj_LastError.Message
-    END
 END
             @@folderPath: '%obj_Config[\'Mail_OutlookFolder\']%'
 @@connectionDisplayName: 'Office 365 Outlook'
 External.InvokeCloudConnector Connection: '480424f2-a42e-4e13-9e4f-5c212c2dfa3c' ConnectorId: '/providers/Microsoft.PowerApps/apis/shared_office365' OperationId: 'GetEmailsV3' @folderPath: obj_Config['Mail_OutlookFolder'] @fetchOnlyWithAttachment: False @subjectFilter: obj_Config['Mail_EmailSubject'] @fetchOnlyUnread: True @mailboxAddress: obj_Config['Mail_MailboxName'] @includeAttachments: True @top: num_MailFetchLimit @GetEmailsV3Response=> obj_ReceivedEmails
+            SET flg_FetchApiSuccess TO True
             IF obj_ReceivedEmails.value.Count > 0 THEN
                 SET lst_MailItems TO obj_ReceivedEmails.value
                 LOOP num_ItemIndex FROM lst_MailItems.Count - 1 TO 0 STEP -1
@@ -318,6 +323,15 @@ External.InvokeCloudConnector Connection: '480424f2-a42e-4e13-9e4f-5c212c2dfa3c'
                 SET flg_Success TO True
                 EXIT LOOP
             END
+        END
+        # FIX F2/F4 (corrected): retries-exhausted check lives HERE, outside
+        # any error handler, as a normal loop-body statement. Only throws when
+        # the connector call itself failed on the final attempt - a call that
+        # succeeded but simply found 0 mails does not raise (the outer loop,
+        # and Main_copy's "No mail found" business exception, handle that
+        # case, matching BP's Get Mails page semantics).
+        IF flg_FetchApiSuccess = False AND num_MailRunCount >= num_MailRetryLimit THEN
+            FlowControl.ThrowCustomError CustomErrorCode: $'''System Unavailable Exception''' CustomErrorMessage: 'Outlook is not reachable after ' + num_MailRetryLimit + ' attempts - ' + obj_LastError.Message
         END
         # FIX F5: incremental back-off between attempts. The old code multiplied
         # by num_ConnectionRetryCount which was initialised to 0 and never
