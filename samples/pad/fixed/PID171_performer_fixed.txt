@@ -1,30 +1,59 @@
 # ============================================================================
 # PID171 PERFORMER - FIXED VERSION (changed functions only)
 # Original: samples/pad/PID171_performer.txt (unchanged)
-# Fixes applied: F1, F2, F3, F6, F7, F8, F9, F14, F15, F18, F20, F22
-# Hardening from the exception-bubbling audit: EB-1, EB-2
+# Fixes applied: F1, F2, F3 (revised), F6, F7 (revised), F8, F9, F14, F15,
+#                F18, F20, F22
+# Hardening: EB-2 (queue-update retry resilience), SS-1 (screenshot design)
+# EB-1 is superseded: it patched a gap in the in-place item-retry loop, which
+# has since been removed entirely (see F3 below) - there is no more
+# inter-attempt recovery section for it to guard.
 # (see docs/PID171_PAD_FIX_NOTES.md for the finding-by-finding mapping)
 #
 # Functions in this file (replace their counterparts in the existing flow):
-#   Main_copy                       (F2, F7)
-#   Get Error                       (F7 - screenshot logic extracted)
-#   Capture Error Screenshot        (NEW - F7)
-#   Launch Application              (F2, F6)
-#   Set Results Entry               (F18)
-#   Enter Results in App            (F1, F20)
-#   Create Summary Report           (F14)
-#   Mark Complete                   (F15, EB-2)
-#   Mark Exception                  (F2, F3, F7, EB-2)
-#   Move Emails                     (F2)
-#   Process Work Queue Items        (F3, F7, F8, F9, F15, F22, EB-1)
+#   Main_copy                             (F2, F3, F7)
+#   Get Error                             (F7 - screenshot logic extracted)
+#   Capture Error Screenshot              (NEW - F7)
+#   Launch Application                    (F2, F6)
+#   Get Results by Analysis and SampleId  (SS-1 - screenshot arm removed)
+#   Open 'Entry By Test'                  (SS-1 - screenshot arm removed)
+#   Get Components List                   (SS-1 - screenshot arm removed)
+#   Close Results Entry Analysis          (SS-1 - screenshot arm removed)
+#   Close Results Entry                   (SS-1 - screenshot arm removed)
+#   Set Results Entry                     (F18)
+#   Enter Results in App                  (F1, F20)
+#   Create Summary Report                 (F14)
+#   Mark Complete                         (F15, EB-2, F3)
+#   Mark Exception                        (F2, F3, F7, EB-2, SS-1)
+#   Move Emails                           (F2)
+#   Process Work Queue Items              (F3 revised, F7 revised, F8, F9,
+#                                           F15, F22, SS-1)
 #
 # Functions NOT in this file (keep the originals unchanged):
 #   Load Config Data, Fetch Data from Excel file,
-#   Get Results by Analysis and SampleId, Open 'Entry By Test',
-#   Get Components List, Close Results Entry Analysis, Close Results Entry,
 #   Send Email, Send System Exception Mail, Send Business Exception Mail,
 #   Send Consecutive Exception Mail, Close Application, Create New Folder,
 #   Log In Application, Delete files from Folder
+#
+# F3 (revised, see PID171_PAD_FIX_NOTES.md section on this): an item is
+# attempted ONCE, matching BP's actual per-session behaviour - the earlier
+# in-place "retry the whole item 3x" loop was removed after design review; it
+# duplicated retries already owned by sub-flows and risked re-processing rows
+# already authorised in SampleManager during a partial prior pass. In its
+# place: num_ConsecutiveExcLimit is a CROSS-ITEM circuit breaker (N different
+# items failing with the identical message in a row halts the run via
+# GLOBAL.flg_HaltRun), matching BP's original intent for that config value.
+#
+# SS-1 (screenshot design): exactly ONE screenshot is taken per item failure,
+# in 'Process items block' inside 'Process Work Queue Items' - mirroring BP's
+# Main Page exactly (Recover20 -> Exception Data -> Capture Error Screenshot
+# is BP's single screenshot point for the whole per-item pipeline; every
+# other BP Recover on that page skips straight to its own routing without
+# re-screenshotting). Every sub-flow nested under that block no longer arms
+# flg_Screenshot itself. Functions that remain their OWN independent
+# screenshot scope (not nested under the per-item catch, so no overwrite
+# risk): Main_copy's pre-loop 'Launch block', 'Launch Application',
+# 'Log In Application' (unchanged original), and 'Process Work Queue Items'
+# tail 'Launch block'.
 #
 # NOTE: ControlRepository / ConnectionReferences JSON blocks are intentionally
 # omitted. Paste these function bodies into the EXISTING flow, where the
@@ -49,6 +78,11 @@ FUNCTION Main_copy GLOBAL
     SET flg_Screenshot TO True
     SET txt_LastScreenshotPath TO $'''%''%'''
     SET num_ConsecutiveExcCount TO 0
+    # FIX F3 (revised): cross-item consecutive-failure circuit breaker flag -
+    # set by 'Mark Exception' when N different items in a row fail with the
+    # identical message; checked by 'Process Work Queue Items' after each
+    # item's cleanup/telemetry to decide whether to halt the run.
+    SET flg_HaltRun TO False
     SET txt_FailedItemsLog TO $'''%''%'''
     SET num_ItemsException TO 0
     SET num_ItemsCompleted TO 0
@@ -220,6 +254,180 @@ END
                 # FIX F2: login failure after all retries is System Unavailable.
                 FlowControl.ThrowCustomError CustomErrorCode: $'''System Unavailable Exception''' CustomErrorMessage: 'Failed to log in to SampleManager after ' + num_MaxRetryLimit + ' attempts - ' + txt_ExceptionMessage
             END
+        END
+    END
+END FUNCTION
+
+==================================>
+
+FUNCTION 'Get Results by Analysis and SampleId' in_txt_Analysis, in_txt_SampleId
+    SET txt_ErrorMessage TO $'''%''%'''
+    SET num_RetryCount TO 0
+    LOOP num_RetryCount FROM 0 TO GLOBAL.num_MaxRetryLimit - 1 STEP 1
+        IF (UIAutomation.IfWindow.IsOpen Window: appmask['Window \'SampleManager LIMS - Explorer\'']['Window \'Result Entry\''] InstantCheck: False) THEN
+            BLOCK 'Results entry block'
+ON BLOCK ERROR
+    # FIX SS-1: no longer arms/captures a screenshot - this is nested under
+    # 'Process items block' in 'Process Work Queue Items', which is now the
+    # single screenshot site for the whole item pipeline (see that function
+    # for the full rationale). Only the error message is still captured here.
+    CALL 'Get Error'
+    SET txt_ErrorMessage TO GLOBAL.txt_ExceptionMessage
+END
+                UIAutomation.FocusWindow.Focus Window: appmask['Window \'SampleManager LIMS - Explorer\'']['Window \'Result Entry\'']
+                IF (UIAutomation.IfWindowContains.WindowContainsElement Element: appmask['Window \'SampleManager LIMS - Explorer\'']['Title \'Result Entry\''] InstantCheck: False) THEN
+                    UIAutomation.FocusTextField TextField: appmask['Window \'SampleManager LIMS - Explorer\'']['Edit \'Analysis\'']
+                    UIAutomation.GetElementDetails Element: appmask['Window \'SampleManager LIMS - Explorer\'']['Edit \'Analysis\''] AttributeName: $'''Own Text''' BringToFront: True AttributeValue=> txt_AnalysisValue
+                    UIAutomation.GetElementDetails Element: appmask['Window \'SampleManager LIMS - Explorer\'']['Edit \'Sample id\''] AttributeName: $'''Own Text''' BringToFront: True AttributeValue=> txt_SampleValue
+                    IF txt_AnalysisValue.ToLower.Trimmed <> in_txt_Analysis.ToLower.Trimmed THEN
+                        UIAutomation.PopulateTextField.PopulateTextField TextField: appmask['Window \'SampleManager LIMS - Explorer\'']['Edit \'Analysis\''] Text: in_txt_Analysis Mode: UIAutomation.PopulateTextMode.Replace ClickType: UIAutomation.PopulateMouseClickType.SingleClick
+                    END
+                    UIAutomation.FocusTextField TextField: appmask['Window \'SampleManager LIMS - Explorer\'']['Edit \'Sample id\'']
+                    IF txt_SampleValue.Trimmed <> in_txt_SampleId.Trimmed THEN
+                        UIAutomation.PopulateTextField.PopulateTextField TextField: appmask['Window \'SampleManager LIMS - Explorer\'']['Edit \'Sample id\''] Text: in_txt_SampleId Mode: UIAutomation.PopulateTextMode.Replace ClickType: UIAutomation.PopulateMouseClickType.SingleClick
+                    END
+                    UIAutomation.PressButton Button: appmask['Window \'SampleManager LIMS - Explorer\'']['Button \'Results...\''] Simulate: False
+                    WAIT (UIAutomation.WaitForWindowContent.WindowToContainElement Element: appmask['Window \'SampleManager LIMS - Explorer\'']['Window \'Result Entry Analysis\'']) FOR GLOBAL.num_Delay_M
+                    ON ERROR
+
+                    END
+                    IF (UIAutomation.IfWindowContains.WindowContainsElement Element: appmask['Window \'MESSAGE\''] InstantCheck: False) THEN
+                        UIAutomation.GetElementDetails Element: appmask['Window \'MESSAGE\'']['Text \'No tests have been assigned to this sample\''] AttributeName: $'''Own Text''' BringToFront: True AttributeValue=> txt_ErrorMessage
+                        UIAutomation.Click.Click Element: appmask['Window \'MESSAGE\'']['Button \'OK\''] ClickType: UIAutomation.ClickType.LeftClick MousePositionRelativeToElement: UIAutomation.RectangleEdgePoint.MiddleCenter OffsetX: 0 OffsetY: 0
+                        FlowControl.ThrowCustomError CustomErrorCode: $'''Business Exception''' CustomErrorMessage: txt_ErrorMessage
+                    END
+                END
+                EXIT FUNCTION
+            END
+        ELSE
+            CALL 'Open \'Entry By Test\''
+        END
+        WAIT GLOBAL.num_Delay_S
+    END
+    SET txt_ErrorMessage TO txt_ErrorMessage + '. Results Entry window not found after ' + GLOBAL.num_MaxRetryLimit + ' retry attempts'
+    LABEL 'Error block'
+    FlowControl.ThrowCustomError CustomErrorCode: $'''System Exception''' CustomErrorMessage: txt_ErrorMessage
+END FUNCTION
+
+==================================>
+
+FUNCTION 'Open \'Entry By Test\''
+    SET txt_ErrorMessage TO $'''%''%'''
+    CALL 'Close Results Entry Analysis'
+    CALL 'Close Results Entry'
+    SET num_RetryCount TO 0
+    LOOP num_RetryCount FROM 0 TO GLOBAL.num_MaxRetryLimit - 1 STEP 1
+        BLOCK 'Explorer block'
+ON BLOCK ERROR
+    # FIX SS-1: no longer arms/captures a screenshot - see
+    # 'Get Results by Analysis and SampleId' above for the rationale.
+    CALL 'Get Error'
+    SET txt_ErrorMessage TO GLOBAL.txt_ExceptionMessage
+END
+            IF (UIAutomation.IfWindow.IsOpen Window: appmask['Window \'SampleManager LIMS - Explorer\''] InstantCheck: False) THEN
+                UIAutomation.SetWindowState.SetState Window: appmask['Window \'SampleManager LIMS - Explorer\''] State: UIAutomation.WindowState.Maximized
+                IF (UIAutomation.IfWindowContains.WindowContainsElement Element: appmask['Window \'SampleManager LIMS - Explorer\'']['Title Bar'] InstantCheck: False) THEN
+                    UIAutomation.Click.Click Element: appmask['Window \'SampleManager LIMS - Explorer\'']['MenuItem: Results'] ClickType: UIAutomation.ClickType.LeftClick MousePositionRelativeToElement: UIAutomation.RectangleEdgePoint.MiddleCenter OffsetX: 0 OffsetY: 0
+                    WAIT (UIAutomation.WaitForWindowContent.WindowToContainElement Element: appmask['Pane \'Results Menu\'']['MenuItem: Entry'])
+                    UIAutomation.Click.Click Element: appmask['Pane \'Results Menu\'']['MenuItem: Entry'] ClickType: UIAutomation.ClickType.LeftClick MousePositionRelativeToElement: UIAutomation.RectangleEdgePoint.MiddleCenter OffsetX: 0 OffsetY: 0
+                    WAIT (UIAutomation.WaitForWindowContent.WindowToContainElement Element: appmask['Pane \'Results SubMenu\''])
+                    MouseAndKeyboard.SendKeys.FocusAndSendKeysByControl Control: appmask['Window \'SampleManager LIMS - Explorer\''] TextToSend: $'''{Down}{Down}{Down}{Enter}''' DelayBetweenKeystrokes: 3 SendTextAsHardwareKeys: False
+                    WAIT (UIAutomation.WaitForWindowContent.WindowToContainElement Element: appmask['Window \'SampleManager LIMS - Explorer\'']['Window \'Result Entry\'']) FOR GLOBAL.num_Delay_S
+                END
+                EXIT FUNCTION
+            END
+        END
+    END
+    SET txt_ErrorMessage TO txt_ErrorMessage + '. SampleManager window not found after ' + GLOBAL.num_MaxRetryLimit + ' attempts.'
+    LABEL 'Error block'
+    FlowControl.ThrowCustomError CustomErrorCode: $'''System Exception''' CustomErrorMessage: txt_ErrorMessage
+END FUNCTION
+
+==================================>
+
+FUNCTION 'Get Components List' OUTPUT out_lst_ComponentNames
+    SET txt_ErrorMessage TO $'''%''%'''
+    SET txt_ClipboardText TO $'''%''%'''
+    IF (UIAutomation.IfWindow.IsOpen Window: appmask['Window \'SampleManager LIMS - Explorer\'']['Window \'Result Entry Analysis\''] InstantCheck: False) THEN
+        UIAutomation.SetWindowState.SetState Window: appmask['Window \'SampleManager LIMS - Explorer\'']['Window \'Result Entry Analysis\''] State: UIAutomation.WindowState.Maximized
+        IF (UIAutomation.IfWindowContains.WindowContainsElement Element: appmask['Window \'SampleManager LIMS - Explorer\'']['Window \'Result Entry Analysis\''] InstantCheck: False) THEN
+            SET num_RetryCount TO 0
+            LOOP num_RetryCount FROM 0 TO GLOBAL.num_MaxRetryLimit - 1 STEP 1
+                BLOCK 'Get Component block'
+ON BLOCK ERROR
+    # FIX SS-1: no longer arms/captures a screenshot - see
+    # 'Get Results by Analysis and SampleId' above for the rationale.
+    CALL 'Get Error'
+    SET txt_ErrorMessage TO 'Failed to find Components on screen - ' + GLOBAL.txt_ExceptionMessage
+    GOTO 'Error block'
+END
+                    Clipboard.Clear _
+                    UIAutomation.FocusWindow.Focus Window: appmask['Window \'SampleManager LIMS - Explorer\'']['Window \'Result Entry Analysis\'']
+                    MouseAndKeyboard.SendKeys.FocusAndSendKeys TextToSend: $'''{Control}({A})''' DelayBetweenKeystrokes: 3 SendTextAsHardwareKeys: False
+                    UIAutomation.FocusWindow.Focus Window: appmask['Window \'SampleManager LIMS - Explorer\'']['Window \'Result Entry Analysis\'']
+                    MouseAndKeyboard.SendKeys.FocusAndSendKeys TextToSend: $'''{Control}({C})''' DelayBetweenKeystrokes: 3 SendTextAsHardwareKeys: False
+                    Clipboard.GetText Text=> txt_ClipboardText
+                END
+                IF txt_ClipboardText.Trimmed.Length > 0 THEN
+                    EXIT LOOP
+                END
+            END
+            Text.SplitText.Split Text: txt_ClipboardText StandardDelimiter: Text.StandardDelimiter.NewLine DelimiterTimes: 1 Result=> lst_TextList
+            Variables.CreateNewDatatable InputTable: { ^['Analysis', 'Component Name', 'Type', 'Value', 'Units', 'Status'], [$'''''', $'''''', $'''''', $'''''', $'''''', $''''''] } DataTable=> dtb_DataTable
+            LOOP FOREACH txt_CurrentItem IN lst_TextList
+                IF txt_CurrentItem.Trimmed.Length > 0 THEN
+                    Text.SplitText.Split Text: txt_CurrentItem StandardDelimiter: Text.StandardDelimiter.Tab DelimiterTimes: 1 Result=> lst_RowList
+                    Variables.AddRowToDataTable.AppendRowToDataTable DataTable: dtb_DataTable RowToAdd: lst_RowList
+                END
+            END
+            Variables.DeleteEmptyRowsFromDataTable DataTable: dtb_DataTable
+            Variables.RetrieveDataTableColumnIntoList DataTable: dtb_DataTable ColumnNameOrIndex: $'''Component Name''' ColumnAsList=> lst_ComponentList
+            SET out_lst_ComponentNames TO lst_ComponentList
+            EXIT FUNCTION
+        END
+    END
+    SET txt_ErrorMessage TO txt_ErrorMessage + '. Results Entry Analysis window not found'
+    LABEL 'Error block'
+    FlowControl.ThrowCustomError CustomErrorCode: $'''System Exception''' CustomErrorMessage: txt_ErrorMessage
+END FUNCTION
+
+==================================>
+
+FUNCTION 'Close Results Entry Analysis'
+    SET txt_ErrorMessage TO $'''%''%'''
+    IF (UIAutomation.IfWindow.IsOpen Window: appmask['Window \'SampleManager LIMS - Explorer\'']['Window \'Result Entry Analysis\''] InstantCheck: False) THEN
+        UIAutomation.SetWindowState.SetState Window: appmask['Window \'SampleManager LIMS - Explorer\'']['Window \'Result Entry Analysis\''] State: UIAutomation.WindowState.Maximized
+        IF (UIAutomation.IfWindowContains.WindowContainsElement Element: appmask['Window \'SampleManager LIMS - Explorer\'']['Window \'Result Entry Analysis\''] InstantCheck: False) THEN
+            BLOCK 'Close Entry analysis block'
+ON BLOCK ERROR all
+    # FIX SS-1: no longer arms/captures a screenshot - see
+    # 'Get Results by Analysis and SampleId' above for the rationale.
+    CALL 'Get Error'
+END
+                UIAutomation.PressButton Button: appmask['Window \'SampleManager LIMS - Explorer\'']['Button \'Close\' 2'] Simulate: False
+                WAIT (UIAutomation.WaitForWindowContent.WindowToContainElement Element: appmask['Window \'SampleManager LIMS - Explorer\'']['Window \'Result Entry\'']) FOR GLOBAL.num_Delay_S
+            END
+            EXIT FUNCTION
+        END
+    END
+END FUNCTION
+
+==================================>
+
+FUNCTION 'Close Results Entry'
+    SET txt_ErrorMessage TO $'''%''%'''
+    IF (UIAutomation.IfWindow.IsOpen Window: appmask['Window \'SampleManager LIMS - Explorer\'']['Window \'Result Entry\''] InstantCheck: False) THEN
+        IF (UIAutomation.IfWindowContains.WindowContainsElement Element: appmask['Window \'SampleManager LIMS - Explorer\'']['Button \'Close\''] InstantCheck: False) THEN
+            BLOCK 'Close Entry analysis block'
+ON BLOCK ERROR all
+    # FIX SS-1: no longer arms/captures a screenshot - see
+    # 'Get Results by Analysis and SampleId' above for the rationale.
+    CALL 'Get Error'
+END
+                UIAutomation.PressButton Button: appmask['Window \'SampleManager LIMS - Explorer\'']['Button \'Close\''] Simulate: False
+                WAIT (UIAutomation.WaitForWindow.ToClose Window: appmask['Window \'SampleManager LIMS - Explorer\'']['Window \'Result Entry\'']) FOR GLOBAL.num_Delay_S
+            END
+            EXIT FUNCTION
         END
     END
 END FUNCTION
@@ -606,6 +814,10 @@ END
         # symmetric gap.
         FlowControl.ThrowCustomError CustomErrorCode: $'''System Unavailable Exception''' CustomErrorMessage: 'Unable to mark work queue item complete after ' + GLOBAL.num_MaxRetryLimit + ' attempts.'
     END
+    # FIX F3 (revised): a success breaks the cross-item consecutive-failure
+    # streak - "consecutive" only means anything if it resets on a win.
+    SET GLOBAL.txt_PreviousExceptionMessage TO $'''%''%'''
+    SET GLOBAL.num_ConsecutiveExcCount TO 0
     # FIX F15: success/exception counters are maintained with plain SET in
     # 'Process Work Queue Items' (GLOBAL scope). Variables.IncreaseVariable on
     # a GLOBAL.-prefixed variable from a non-global subflow fails because the
@@ -650,6 +862,11 @@ END
             FlowControl.ThrowCustomError CustomErrorCode: $'''System Unavailable Exception''' CustomErrorMessage: 'Unable to update work queue item status after ' + GLOBAL.num_MaxRetryLimit + ' attempts.'
         END
         CALL 'Send Business Exception Mail' In_txt_To_Email: GLOBAL.obj_Config['Mail_BusinessExceptionTo'] In_txt_Cc_Email: GLOBAL.obj_Config['Mail_BusinessExceptionCc'] In_txt_Subject: $'''%GLOBAL.txt_ProcessName% - Business Error''' In_txt_ErrorMessage: GLOBAL.txt_ExceptionMessage In_lst_Attachments: []
+        # FIX F3 (revised): a business condition is unrelated to system
+        # health - it breaks the cross-item System Exception streak, same as
+        # a success does in 'Mark Complete'.
+        SET GLOBAL.txt_PreviousExceptionMessage TO $'''%''%'''
+        SET GLOBAL.num_ConsecutiveExcCount TO 0
     ELSE IF GLOBAL.txt_ExceptionType.ToLower = $'''system unavailable exception''' THEN
         # FIX F2: now reachable - the typed handler clauses in
         # 'Process Work Queue Items' preserve the custom error code. The
@@ -672,28 +889,60 @@ END
             FlowControl.ThrowCustomError CustomErrorCode: $'''System Unavailable Exception''' CustomErrorMessage: 'Unable to update work queue item status after ' + GLOBAL.num_MaxRetryLimit + ' attempts.'
         END
     ELSE
-        # FIX F3: a System Exception only reaches here after
-        # num_ConsecutiveExcLimit in-place attempts on the same item, so this
-        # is the consecutive-failure terminal path (BP: TERMINATE). The
-        # consecutive mail replaces the generic system mail - disarm the
-        # System Error path's mail to avoid a duplicate notification.
+        # FIX F3 (revised): reinstates BP's original cross-item circuit
+        # breaker for num_ConsecutiveExcLimit - N DIFFERENT items in a row
+        # failing with the IDENTICAL message halts the run; a single
+        # System Exception on an isolated item does not. Compares THIS
+        # item's message to the PREVIOUS item's; 'Mark Complete' and the
+        # Business Exception branch above both reset the streak on
+        # anything that isn't a repeat of the same system failure.
+        IF GLOBAL.txt_PreviousExceptionMessage = GLOBAL.txt_ExceptionMessage THEN
+            SET GLOBAL.num_ConsecutiveExcCount TO GLOBAL.num_ConsecutiveExcCount + 1
+        ELSE
+            SET GLOBAL.txt_PreviousExceptionMessage TO GLOBAL.txt_ExceptionMessage
+            SET GLOBAL.num_ConsecutiveExcCount TO 1
+        END
         SET flg_QueueUpdateSuccess TO False
-        LOOP num_QueueUpdateRetryCount FROM 1 TO GLOBAL.num_MaxRetryLimit STEP 1
-            BLOCK 'Queue update block - SE'
+        IF GLOBAL.num_ConsecutiveExcCount >= GLOBAL.num_ConsecutiveExcLimit THEN
+            # Breach: N consecutive identical failures - halt the run (BP:
+            # TERMINATE). GLOBAL.flg_HaltRun is checked by
+            # 'Process Work Queue Items' after this item's cleanup/telemetry
+            # complete, so the halt itself doesn't skip any of that.
+            LOOP num_QueueUpdateRetryCount FROM 1 TO GLOBAL.num_MaxRetryLimit STEP 1
+                BLOCK 'Queue update block - SE breach'
 ON BLOCK ERROR
 
 END
-                WorkQueues.UpdateWorkQueueItem.UpdateWithProcessingNotes WorkQueueItem: obj_WorkQueueItem Status: WorkQueues.WorkQueueItemStatus.GenericException ProcessingResult: GLOBAL.num_ConsecutiveExcLimit + ' consecutive incidents of ' + GLOBAL.txt_ExceptionType + ': ' + GLOBAL.txt_ExceptionMessage
-                SET flg_QueueUpdateSuccess TO True
-                EXIT LOOP
+                    WorkQueues.UpdateWorkQueueItem.UpdateWithProcessingNotes WorkQueueItem: obj_WorkQueueItem Status: WorkQueues.WorkQueueItemStatus.ITException ProcessingResult: GLOBAL.num_ConsecutiveExcLimit + ' consecutive incidents of ' + GLOBAL.txt_ExceptionType + ': ' + GLOBAL.txt_ExceptionMessage
+                    SET flg_QueueUpdateSuccess TO True
+                    EXIT LOOP
+                END
+                WAIT GLOBAL.num_Delay_S * num_QueueUpdateRetryCount
             END
-            WAIT GLOBAL.num_Delay_S * num_QueueUpdateRetryCount
+            IF flg_QueueUpdateSuccess = False THEN
+                FlowControl.ThrowCustomError CustomErrorCode: $'''System Unavailable Exception''' CustomErrorMessage: 'Unable to update work queue item status after ' + GLOBAL.num_MaxRetryLimit + ' attempts.'
+            END
+            # The consecutive mail replaces the generic system mail - disarm
+            # the System Error path's mail to avoid a duplicate notification.
+            CALL 'Send Consecutive Exception Mail' In_txt_To_Email: GLOBAL.obj_Config['Mail_SystemExceptionTo'] In_txt_Cc_Email: GLOBAL.obj_Config['Mail_SystemExceptionCc'] In_txt_Subject: $'''%GLOBAL.txt_ProcessName% - Consecutive error encountered''' In_txt_ErrorMessage: GLOBAL.txt_ExceptionMessage In_lst_Attachments: lst_ScreenshotAttachments
+            SET GLOBAL.flg_SendExceptionEmail TO False
+            SET GLOBAL.flg_HaltRun TO True
+        ELSE
+            LOOP num_QueueUpdateRetryCount FROM 1 TO GLOBAL.num_MaxRetryLimit STEP 1
+                BLOCK 'Queue update block - SE'
+ON BLOCK ERROR
+
+END
+                    WorkQueues.UpdateWorkQueueItem.UpdateWithProcessingNotes WorkQueueItem: obj_WorkQueueItem Status: WorkQueues.WorkQueueItemStatus.GenericException ProcessingResult: GLOBAL.txt_ExceptionMessage
+                    SET flg_QueueUpdateSuccess TO True
+                    EXIT LOOP
+                END
+                WAIT GLOBAL.num_Delay_S * num_QueueUpdateRetryCount
+            END
+            IF flg_QueueUpdateSuccess = False THEN
+                FlowControl.ThrowCustomError CustomErrorCode: $'''System Unavailable Exception''' CustomErrorMessage: 'Unable to update work queue item status after ' + GLOBAL.num_MaxRetryLimit + ' attempts.'
+            END
         END
-        IF flg_QueueUpdateSuccess = False THEN
-            FlowControl.ThrowCustomError CustomErrorCode: $'''System Unavailable Exception''' CustomErrorMessage: 'Unable to update work queue item status after ' + GLOBAL.num_MaxRetryLimit + ' attempts.'
-        END
-        CALL 'Send Consecutive Exception Mail' In_txt_To_Email: GLOBAL.obj_Config['Mail_SystemExceptionTo'] In_txt_Cc_Email: GLOBAL.obj_Config['Mail_SystemExceptionCc'] In_txt_Subject: $'''%GLOBAL.txt_ProcessName% - Consecutive error encountered''' In_txt_ErrorMessage: GLOBAL.txt_ExceptionMessage In_lst_Attachments: lst_ScreenshotAttachments
-        SET GLOBAL.flg_SendExceptionEmail TO False
     END
 END FUNCTION
 
@@ -744,6 +993,8 @@ FUNCTION 'Process Work Queue Items' GLOBAL
 LOOP WHILE (WorkQueues.ProcessWorkQueueItem.ProcessWorkQueueItem WorkQueue: txt_WorkQueueId WorkQueueItem=> obj_WorkQueueItem)
         **REGION Initialise work queue item
         SET flg_ErrorOccurred TO False
+        SET flg_Screenshot TO False
+        SET lst_AttachmentsList TO []
         SET lst_MailAttachments TO []
         SET txt_ItemProecssingNotes TO $'''%''%'''
         SET txt_MailId TO $'''%''%'''
@@ -753,19 +1004,33 @@ LOOP WHILE (WorkQueues.ProcessWorkQueueItem.ProcessWorkQueueItem WorkQueue: txt_
         SET txt_ExceptionMessage TO $'''%''%'''
         SET txt_LastScreenshotPath TO $'''%''%'''
         **ENDREGION
-        # FIX F3/F10: each item is attempted up to num_ConsecutiveExcLimit
-        # times IN PLACE (no BP-style requeue/clone - PAD work queues cycle by
-        # status). Business Exceptions and System Unavailable Exceptions are
-        # never retried. If all attempts fail with a System Exception, the item
-        # is marked, the consecutive mail is sent, and the run fails back to
-        # the parent cloud flow.
-        LOOP num_ItemAttempt FROM 1 TO num_ConsecutiveExcLimit STEP 1
-            SET flg_ErrorOccurred TO False
-            # FIX F7: no screenshots during intermediate attempts - one final
-            # screenshot is captured in the exception path after all retries.
-            SET flg_Screenshot TO False
-            SET lst_AttachmentsList TO []
-            BLOCK 'Process items block'
+        # FIX F3 (revised): an item is attempted ONCE, matching BP's actual
+        # behaviour - BP never retries in-session either; Mark Exception
+        # Retry=True clones the item for a LATER pickup via the queue itself.
+        # The earlier in-place attempt loop was removed: it duplicated retries
+        # already owned by sub-flows ('Set Results Entry', 'Get Components
+        # List', 'Get Results by Analysis and SampleId'), and re-running
+        # 'Enter Results in App' from row zero risked re-visiting rows already
+        # authorised in SampleManager during a partial prior pass - those
+        # rows report "Authorise button disabled or Already authorised" on
+        # re-entry and would be logged FAIL in the summary despite having
+        # succeeded. Any escalated exception routes straight to
+        # 'Mark Item as Exception'; the run halts only for System Unavailable
+        # Exception or a cross-item consecutive-failure breach signalled by
+        # 'Mark Exception' via GLOBAL.flg_HaltRun (checked after 'Reset All').
+        # FIX SS-1 (screenshot design): this is the ONLY place in the whole
+        # performer that arms + captures a screenshot for an item failure -
+        # mirrors BP's Main Page exactly (Recover20 -> Exception Data ->
+        # Capture Error Screenshot is the single screenshot point for the
+        # whole per-item pipeline; every OTHER BP Recover on that page skips
+        # straight to its own routing without re-screenshotting). Nothing
+        # called from inside this block (Enter Results in App and everything
+        # it calls, Create Summary Report, Move Emails, etc.) arms
+        # flg_Screenshot itself any more - see the fix notes for the full
+        # list of sub-flows that were changed to stop doing so. Business
+        # Exception never screenshots (matches the original convention - nothing
+        # to usefully see for a pure data/validation failure).
+        BLOCK 'Process items block'
 ON BLOCK ERROR 'Business Exception' IsUserDefinedErrorCode: True
     CALL 'Get Error'
     SET txt_ExceptionType TO $'''Business Exception'''
@@ -773,101 +1038,73 @@ ON BLOCK ERROR 'Business Exception' IsUserDefinedErrorCode: True
 ON BLOCK ERROR 'System Unavailable Exception' IsUserDefinedErrorCode: True
     # FIX F2: preserve the System Unavailable classification (raised by
     # 'Move Emails' and other infrastructure calls after their own retries).
+    SET flg_Screenshot TO True
     CALL 'Get Error'
     SET txt_ExceptionType TO $'''System Unavailable Exception'''
     SET flg_ErrorOccurred TO True
 ON BLOCK ERROR
+    SET flg_Screenshot TO True
     CALL 'Get Error'
     SET flg_ErrorOccurred TO True
 END
-                DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> dt_CurrentDateTime
-                Text.ConvertDateTimeToText.FromDateTime DateTime: dt_CurrentDateTime StandardFormat: Text.WellKnownDateTimeFormat.SortableDateTime Result=> txt_ItemStartDateTime
-                SET txt_ItemProecssingNotes TO txt_ItemProecssingNotes + 'Processing started at ' + txt_ItemStartDateTime
-                WorkQueues.UpdateProcessingNotes.WithProcessingNotes WorkQueueItem: obj_WorkQueueItem ProcessingNotes: 'Processing started at ' + txt_ItemStartDateTime + ' (attempt ' + num_ItemAttempt + ' of ' + num_ConsecutiveExcLimit + ')'
-                SET txt_ItemStatus TO $'''In Progress'''
-                Cryptography.DecryptText.DecryptTextWithAES Encoding: Cryptography.EncryptionEncoding.Unicode TextToDecrypt: obj_WorkQueueItem.Value DecryptionKey: txt_EncDecSecret_Key Padding: Cryptography.PaddingMode.PKCS7 KeySize: Cryptography.AESKeySize.Bits256 DecryptedText=> txt_ItemData
-                IF txt_ItemData.Length = 0 THEN
-                    SET txt_ItemStatus TO $'''Failed'''
-                    SET txt_ExceptionMessage TO 'Item ' + txt_ItemName + ' has no value.'
-                    FlowControl.ThrowCustomError CustomErrorCode: $'''Business Exception''' CustomErrorMessage: txt_ExceptionMessage
-                END
-                Variables.ConvertJsonToCustomObject Json: txt_ItemData CustomObject=> obj_QueueItemData
-                SET txt_MailId TO obj_QueueItemData['Id']
-                SET lst_MailAttachments TO obj_QueueItemData['MailAttachments']
-                **REGION Mail attachment validation
-                IF lst_MailAttachments.Count = 0 THEN
-                    SET txt_ItemStatus TO $'''Failed'''
-                    SET txt_ExceptionMessage TO 'Item ' + txt_ItemName + ' has no attachments.'
-                    FlowControl.ThrowCustomError CustomErrorCode: $'''Business Exception''' CustomErrorMessage: txt_ExceptionMessage
-                END
-                IF lst_MailAttachments.Count > 1 THEN
-                    SET txt_ItemStatus TO $'''Failed'''
-                    SET txt_ExceptionMessage TO 'Item ' + txt_ItemName + ' has ' + lst_MailAttachments.Count + ' attachments.'
-                    FlowControl.ThrowCustomError CustomErrorCode: $'''Business Exception''' CustomErrorMessage: txt_ExceptionMessage
-                END
-                **ENDREGION
-                **REGION Create Email folders
-                CALL 'Create New Folder' In_txt_RootFolder: txt_EmailPath In_txt_FolderName: txt_ItemName Out_txt_NewFolder=> txt_EmailDownloadPath
-                CALL 'Create New Folder' In_txt_RootFolder: txt_EmailDownloadPath In_txt_FolderName: obj_Config['Path_InputFile'] Out_txt_NewFolder=> txt_EmailInputsPath
-                CALL 'Create New Folder' In_txt_RootFolder: txt_EmailDownloadPath In_txt_FolderName: obj_Config['Path_SummaryDestination'] Out_txt_NewFolder=> txt_EmailSummaryPath
-                **ENDREGION
-                LOOP FOREACH CurrentItem IN lst_MailAttachments
-                    SET txt_AttachmentName TO CurrentItem.Name
-                    # FIX F9: recompute the file path from THIS machine's
-                    # folders instead of trusting CurrentItem.Filepath, which
-                    # was resolved with the LOADER's username/machine and
-                    # breaks when loader and performer run on different
-                    # accounts or VMs.
-                    SET txt_AttachmentFilepath TO txt_EmailInputsPath + '\\' + txt_AttachmentName
-                    # Save attachment to input folder
-                    File.ConvertFromBase64 Base64Text: CurrentItem.ContentBytes File: txt_AttachmentFilepath IfFileExists: File.IfExists.Overwrite
-                    WorkQueues.UpdateProcessingNotes.WithProcessingNotes WorkQueueItem: obj_WorkQueueItem ProcessingNotes: $'''File downloaded and saved to Email inputs folder'''
-                    # Read data from the attachment - Extract Sample ID and LIMS data
-                    CALL 'Fetch Data from Excel file' in_txt_InputFilePath: txt_AttachmentFilepath out_txt_SampleId=> txt_SampleId out_dtb_DataCollection=> dtb_FileData
-                    WorkQueues.UpdateProcessingNotes.WithProcessingNotes WorkQueueItem: obj_WorkQueueItem ProcessingNotes: $'''Data fetched and formatted from the attachment'''
-                    # Enter all valid LIMS data into Sample Manager application
-                    CALL 'Enter Results in App' In_dtb_FinalProduct: dtb_FileData txt_SampleId: txt_SampleId out_dtb_filteredTable=> dtb_FinalData
-                    WorkQueues.UpdateProcessingNotes.WithProcessingNotes WorkQueueItem: obj_WorkQueueItem ProcessingNotes: $'''Data entry completed in application'''
-                    # Create summary report from the LIMS data and their entry status
-                    CALL 'Create Summary Report' SummaryData: dtb_FinalData In_txt_DestinationPath: txt_EmailSummaryPath out_txt_DestinationPath=> txt_DestinationPath
-                    WorkQueues.UpdateProcessingNotes.WithProcessingNotes WorkQueueItem: obj_WorkQueueItem ProcessingNotes: $'''Summary report created'''
-                    Variables.AddItemToList Item: txt_DestinationPath List: lst_AttachmentsList
-                    # Send report to business
-                    SET txt_ItemStatus TO $'''Completed'''
-                    CALL 'Send Email' In_txt_To_Email: obj_Config['Mail_BusinessTo'] In_txt_Cc_Email: obj_Config['Mail_BusinessCc'] In_txt_Subject: txt_ItemStatus + ': ' + obj_QueueItemData['Subject'] In_lst_Attachments: lst_AttachmentsList
-                    # Move emails & delete all files from local
-                    CALL 'Delete files from Folder' In_txt_FolderName: txt_EmailDownloadPath
-                    CALL 'Move Emails' In_txt_MessageId: txt_MailId In_txt_DestinationFolder: txt_MailCompletedFolder
-                END
+            DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> dt_CurrentDateTime
+            Text.ConvertDateTimeToText.FromDateTime DateTime: dt_CurrentDateTime StandardFormat: Text.WellKnownDateTimeFormat.SortableDateTime Result=> txt_ItemStartDateTime
+            SET txt_ItemProecssingNotes TO txt_ItemProecssingNotes + 'Processing started at ' + txt_ItemStartDateTime
+            WorkQueues.UpdateProcessingNotes.WithProcessingNotes WorkQueueItem: obj_WorkQueueItem ProcessingNotes: 'Processing started at ' + txt_ItemStartDateTime
+            SET txt_ItemStatus TO $'''In Progress'''
+            Cryptography.DecryptText.DecryptTextWithAES Encoding: Cryptography.EncryptionEncoding.Unicode TextToDecrypt: obj_WorkQueueItem.Value DecryptionKey: txt_EncDecSecret_Key Padding: Cryptography.PaddingMode.PKCS7 KeySize: Cryptography.AESKeySize.Bits256 DecryptedText=> txt_ItemData
+            IF txt_ItemData.Length = 0 THEN
+                SET txt_ItemStatus TO $'''Failed'''
+                SET txt_ExceptionMessage TO 'Item ' + txt_ItemName + ' has no value.'
+                FlowControl.ThrowCustomError CustomErrorCode: $'''Business Exception''' CustomErrorMessage: txt_ExceptionMessage
             END
-            IF flg_ErrorOccurred = False THEN
-                EXIT LOOP
+            Variables.ConvertJsonToCustomObject Json: txt_ItemData CustomObject=> obj_QueueItemData
+            SET txt_MailId TO obj_QueueItemData['Id']
+            SET lst_MailAttachments TO obj_QueueItemData['MailAttachments']
+            **REGION Mail attachment validation
+            IF lst_MailAttachments.Count = 0 THEN
+                SET txt_ItemStatus TO $'''Failed'''
+                SET txt_ExceptionMessage TO 'Item ' + txt_ItemName + ' has no attachments.'
+                FlowControl.ThrowCustomError CustomErrorCode: $'''Business Exception''' CustomErrorMessage: txt_ExceptionMessage
             END
-            # Business and System Unavailable exceptions are not retried in place.
-            IF txt_ExceptionType <> $'''System Exception''' THEN
-                EXIT LOOP
+            IF lst_MailAttachments.Count > 1 THEN
+                SET txt_ItemStatus TO $'''Failed'''
+                SET txt_ExceptionMessage TO 'Item ' + txt_ItemName + ' has ' + lst_MailAttachments.Count + ' attachments.'
+                FlowControl.ThrowCustomError CustomErrorCode: $'''Business Exception''' CustomErrorMessage: txt_ExceptionMessage
             END
-            IF num_ItemAttempt < num_ConsecutiveExcLimit THEN
-                # FIX EB-1: the recovery section runs outside 'Process items
-                # block'. Without this guard a relaunch failure would bubble
-                # straight to the global handler, orphaning the in-flight item
-                # in 'Processing' status. Route it through Mark Exception
-                # instead (relaunch failure = environment unavailable), so the
-                # item is marked before the run fails to the parent.
-                BLOCK 'Attempt recovery block'
-ON BLOCK ERROR
-    CALL 'Get Error'
-    SET txt_ExceptionType TO $'''System Unavailable Exception'''
-    SET txt_ItemStatus TO $'''Failed'''
-    SET flg_ErrorOccurred TO True
-    GOTO 'Mark Item as Exception'
-END
-                    WorkQueues.UpdateProcessingNotes.WithProcessingNotes WorkQueueItem: obj_WorkQueueItem ProcessingNotes: 'Attempt ' + num_ItemAttempt + ' failed - ' + txt_ExceptionMessage + '. Restarting application and retrying.'
-                    CALL 'Close Application' In_txt_AppProcessName: txt_AppProcessName + ',' + txt_ExcelProcessName
-                    SET flg_IsAppRunning TO False
-                    SET flg_IsLoggedIn TO False
-                    CALL 'Launch Application'
-                END
+            **ENDREGION
+            **REGION Create Email folders
+            CALL 'Create New Folder' In_txt_RootFolder: txt_EmailPath In_txt_FolderName: txt_ItemName Out_txt_NewFolder=> txt_EmailDownloadPath
+            CALL 'Create New Folder' In_txt_RootFolder: txt_EmailDownloadPath In_txt_FolderName: obj_Config['Path_InputFile'] Out_txt_NewFolder=> txt_EmailInputsPath
+            CALL 'Create New Folder' In_txt_RootFolder: txt_EmailDownloadPath In_txt_FolderName: obj_Config['Path_SummaryDestination'] Out_txt_NewFolder=> txt_EmailSummaryPath
+            **ENDREGION
+            LOOP FOREACH CurrentItem IN lst_MailAttachments
+                SET txt_AttachmentName TO CurrentItem.Name
+                # FIX F9: recompute the file path from THIS machine's
+                # folders instead of trusting CurrentItem.Filepath, which
+                # was resolved with the LOADER's username/machine and
+                # breaks when loader and performer run on different
+                # accounts or VMs.
+                SET txt_AttachmentFilepath TO txt_EmailInputsPath + '\\' + txt_AttachmentName
+                # Save attachment to input folder
+                File.ConvertFromBase64 Base64Text: CurrentItem.ContentBytes File: txt_AttachmentFilepath IfFileExists: File.IfExists.Overwrite
+                WorkQueues.UpdateProcessingNotes.WithProcessingNotes WorkQueueItem: obj_WorkQueueItem ProcessingNotes: $'''File downloaded and saved to Email inputs folder'''
+                # Read data from the attachment - Extract Sample ID and LIMS data
+                CALL 'Fetch Data from Excel file' in_txt_InputFilePath: txt_AttachmentFilepath out_txt_SampleId=> txt_SampleId out_dtb_DataCollection=> dtb_FileData
+                WorkQueues.UpdateProcessingNotes.WithProcessingNotes WorkQueueItem: obj_WorkQueueItem ProcessingNotes: $'''Data fetched and formatted from the attachment'''
+                # Enter all valid LIMS data into Sample Manager application
+                CALL 'Enter Results in App' In_dtb_FinalProduct: dtb_FileData txt_SampleId: txt_SampleId out_dtb_filteredTable=> dtb_FinalData
+                WorkQueues.UpdateProcessingNotes.WithProcessingNotes WorkQueueItem: obj_WorkQueueItem ProcessingNotes: $'''Data entry completed in application'''
+                # Create summary report from the LIMS data and their entry status
+                CALL 'Create Summary Report' SummaryData: dtb_FinalData In_txt_DestinationPath: txt_EmailSummaryPath out_txt_DestinationPath=> txt_DestinationPath
+                WorkQueues.UpdateProcessingNotes.WithProcessingNotes WorkQueueItem: obj_WorkQueueItem ProcessingNotes: $'''Summary report created'''
+                Variables.AddItemToList Item: txt_DestinationPath List: lst_AttachmentsList
+                # Send report to business
+                SET txt_ItemStatus TO $'''Completed'''
+                CALL 'Send Email' In_txt_To_Email: obj_Config['Mail_BusinessTo'] In_txt_Cc_Email: obj_Config['Mail_BusinessCc'] In_txt_Subject: txt_ItemStatus + ': ' + obj_QueueItemData['Subject'] In_lst_Attachments: lst_AttachmentsList
+                # Move emails & delete all files from local
+                CALL 'Delete files from Folder' In_txt_FolderName: txt_EmailDownloadPath
+                CALL 'Move Emails' In_txt_MessageId: txt_MailId In_txt_DestinationFolder: txt_MailCompletedFolder
             END
         END
         IF flg_ErrorOccurred = True THEN
@@ -885,10 +1122,14 @@ END
         **ENDREGION
         LABEL 'Mark Item as Exception'
         **REGION Exception
-        # FIX F7: ONE final screenshot after all retries are exhausted,
-        # captured before the applications are closed.
-        SET flg_Screenshot TO True
-        CALL 'Capture Error Screenshot'
+        # FIX SS-1: the screenshot (if any) was already captured inside
+        # 'Process items block's own handler, at the moment the exception was
+        # actually caught - do NOT re-arm/re-capture here, that would either
+        # duplicate it or, worse, overwrite it with a later, less relevant
+        # shot of whatever is on screen by the time execution reaches this
+        # label. GLOBAL.txt_LastScreenshotPath already holds the right file
+        # (or is empty, for Business Exception / exception types that
+        # deliberately opt out - e.g. 'Create Summary Report' failures).
         # FIX F15: track failures and expose them through the flow outputs.
         SET num_ItemsException TO num_ItemsException + 1
         SET txt_FailedItemsLog TO txt_FailedItemsLog + txt_ItemName + ': ' + txt_ExceptionType + ' - ' + txt_ExceptionMessage + ' | '
@@ -957,14 +1198,25 @@ External.RunFlow FlowId: '15ac1877-c8dc-4410-9947-98616833caaf' WaitToComplete: 
             END
         END
         **ENDREGION
-        # FIX F3: terminal non-business failures stop the run AFTER the item is
-        # marked, the mail is moved, apps are closed and telemetry is sent -
-        # the exception classification is rethrown to Main_copy and from there
-        # to the parent cloud flow.
-        IF flg_ErrorOccurred = True THEN
-            IF txt_ExceptionType <> $'''Business Exception''' THEN
-                FlowControl.ThrowCustomError CustomErrorCode: txt_ExceptionType CustomErrorMessage: txt_ExceptionMessage
-            END
+        # FIX F3 (revised): an isolated Business or System Exception on a
+        # single item does NOT stop the queue - it is marked, mailed, and
+        # processing moves to the next item, matching your expected flow.
+        # The run halts only for:
+        #   (a) System Unavailable Exception - environment down (launch,
+        #       login, Outlook), already retried at its own source before
+        #       being classified this way, or
+        #   (b) a cross-item consecutive-failure breach, signalled by
+        #       'Mark Exception' via GLOBAL.flg_HaltRun when N DIFFERENT
+        #       items in a row fail with the identical message (BP's
+        #       original circuit-breaker semantics for num_ConsecutiveExcLimit).
+        # Both checks happen AFTER the item is marked, mailed, apps closed,
+        # and telemetry sent - the classification/message is rethrown to
+        # Main_copy and from there to the parent cloud flow.
+        IF txt_ExceptionType = $'''System Unavailable Exception''' THEN
+            FlowControl.ThrowCustomError CustomErrorCode: txt_ExceptionType CustomErrorMessage: txt_ExceptionMessage
+        END
+        IF GLOBAL.flg_HaltRun = True THEN
+            FlowControl.ThrowCustomError CustomErrorCode: $'''System Exception''' CustomErrorMessage: GLOBAL.txt_ExceptionMessage
         END
         SET txt_ExceptionType TO $'''%''%'''
         SET txt_ExceptionMessage TO $'''%''%'''
