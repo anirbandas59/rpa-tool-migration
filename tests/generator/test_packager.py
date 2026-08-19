@@ -9,7 +9,15 @@ from pathlib import Path
 import pytest
 from lxml import etree
 
-from flowsmith.ast.models import BPProcess
+from flowsmith.ast.models import (
+    BPPage,
+    BPProcess,
+    BPStage,
+    ConfidenceBand,
+    PAAnnotation,
+    Runtime,
+    StageType,
+)
 from flowsmith.exceptions import GenerationError
 from flowsmith.generator import SolutionPackager
 
@@ -741,3 +749,298 @@ class TestPublisherPrefix:
         publisher = root.find(".//{*}Publisher")
         unique_name = publisher.find("{*}UniqueName")
         assert unique_name.text == custom_prefix
+
+
+class TestMetadataAndClaims:
+    """Sub-Task 5 — Metadata JSON flags and Claims derived from annotations."""
+
+    @staticmethod
+    def _annotated_stage(
+        stage_id: str,
+        name: str,
+        target_module: str,
+        runtime: Runtime,
+    ) -> BPStage:
+        """Build a single annotated BPStage for use in a page fixture."""
+        return BPStage(
+            stage_id=stage_id,
+            stage_type=StageType.ACTION,
+            name=name,
+            data_items=[],
+            pa_annotation=PAAnnotation(
+                target_type=f"{target_module}.Action",
+                target_module=target_module,
+                runtime=runtime,
+                params_map={},
+                confidence=0.90,
+                band=ConfidenceBand.AUTO,
+                flags=[],
+            ),
+        )
+
+    @pytest.fixture
+    def process_with_workqueues(self) -> BPProcess:
+        """A single-page process whose only stage targets the WorkQueues module."""
+        stage = self._annotated_stage("S1", "Get Next Item", "WorkQueues", Runtime.CLOUD)
+        page = BPPage(page_id="P1", name="flow1", stages=[stage], is_main=True, published=True)
+        return BPProcess(
+            process_id="test_wq",
+            name="TestProcessWQ",
+            version="1.0",
+            pages=[page],
+            source_file="test.bprelease",
+        )
+
+    @pytest.fixture
+    def process_mixed_workqueues(self) -> BPProcess:
+        """A page mixing a DESKTOP action with a WorkQueues (CLOUD) action.
+
+        Mirrors the real reference solution, where a desktop .robin flow
+        also contains WorkQueues actions annotated CLOUD in the catalogue.
+        """
+        desktop_stage = self._annotated_stage("S1", "Set Variable", "System", Runtime.DESKTOP)
+        wq_stage = self._annotated_stage("S2", "Get Next Item", "WorkQueues", Runtime.CLOUD)
+        page = BPPage(
+            page_id="P1",
+            name="flow1",
+            stages=[desktop_stage, wq_stage],
+            is_main=True,
+            published=True,
+        )
+        return BPProcess(
+            process_id="test_mixed_wq",
+            name="TestProcessMixedWQ",
+            version="1.0",
+            pages=[page],
+            source_file="test.bprelease",
+        )
+
+    @pytest.fixture
+    def process_without_workqueues(self) -> BPProcess:
+        """A single-page process with only a DESKTOP action (no WorkQueues)."""
+        stage = self._annotated_stage("S1", "Set Variable", "System", Runtime.DESKTOP)
+        page = BPPage(page_id="P1", name="flow1", stages=[stage], is_main=True, published=True)
+        return BPProcess(
+            process_id="test_no_wq",
+            name="TestProcessNoWQ",
+            version="1.0",
+            pages=[page],
+            source_file="test.bprelease",
+        )
+
+    def test_metadata_flags_workqueues_true_when_stage_present(
+        self,
+        packager: SolutionPackager,
+        process_with_workqueues: BPProcess,
+        robin_dir: Path,
+        cloudflow_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """Metadata contains containsActiveWorkQueuesActions:true for a WorkQueues stage."""
+        output_path = tmp_path / "solution.zip"
+        packager.package(
+            process_with_workqueues,
+            robin_dir=robin_dir,
+            cloudflow_dir=cloudflow_dir,
+            output_path=output_path,
+        )
+
+        with zipfile.ZipFile(output_path) as zf:
+            xml = zf.read("customizations.xml").decode("utf-8")
+
+        assert '"containsActiveWorkQueuesActions":true' in xml
+
+    def test_metadata_flags_workqueues_false_without_workqueues_stage(
+        self,
+        packager: SolutionPackager,
+        process_without_workqueues: BPProcess,
+        robin_dir: Path,
+        cloudflow_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """Metadata contains containsActiveWorkQueuesActions:false without WorkQueues stages."""
+        output_path = tmp_path / "solution.zip"
+        packager.package(
+            process_without_workqueues,
+            robin_dir=robin_dir,
+            cloudflow_dir=cloudflow_dir,
+            output_path=output_path,
+        )
+
+        with zipfile.ZipFile(output_path) as zf:
+            xml = zf.read("customizations.xml").decode("utf-8")
+
+        assert '"containsActiveWorkQueuesActions":false' in xml
+
+    def test_metadata_clientversion_updated(
+        self,
+        packager: SolutionPackager,
+        process_without_workqueues: BPProcess,
+        robin_dir: Path,
+        cloudflow_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """Metadata clientversion matches the real reference output."""
+        output_path = tmp_path / "solution.zip"
+        packager.package(
+            process_without_workqueues,
+            robin_dir=robin_dir,
+            cloudflow_dir=cloudflow_dir,
+            output_path=output_path,
+        )
+
+        with zipfile.ZipFile(output_path) as zf:
+            xml = zf.read("customizations.xml").decode("utf-8")
+
+        assert '"clientversion":"2.69.217.26166"' in xml
+
+    def test_claims_always_include_selfheal(
+        self,
+        packager: SolutionPackager,
+        process_without_workqueues: BPProcess,
+        robin_dir: Path,
+        cloudflow_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """Claims array always contains {"name": "selfheal"}."""
+        output_path = tmp_path / "solution.zip"
+        packager.package(
+            process_without_workqueues,
+            robin_dir=robin_dir,
+            cloudflow_dir=cloudflow_dir,
+            output_path=output_path,
+        )
+
+        with zipfile.ZipFile(output_path) as zf:
+            sol_xml = zf.read("customizations.xml")
+
+        root = etree.fromstring(sol_xml)
+        claims_text = root.find(".//{*}Claims").text
+        claims = json.loads(claims_text)
+        assert {"name": "selfheal"} in claims
+
+    def test_claims_include_workqueues_claim_when_stage_present(
+        self,
+        packager: SolutionPackager,
+        process_with_workqueues: BPProcess,
+        robin_dir: Path,
+        cloudflow_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """Claims array includes workqueues.items.get when a WorkQueues stage exists."""
+        output_path = tmp_path / "solution.zip"
+        packager.package(
+            process_with_workqueues,
+            robin_dir=robin_dir,
+            cloudflow_dir=cloudflow_dir,
+            output_path=output_path,
+        )
+
+        with zipfile.ZipFile(output_path) as zf:
+            sol_xml = zf.read("customizations.xml")
+
+        root = etree.fromstring(sol_xml)
+        claims_text = root.find(".//{*}Claims").text
+        claims = json.loads(claims_text)
+        assert {"name": "selfheal"} in claims
+        assert {"name": "workqueues.items.get"} in claims
+
+    def test_claims_deduplicated(
+        self,
+        packager: SolutionPackager,
+        process_with_workqueues: BPProcess,
+        robin_dir: Path,
+        cloudflow_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """Claims array contains no duplicate entries."""
+        output_path = tmp_path / "solution.zip"
+        packager.package(
+            process_with_workqueues,
+            robin_dir=robin_dir,
+            cloudflow_dir=cloudflow_dir,
+            output_path=output_path,
+        )
+
+        with zipfile.ZipFile(output_path) as zf:
+            sol_xml = zf.read("customizations.xml")
+
+        root = etree.fromstring(sol_xml)
+        claims_text = root.find(".//{*}Claims").text
+        claims = json.loads(claims_text)
+        names = [c["name"] for c in claims]
+        assert len(names) == len(set(names))
+
+    def test_desktop_only_page_gets_category_6_and_ui_flow_type_2(
+        self,
+        packager: SolutionPackager,
+        process_without_workqueues: BPProcess,
+        robin_dir: Path,
+        cloudflow_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """A DESKTOP-only page is packaged with Category=6 and UIFlowType=2."""
+        output_path = tmp_path / "solution.zip"
+        packager.package(
+            process_without_workqueues,
+            robin_dir=robin_dir,
+            cloudflow_dir=cloudflow_dir,
+            output_path=output_path,
+        )
+
+        with zipfile.ZipFile(output_path) as zf:
+            sol_xml = zf.read("customizations.xml")
+
+        root = etree.fromstring(sol_xml)
+        workflow = root.find(".//{*}Workflow")
+        assert workflow.find("{*}Category").text == "6"
+        assert workflow.find("{*}UIFlowType").text == "2"
+
+    def test_mixed_desktop_and_workqueues_page_stays_category_6(
+        self,
+        packager: SolutionPackager,
+        process_mixed_workqueues: BPProcess,
+        robin_dir: Path,
+        cloudflow_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """A page mixing DESKTOP and CLOUD (WorkQueues) stages remains a desktop flow."""
+        output_path = tmp_path / "solution.zip"
+        packager.package(
+            process_mixed_workqueues,
+            robin_dir=robin_dir,
+            cloudflow_dir=cloudflow_dir,
+            output_path=output_path,
+        )
+
+        with zipfile.ZipFile(output_path) as zf:
+            sol_xml = zf.read("customizations.xml")
+
+        root = etree.fromstring(sol_xml)
+        workflow = root.find(".//{*}Workflow")
+        assert workflow.find("{*}Category").text == "6"
+        assert workflow.find("{*}UIFlowType").text == "2"
+
+    def test_all_cloud_page_gets_category_5(
+        self,
+        packager: SolutionPackager,
+        process_with_workqueues: BPProcess,
+        robin_dir: Path,
+        cloudflow_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """A page whose every annotated stage targets CLOUD is Category=5."""
+        output_path = tmp_path / "solution.zip"
+        packager.package(
+            process_with_workqueues,
+            robin_dir=robin_dir,
+            cloudflow_dir=cloudflow_dir,
+            output_path=output_path,
+        )
+
+        with zipfile.ZipFile(output_path) as zf:
+            sol_xml = zf.read("customizations.xml")
+
+        root = etree.fromstring(sol_xml)
+        workflow = root.find(".//{*}Workflow")
+        assert workflow.find("{*}Category").text == "5"

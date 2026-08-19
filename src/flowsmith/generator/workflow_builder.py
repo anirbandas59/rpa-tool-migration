@@ -16,8 +16,14 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from flowsmith.ast.models import BPPage, BPProcess
+from flowsmith.ast.models import BPPage, BPProcess, Runtime
 from flowsmith.exceptions import GenerationError
+
+# Blue Prism VBO catalogue module name used for Work Queue actions
+# (mapping/vbo_catalogue.yaml: pa_module: "WorkQueues"). Any stage annotated
+# with this target_module drives the containsActiveWorkQueuesActions
+# metadata flag and the workqueues.* Claims entries.
+WORKQUEUES_MODULE = "WorkQueues"
 
 
 class WorkflowBuilder:
@@ -77,6 +83,12 @@ class WorkflowBuilder:
             # Generate a GUID for the workflow
             workflow_id = str(uuid.uuid4()).upper()
 
+            # Category/UIFlowType depend on whether the page is a desktop
+            # (PAD .robin) flow or a cloud (Power Automate) flow.
+            page_runtime = self._page_runtime(page)
+            category = 5 if page_runtime == Runtime.CLOUD else 6
+            ui_flow_type = 0 if page_runtime == Runtime.CLOUD else 2
+
             # Build the workflow element
             workflow = {
                 "workflow_id": workflow_id,
@@ -84,7 +96,7 @@ class WorkflowBuilder:
                 "json_file_name": json_file.name if json_file else f"{page.name}.json",
                 "type": 1,  # Workflow type
                 "subprocess": 0,
-                "category": 6,  # Desktop flow category
+                "category": category,  # 6 = desktop flow, 5 = cloud flow
                 "mode": 0,
                 "scope": 4,
                 "on_demand": 0,
@@ -99,7 +111,7 @@ class WorkflowBuilder:
                 "introduced_version": "1.0",
                 "is_customizable": 1,
                 "business_process_type": 0,
-                "ui_flow_type": 2,  # Desktop flow marker
+                "ui_flow_type": ui_flow_type,  # 2 = desktop flow marker, 0 = cloud flow
                 "is_custom_processing_step_allowed_for_other_publishers": 1,
                 "modern_flow_type": 0,
                 "metadata": metadata,
@@ -137,6 +149,45 @@ class WorkflowBuilder:
         # Escape for JSON embedding
         escaped = normalized.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\r\\n")
         return f'"{escaped}"'
+
+    def _page_runtime(self, page: BPPage) -> Runtime:
+        """Classify a page as a Cloud Flow or a Desktop (PAD) flow.
+
+        A page is treated as CLOUD only when every annotated stage on it
+        targets the CLOUD runtime. Any DESKTOP-targeted stage makes the
+        whole page a DESKTOP flow, since a .robin script always executes
+        as a single desktop process even when individual actions (e.g.
+        WorkQueues) are annotated CLOUD in the VBO catalogue. A page with
+        no annotated stages defaults to DESKTOP.
+
+        Args:
+            page: The BPPage to classify.
+
+        Returns:
+            Runtime.CLOUD if every annotated stage targets CLOUD,
+            otherwise Runtime.DESKTOP.
+        """
+        annotated = [stage.pa_annotation for stage in page.stages if stage.pa_annotation]
+        if not annotated:
+            return Runtime.DESKTOP
+        if all(annotation.runtime == Runtime.CLOUD for annotation in annotated):
+            return Runtime.CLOUD
+        return Runtime.DESKTOP
+
+    def _page_has_workqueues(self, page: BPPage) -> bool:
+        """Check whether any stage on the page targets the WorkQueues module.
+
+        Args:
+            page: The BPPage to inspect.
+
+        Returns:
+            True if any stage's pa_annotation.target_module == "WorkQueues".
+        """
+        return any(
+            stage.pa_annotation is not None
+            and stage.pa_annotation.target_module == WORKQUEUES_MODULE
+            for stage in page.stages
+        )
 
     def _build_inputs_schema(self, page: BPPage) -> str:
         """Build JSON schema for workflow inputs from page data items.
@@ -256,14 +307,14 @@ class WorkflowBuilder:
             JSON string containing workflow metadata.
         """
         metadata = {
-            "clientversion": "2.63.163.25342",
+            "clientversion": "2.69.217.26166",
             "isvalid": True,
             "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
             "schemaVersion": self.DEFAULT_ROBIN_SCHEMA,
             "containsActiveConnections": False,
             "containsGptPredictActions": False,
             "containsActiveCopilotActions": False,
-            "containsActiveWorkQueuesActions": False,
+            "containsActiveWorkQueuesActions": self._page_has_workqueues(page),
             "containsActiveLogMessageActions": False,
             "containsActiveRepairWithAIActions": False,
             "containsActiveCredentialsActions": False,
@@ -285,20 +336,20 @@ class WorkflowBuilder:
             page: The BPPage being packaged.
 
         Returns:
-            List of claim dictionaries.
+            List of deduplicated claim dictionaries, in first-seen order.
         """
+        claim_names: list[str] = ["selfheal"]
+
+        if self._page_has_workqueues(page):
+            claim_names.append("workqueues.items.get")
+
+        # Deduplicate while preserving first-seen order.
+        seen: set[str] = set()
         claims = []
-
-        # Add default claims for desktop flows
-        claims.append({"name": "selfheal"})
-
-        # Add connector-specific claims based on annotations
-        for stage in page.stages:
-            if stage.pa_annotation:
-                module = stage.pa_annotation.target_module
-                if module.lower() in ["excel", "file", "web", "database"]:
-                    # These modules might require specific claims
-                    pass
+        for name in claim_names:
+            if name not in seen:
+                seen.add(name)
+                claims.append({"name": name})
 
         return claims
 
