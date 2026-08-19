@@ -5,14 +5,27 @@
       <LocalizedName description="{{ solution_name }}" languagecode="1033" />
     </LocalizedNames>
     <Version>{{ version }}</Version>
-    <Managed>0</Managed>
+    <Managed>{{ managed | default(0) }}</Managed>
     <Publisher>
       <UniqueName>{{ publisher_prefix }}</UniqueName>
+      <CustomizationPrefix>{{ publisher_prefix }}</CustomizationPrefix>
     </Publisher>
     <RootComponents>
 {%- for workflow_id in workflow_ids %}
       <RootComponent type="29" id="{{ '{' }}{{ workflow_id }}{{ '}' }}" behavior="0" />
 {%- endfor %}
     </RootComponents>
+{%- if has_workqueues %}
+    <MissingDependencies>
+      <MissingDependency>
+        <Required type="1" schemaName="workqueueitem" displayName="Work Queue Item"
+                  solution="MicrosoftFlowExtensionsCore (1.10.9.0)">
+          <package appName="MicrosoftFlowExtensionsCore" version="1.10.9.0">
+            MicrosoftFlowExtensionsAnchor (1.10.9.0)
+          </package>
+        </Required>
+      </MissingDependency>
+    </MissingDependencies>
+{%- endif %}
   </SolutionManifest>
 </ImportExportXml>

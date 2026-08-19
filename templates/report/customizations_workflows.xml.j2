@@ -22,7 +22,9 @@
       <IntroducedVersion>{{ workflow.introduced_version }}</IntroducedVersion>
       <IsCustomizable>{{ workflow.is_customizable }}</IsCustomizable>
       <BusinessProcessType>{{ workflow.business_process_type }}</BusinessProcessType>
+{% if workflow.ui_flow_type %}
       <UIFlowType>{{ workflow.ui_flow_type }}</UIFlowType>
+{% endif %}
       <IsCustomProcessingStepAllowedForOtherPublishers>{{ workflow.is_custom_processing_step_allowed_for_other_publishers }}</IsCustomProcessingStepAllowedForOtherPublishers>
       <ModernFlowType>{{ workflow.modern_flow_type }}</ModernFlowType>
       <Metadata>{{ workflow.metadata }}</Metadata>

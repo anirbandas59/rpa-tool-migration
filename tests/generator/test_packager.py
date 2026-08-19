@@ -1044,3 +1044,174 @@ class TestMetadataAndClaims:
         root = etree.fromstring(sol_xml)
         workflow = root.find(".//{*}Workflow")
         assert workflow.find("{*}Category").text == "5"
+
+    def test_all_cloud_page_omits_ui_flow_type_element(
+        self,
+        packager: SolutionPackager,
+        process_with_workqueues: BPProcess,
+        robin_dir: Path,
+        cloudflow_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """A page whose every annotated stage targets CLOUD has no <UIFlowType> element."""
+        output_path = tmp_path / "solution.zip"
+        packager.package(
+            process_with_workqueues,
+            robin_dir=robin_dir,
+            cloudflow_dir=cloudflow_dir,
+            output_path=output_path,
+        )
+
+        with zipfile.ZipFile(output_path) as zf:
+            sol_xml = zf.read("customizations.xml")
+
+        root = etree.fromstring(sol_xml)
+        workflow = root.find(".//{*}Workflow")
+        assert workflow.find("{*}UIFlowType") is None
+
+    def test_desktop_page_has_ui_flow_type_element(
+        self,
+        packager: SolutionPackager,
+        process_without_workqueues: BPProcess,
+        robin_dir: Path,
+        cloudflow_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """A DESKTOP-only page keeps an explicit <UIFlowType>2</UIFlowType>."""
+        output_path = tmp_path / "solution.zip"
+        packager.package(
+            process_without_workqueues,
+            robin_dir=robin_dir,
+            cloudflow_dir=cloudflow_dir,
+            output_path=output_path,
+        )
+
+        with zipfile.ZipFile(output_path) as zf:
+            sol_xml = zf.read("customizations.xml")
+
+        root = etree.fromstring(sol_xml)
+        workflow = root.find(".//{*}Workflow")
+        assert workflow.find("{*}UIFlowType").text == "2"
+
+    # -- Sub-Task 6: Managed flag, Publisher expansion, MissingDependencies --
+
+    def test_managed_defaults_to_zero(
+        self,
+        packager: SolutionPackager,
+        minimal_process: BPProcess,
+        robin_dir: Path,
+        cloudflow_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """When managed is not passed, <Managed>0</Managed> is emitted."""
+        output_path = tmp_path / "solution.zip"
+        packager.package(
+            minimal_process,
+            robin_dir=robin_dir,
+            cloudflow_dir=cloudflow_dir,
+            output_path=output_path,
+        )
+
+        with zipfile.ZipFile(output_path) as zf:
+            sol_xml = zf.read("solution.xml")
+
+        root = etree.fromstring(sol_xml)
+        assert root.find(".//{*}Managed").text == "0"
+
+    def test_managed_true_sets_managed_one(
+        self,
+        packager: SolutionPackager,
+        minimal_process: BPProcess,
+        robin_dir: Path,
+        cloudflow_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """When managed=True is requested, <Managed>1</Managed> is emitted."""
+        output_path = tmp_path / "solution.zip"
+        packager.package(
+            minimal_process,
+            robin_dir=robin_dir,
+            cloudflow_dir=cloudflow_dir,
+            output_path=output_path,
+            managed=True,
+        )
+
+        with zipfile.ZipFile(output_path) as zf:
+            sol_xml = zf.read("solution.xml")
+
+        root = etree.fromstring(sol_xml)
+        assert root.find(".//{*}Managed").text == "1"
+
+    def test_publisher_has_customization_prefix(
+        self,
+        packager: SolutionPackager,
+        minimal_process: BPProcess,
+        robin_dir: Path,
+        cloudflow_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """Publisher block includes a CustomizationPrefix matching publisher_prefix."""
+        output_path = tmp_path / "solution.zip"
+        packager.package(
+            minimal_process,
+            robin_dir=robin_dir,
+            cloudflow_dir=cloudflow_dir,
+            output_path=output_path,
+            publisher_prefix="cr3ac",
+        )
+
+        with zipfile.ZipFile(output_path) as zf:
+            sol_xml = zf.read("solution.xml")
+
+        root = etree.fromstring(sol_xml)
+        publisher = root.find(".//{*}Publisher")
+        assert publisher.find("{*}CustomizationPrefix").text == "cr3ac"
+
+    def test_no_workqueues_omits_missing_dependencies(
+        self,
+        packager: SolutionPackager,
+        minimal_process: BPProcess,
+        robin_dir: Path,
+        cloudflow_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """No WorkQueues stages anywhere in the process -> no MissingDependencies block."""
+        output_path = tmp_path / "solution.zip"
+        packager.package(
+            minimal_process,
+            robin_dir=robin_dir,
+            cloudflow_dir=cloudflow_dir,
+            output_path=output_path,
+        )
+
+        with zipfile.ZipFile(output_path) as zf:
+            sol_xml = zf.read("solution.xml")
+
+        root = etree.fromstring(sol_xml)
+        assert root.find(".//{*}MissingDependencies") is None
+
+    def test_workqueues_stage_adds_missing_dependencies(
+        self,
+        packager: SolutionPackager,
+        process_with_workqueues: BPProcess,
+        robin_dir: Path,
+        cloudflow_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """A WorkQueues-targeting stage anywhere in the process adds MissingDependencies."""
+        output_path = tmp_path / "solution.zip"
+        packager.package(
+            process_with_workqueues,
+            robin_dir=robin_dir,
+            cloudflow_dir=cloudflow_dir,
+            output_path=output_path,
+        )
+
+        with zipfile.ZipFile(output_path) as zf:
+            sol_xml = zf.read("solution.xml")
+
+        root = etree.fromstring(sol_xml)
+        missing_deps = root.find(".//{*}MissingDependencies")
+        assert missing_deps is not None
+        required = missing_deps.find(".//{*}Required")
+        assert required.get("schemaName") == "workqueueitem"

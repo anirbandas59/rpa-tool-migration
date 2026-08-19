@@ -21,7 +21,7 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 from flowsmith.ast.models import BPProcess
 from flowsmith.exceptions import GenerationError
-from flowsmith.generator.workflow_builder import WorkflowBuilder
+from flowsmith.generator.workflow_builder import WORKQUEUES_MODULE, WorkflowBuilder
 
 
 class SolutionPackager:
@@ -60,6 +60,7 @@ class SolutionPackager:
         output_path: Path,
         publisher_prefix: str = "flowsmith",
         version: str = "1.0.0.0",
+        managed: bool = False,
     ) -> Path:
         """Assemble a Power Platform solution .zip package with embedded definitions.
 
@@ -80,6 +81,8 @@ class SolutionPackager:
             output_path:      Full path for output .zip file.
             publisher_prefix: PA publisher unique name.
             version:          Solution version string.
+            managed:          Whether the solution should be flagged as managed
+                               (<Managed>1</Managed>) or unmanaged (<Managed>0</Managed>).
 
         Returns:
             Path to the created .zip file.
@@ -119,6 +122,15 @@ class SolutionPackager:
             # Prepare template variables
             solution_name = self._sanitise_filename(process.name)
 
+            # A solution needs the WorkQueues (workqueueitem) dependency declared
+            # whenever any stage across any page targets the WorkQueues module.
+            has_workqueues = any(
+                stage.pa_annotation is not None
+                and stage.pa_annotation.target_module == WORKQUEUES_MODULE
+                for page in process.pages
+                for stage in page.stages
+            )
+
             # Render templates with workflow data
             solution_xml = self._render_template(
                 "solution_with_guids.xml.j2",
@@ -126,6 +138,8 @@ class SolutionPackager:
                 publisher_prefix=publisher_prefix,
                 version=version,
                 workflow_ids=workflow_ids,
+                managed=1 if managed else 0,
+                has_workqueues=has_workqueues,
             )
 
             content_types_xml = self._render_template("content_types.xml.j2")
