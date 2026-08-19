@@ -1,0 +1,15 @@
+{# Landing pads for the GOTO targets emitted by RECOVER and RESUME stages.
+
+   Mirrors the epilogue of every FUNCTION in samples/pad/fixed/*.txt: the
+   happy path jumps over the error handler, the handler rethrows with the
+   classification captured by the Recover stage, and 'End' is the common
+   exit. Without these LABELs every generated GOTO dangles and the .robin
+   script does not compile. #}
+{% if needs_error_block %}
+GOTO 'End'
+LABEL 'Error Block'
+FlowControl.ThrowCustomError CustomErrorCode: txt_ExceptionType CustomErrorMessage: txt_ExceptionMessage
+LABEL 'End'
+{% elif needs_end %}
+LABEL 'End'
+{% endif %}

@@ -895,3 +895,32 @@ def test_pid_0171_page_with_password_item_emits_sensitive() -> None:
     result = gen.generate_page(page.model_copy(update={"is_main": True}), process.name)
 
     assert "@SENSITIVE: [" in result
+
+
+def test_goto_epilogue_declares_error_block_and_end_labels() -> None:
+    """A page that jumps to 'Error Block' gets both landing pads."""
+    gen = PADGenerator()
+    stage = make_annotated_stage(
+        stage_id="R1",
+        name="Recover",
+        stage_type=StageType.RECOVER,
+        target_type="",
+        confidence=0.70,
+    )
+    page = make_page(is_main=True, stages=[stage])
+    result = gen.generate_page(page, "TestProcess")
+
+    assert "GOTO 'Error Block'" in result
+    assert "LABEL 'Error Block'" in result
+    assert "LABEL 'End'" in result
+    assert result.index("GOTO 'Error Block'") < result.index("LABEL 'Error Block'")
+
+
+def test_goto_epilogue_omitted_when_page_has_no_goto() -> None:
+    """A page with no GOTO gets no LABEL landing pads."""
+    gen = PADGenerator()
+    page = make_page(is_main=True)
+    result = gen.generate_page(page, "TestProcess")
+
+    if "GOTO " not in result:
+        assert "LABEL " not in result

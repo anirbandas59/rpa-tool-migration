@@ -32,6 +32,11 @@ STRUCTURAL_STAGE_TYPES: frozenset[StageType] = frozenset(
     {StageType.BLOCK, StageType.RECOVER, StageType.RESUME}
 )
 
+# GOTO targets emitted by RECOVER/RESUME stages. Each needs a matching LABEL
+# in the same FUNCTION or the generated .robin script will not compile.
+GOTO_ERROR_BLOCK = "GOTO 'Error Block'"
+GOTO_END = "GOTO 'End'"
+
 
 class PADGenerator:
     """Generate .robin files for annotated BP processes."""
@@ -169,6 +174,10 @@ class PADGenerator:
                     action_lines.append(rendered)
 
             actions_content = "\n".join(action_lines)
+            epilogue = self._render_goto_epilogue(actions_content)
+            if epilogue:
+                actions_content = f"{actions_content}\n{epilogue}"
+
             subflow_template = self.env.get_template("subflow.robin.j2")
             subflow = subflow_template.render(
                 subflow_name=self._sanitise_filename(page.name),
@@ -180,6 +189,32 @@ class PADGenerator:
 
         except Exception as e:
             raise GenerationError(f"Failed to generate Robin for page '{page.name}': {e}") from e
+
+    def _render_goto_epilogue(self, body: str) -> str:
+        """Render the LABEL landing pads for the GOTOs a page body emits.
+
+        RECOVER stages emit ``GOTO 'Error Block'`` and RESUME stages emit
+        ``GOTO 'End'``, but nothing previously declared those labels, so every
+        jump dangled. This appends the same epilogue the reference flows use
+        (samples/pad/fixed/PID171_loader_fixed.txt lines 160–165), and only
+        when the body actually jumps.
+
+        Args:
+            body: The rendered action lines of the page, joined by newlines.
+
+        Returns:
+            The epilogue lines, or an empty string when the body has no GOTO.
+        """
+        needs_error_block = GOTO_ERROR_BLOCK in body
+        needs_end = GOTO_END in body
+        if not (needs_error_block or needs_end):
+            return ""
+
+        template = self.env.get_template("actions/goto_epilogue.robin.j2")
+        return template.render(
+            needs_error_block=needs_error_block,
+            needs_end=needs_end,
+        ).strip("\n")
 
     def _render_stage(self, stage: BPStage) -> str:
         """Render a single stage to Robin action line(s).
