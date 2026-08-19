@@ -54,6 +54,9 @@ Five layers require coordinated changes, in this order:
 | `src/flowsmith/generator/cloudflow.py` | BPProcess → Cloud Flow JSON |
 | `src/flowsmith/generator/workflow_builder.py` | BPPage → Workflow XML element dict |
 | `src/flowsmith/generator/packager.py` | Assemble .zip package |
+| `src/flowsmith/generator/connections.py` | ✅ NEW — connection reference helpers (module → PA connector map) |
+| `src/flowsmith/generator/naming.py` | ✅ NEW — env var schema name helper |
+| `src/flowsmith/generator/xml_escape.py` | ✅ NEW — XML text/attribute escaping Jinja2 filters |
 | `mapping/stage_rules.yaml` | Stage type → PA target rules |
 
 ### Templates to update
@@ -204,7 +207,7 @@ samples/blueprism/PID_0171.bprelease
 ---
 
 ### Sub-Task 1 — Parser: Extract 9 Missing Fields from `_parse_stage()`
-**Status:** `[ ] pending`
+**Status:** `[x] done`
 
 **Intent:**
 The parser currently misses decision expressions, code body text, stage narratives,
@@ -266,7 +269,7 @@ and friendlyname attributes. These are all needed by later pipeline stages.
 ---
 
 ### Sub-Task 2 — AST Models: Add New Fields to BPStage, BPPage, BPDataItem
-**Status:** `[ ] pending`
+**Status:** `[x] done`
 
 **Intent:**
 Propagate the newly-parsed fields into the canonical Pydantic models so the engine
@@ -328,7 +331,7 @@ and generator can access them.
 ---
 
 ### Sub-Task 3 — Annotator: Use New Stage Fields for Better Annotation
-**Status:** `[ ] pending`
+**Status:** `[x] done`
 
 **Intent:**
 The annotator should now use the newly available fields to produce richer annotations:
@@ -375,7 +378,7 @@ The annotator should now use the newly available fields to produce richer annota
 ---
 
 ### Sub-Task 4 — PAD Generator: Structural Robin Constructs
-**Status:** `[ ] pending`
+**Status:** `[x] done`
 
 **Intent:**
 The current PAD generator cannot produce BLOCK/ON BLOCK ERROR, LABEL/GOTO,
@@ -444,7 +447,7 @@ These are required for the `<Definition>` content to be valid PAD script.
 ---
 
 ### Sub-Task 5 — WorkflowBuilder: Fix Metadata JSON Flags and Claims
-**Status:** `[ ] pending`
+**Status:** `[x] done`
 
 **Intent:**
 The `<Metadata>` JSON in `customizations.xml` currently hardcodes all feature flags to `false`.
@@ -491,7 +494,7 @@ Both need to be computed from the annotated process stages only (no VBO catalogu
 ---
 
 ### Sub-Task 6 — Packager: Fix solution.xml and Category Dispatch
-**Status:** `[ ] pending`
+**Status:** `[x] done`
 
 **Intent:**
 The current `solution.xml` output differs from the reference in several ways:
@@ -571,7 +574,7 @@ pages (Category=5) when building Workflow elements.
 ---
 
 ### Sub-Task 7 — Cloud Flow Generator: Produce Real CF JSON Structure
-**Status:** `[ ] pending`
+**Status:** `[x] done` — scoped-down per plan text (static structure + dynamic substitution); CF orchestrator workflow registration (its own `<Workflow>`/RootComponent in customizations.xml) deferred, see Sub-Task 8 report
 
 **Intent:**
 The current Cloud Flow JSON output is a minimal try/catch scope with placeholder actions.
@@ -646,7 +649,7 @@ Full action-level fidelity is tracked separately.
 ---
 
 ### Sub-Task 8 — Integration Test: End-to-End PID_0171 Generation
-**Status:** `[ ] pending`
+**Status:** `[x] done` — see `docs/SUBTASK8_VALIDATION_REPORT.md` for full comparison; well-formedness and 6 import-blocking bugs fixed; WorkQueues action mapping and 380-vs-4-workflow consolidation remain open (need `mapping/vbo_catalogue.yaml` data and the deferred `BPEdge`/call-graph work respectively)
 
 **Intent:**
 Run the full pipeline against `samples/blueprism/PID_0171.bprelease` and validate the
