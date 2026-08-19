@@ -34,3 +34,33 @@ def test_parameter_key_format() -> None:
     assert env_var_parameter_key("Config File", "cr3ac_Config_File") == (
         "Config File (cr3ac_Config_File)"
     )
+
+
+class TestFlowFileStem:
+    """Tests for flow_file_stem() — shared page/process file-stem derivation."""
+
+    def test_spaces_become_underscores(self) -> None:
+        """Spaces map to underscores, as PADGenerator writes them."""
+        from flowsmith.generator.naming import flow_file_stem
+
+        assert flow_file_stem("Mark Item As Completed") == "Mark_Item_As_Completed"
+
+    def test_other_specials_are_removed(self) -> None:
+        """Characters outside [A-Za-z0-9_] are dropped."""
+        from flowsmith.generator.naming import flow_file_stem
+
+        assert flow_file_stem("Launch_Sample Manager (v2)") == "Launch_Sample_Manager_v2"
+
+    def test_empty_result_falls_back(self) -> None:
+        """A name with nothing usable falls back to 'flow'."""
+        from flowsmith.generator.naming import flow_file_stem
+
+        assert flow_file_stem("!!!") == "flow"
+
+    def test_matches_pad_generator_derivation(self) -> None:
+        """PADGenerator's filename stem is the same derivation."""
+        from flowsmith.generator.naming import flow_file_stem
+        from flowsmith.generator.pad import PADGenerator
+
+        for name in ("Mark Item As Completed", "Get Mails", "Result Entry"):
+            assert PADGenerator._sanitise_filename(name) == flow_file_stem(name)

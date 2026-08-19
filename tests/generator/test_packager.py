@@ -1776,3 +1776,82 @@ class TestManagedFlag:
         with zipfile.ZipFile(output_path) as zf:
             root = etree.fromstring(zf.read("solution.xml"))
         assert root.findtext(".//{*}Managed") == "0"
+
+
+class TestPageWithSpacesIsPackaged:
+    """Regression — pages whose names contain spaces must not be dropped."""
+
+    @pytest.fixture
+    def spaced_robin_dir(self, tmp_path: Path) -> Path:
+        """A .robin directory named the way PADGenerator names its output."""
+        robin_path = tmp_path / "robin_spaced"
+        robin_path.mkdir(parents=True, exist_ok=True)
+        (robin_path / "Mark_Item_As_Completed.robin").write_text(
+            "FUNCTION 'x' GLOBAL\nEND FUNCTION"
+        )
+        return robin_path
+
+    def test_page_name_with_spaces_produces_a_workflow(
+        self,
+        packager: SolutionPackager,
+        spaced_robin_dir: Path,
+        cloudflow_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """A page called "Mark Item As Completed" is matched to its .robin file."""
+        process = BPProcess(
+            process_id="test_spaces",
+            name="TestSpaces",
+            version="1.0",
+            pages=[
+                BPPage(page_id="P1", name="Mark Item As Completed", stages=[], is_main=True),
+            ],
+            source_file="test.bprelease",
+        )
+        output_path = tmp_path / "solution.zip"
+        packager.package(
+            process,
+            robin_dir=spaced_robin_dir,
+            cloudflow_dir=cloudflow_dir,
+            output_path=output_path,
+        )
+
+        with zipfile.ZipFile(output_path) as zf:
+            root = etree.fromstring(zf.read("customizations.xml"))
+
+        workflows = root.findall(".//{*}Workflow")
+        assert len(workflows) == 1
+        assert workflows[0].get("Name") == "Mark Item As Completed"
+
+    def test_exact_stem_match_wins_over_substring(
+        self,
+        packager: SolutionPackager,
+        tmp_path: Path,
+        cloudflow_dir: Path,
+    ) -> None:
+        """ "Copy" matches Copy.robin, not Copy_File.robin."""
+        robin_path = tmp_path / "robin_ambiguous"
+        robin_path.mkdir(parents=True, exist_ok=True)
+        (robin_path / "Copy_File.robin").write_text("# wrong flow")
+        (robin_path / "Copy.robin").write_text("# right flow")
+
+        process = BPProcess(
+            process_id="test_ambig",
+            name="TestAmbig",
+            version="1.0",
+            pages=[BPPage(page_id="P1", name="Copy", stages=[], is_main=True)],
+            source_file="test.bprelease",
+        )
+        output_path = tmp_path / "solution.zip"
+        packager.package(
+            process,
+            robin_dir=robin_path,
+            cloudflow_dir=cloudflow_dir,
+            output_path=output_path,
+        )
+
+        with zipfile.ZipFile(output_path) as zf:
+            root = etree.fromstring(zf.read("customizations.xml"))
+
+        definition = json.loads(root.find(".//{*}Definition").text)
+        assert "# right flow" in definition

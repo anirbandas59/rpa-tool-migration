@@ -22,7 +22,7 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined
 from flowsmith.ast.models import BPProcess
 from flowsmith.exceptions import GenerationError
 from flowsmith.generator.cloudflow import CloudFlowGenerator
-from flowsmith.generator.naming import env_var_schema_name
+from flowsmith.generator.naming import env_var_schema_name, flow_file_stem
 from flowsmith.generator.workflow_builder import WORKQUEUES_MODULE, WorkflowBuilder
 from flowsmith.generator.xml_escape import escape_xml_attr, escape_xml_text
 
@@ -265,14 +265,10 @@ class SolutionPackager:
         Returns:
             Path to matching .robin file, or None if not found.
         """
-        # Pages are stored as sanitised filenames
-        target_stem = self._sanitise_filename(page.name)
-
-        for robin_file in robin_files:
-            if robin_file.stem == target_stem or target_stem in robin_file.stem:
-                return robin_file
-
-        return None
+        # PADGenerator names files with flow_file_stem(); use the same
+        # derivation, or pages whose names contain spaces are silently
+        # dropped from the package.
+        return self._match_by_stem(flow_file_stem(page.name), robin_files)
 
     def _find_cloudflow_file(self, page, cf_files: list[Path]) -> Path | None:
         """Find the Cloud Flow JSON file matching a BP page.
@@ -284,11 +280,31 @@ class SolutionPackager:
         Returns:
             Path to matching JSON file, or None if not found.
         """
-        target_stem = self._sanitise_filename(page.name)
+        return self._match_by_stem(flow_file_stem(page.name), cf_files)
 
-        for cf_file in cf_files:
-            if cf_file.stem == target_stem or target_stem in cf_file.stem:
-                return cf_file
+    @staticmethod
+    def _match_by_stem(target_stem: str, candidates: list[Path]) -> Path | None:
+        """Find the file whose stem best matches a page's file stem.
+
+        An exact stem match always wins. Only when there is none does the
+        search fall back to a substring match, which covers the main page
+        (written as `<process>_main.robin`) and the Cloud Flow suffix
+        (`<page>_cloudflow.json`).
+
+        Args:
+            target_stem: The page's `flow_file_stem()` value.
+            candidates: Candidate files to search.
+
+        Returns:
+            The matching Path, or None when nothing matches.
+        """
+        for candidate in candidates:
+            if candidate.stem == target_stem:
+                return candidate
+
+        for candidate in candidates:
+            if target_stem in candidate.stem:
+                return candidate
 
         return None
 

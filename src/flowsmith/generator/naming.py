@@ -1,14 +1,37 @@
-"""Dataverse naming helpers shared by the packager and the Cloud Flow generator.
+"""Naming helpers shared across the generator layer.
 
 Both `SolutionPackager` (which writes environmentvariabledefinitions/*.xml) and
 `CloudFlowGenerator` (which emits `parameters` entries referencing the same
 variables) must agree on the schema name of every environment variable.
 This module is the single source of truth for that derivation.
+
+It is likewise the single source of truth for the per-page file stem:
+`PADGenerator` writes `<stem>.robin`, `CloudFlowGenerator` writes
+`<stem>_cloudflow.json`, and `SolutionPackager` looks both up by stem. When
+those derivations drift, pages are silently dropped from the package.
 """
 
 from __future__ import annotations
 
+import re
+
 from flowsmith.exceptions import GenerationError
+
+_UNSAFE_STEM_CHARS = re.compile(r"[^a-zA-Z0-9_]")
+
+
+def flow_file_stem(name: str) -> str:
+    """Derive the on-disk file stem for a page or process name.
+
+    Args:
+        name: Blue Prism page or process name.
+
+    Returns:
+        The name with spaces turned into underscores and every remaining
+        character outside ``[A-Za-z0-9_]`` removed. Falls back to ``"flow"``
+        when nothing usable is left.
+    """
+    return _UNSAFE_STEM_CHARS.sub("", name.replace(" ", "_")) or "flow"
 
 
 def env_var_schema_name(publisher_prefix: str, name: str) -> str:

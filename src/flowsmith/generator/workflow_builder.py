@@ -23,6 +23,7 @@ from flowsmith.generator.connections import (
     build_workflow_connection_references,
     resolve_connection_names,
 )
+from flowsmith.generator.naming import flow_file_stem
 
 # Blue Prism VBO catalogue module name used for Work Queue actions
 # (mapping/vbo_catalogue.yaml: pa_module: "WorkQueues"). Any stage annotated
@@ -160,7 +161,7 @@ class WorkflowBuilder:
                 # writes this file, so <JsonFileName> always resolves inside
                 # the .zip. `json_file` (the per-page Cloud Flow JSON) is kept
                 # as a separate payload and is not the workflow's own manifest.
-                "json_file_name": f"{self._sanitise_name(page.name)}-{workflow_id}.json",
+                "json_file_name": f"{flow_file_stem(page.name)}-{workflow_id}.json",
                 "type": 1,  # Workflow type
                 "subprocess": 0,
                 "category": category,  # 6 = desktop flow, 5 = cloud flow
@@ -201,19 +202,6 @@ class WorkflowBuilder:
             raise
         except Exception as e:
             raise GenerationError(f"Failed to build workflow for page '{page.name}': {e}") from e
-
-    @staticmethod
-    def _sanitise_name(name: str) -> str:
-        """Make a page name safe for use inside a zip entry path.
-
-        Args:
-            name: Blue Prism page name.
-
-        Returns:
-            The name with every character outside [A-Za-z0-9_-] replaced by
-            an underscore.
-        """
-        return "".join(ch if (ch.isalnum() or ch in "_-") else "_" for ch in name)
 
     @staticmethod
     def build_definition_json(workflow: dict[str, Any]) -> str:

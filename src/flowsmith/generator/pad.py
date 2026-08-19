@@ -9,13 +9,13 @@ Sub-pages → {page_name}.robin
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 from flowsmith.ast.models import BPProcess, BPStage, ConfidenceBand, StageType
 from flowsmith.exceptions import GenerationError
+from flowsmith.generator.naming import flow_file_stem
 
 # Data types that always make a variable sensitive in the generated @SENSITIVE list.
 SENSITIVE_DATA_TYPES: frozenset[str] = frozenset({"password", "binary"})
@@ -510,11 +510,7 @@ class PADGenerator:
         Returns:
             Sanitised filename (spaces → underscores, special chars removed).
         """
-        # Replace spaces with underscores
-        name = name.replace(" ", "_")
-        # Remove special characters, keep only alphanumeric and underscores
-        name = re.sub(r"[^a-zA-Z0-9_]", "", name)
-        return name or "flow"
+        return flow_file_stem(name)
 
     @staticmethod
     def _map_bp_type_to_robin(bp_type: str) -> str:

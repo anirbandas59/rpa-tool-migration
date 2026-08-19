@@ -11,7 +11,6 @@ Sub-pages → {page_name}_cloudflow.json
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
@@ -25,7 +24,11 @@ from flowsmith.generator.connections import (
     build_cloudflow_connection_references,
     resolve_connection_names,
 )
-from flowsmith.generator.naming import env_var_parameter_key, env_var_schema_name
+from flowsmith.generator.naming import (
+    env_var_parameter_key,
+    env_var_schema_name,
+    flow_file_stem,
+)
 
 # Connections the orchestrator always uses: it invokes desktop flows
 # (shared_uiflow), queries the work queue (Dataverse) and mails the global
@@ -683,9 +686,7 @@ class CloudFlowGenerator:
         Returns:
             Sanitised filename.
         """
-        name = name.replace(" ", "_")
-        name = re.sub(r"[^a-zA-Z0-9_]", "", name)
-        return name or "flow"
+        return flow_file_stem(name)
 
     @staticmethod
     def _map_bp_type_to_cf_type(bp_type: str) -> str:
