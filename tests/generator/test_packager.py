@@ -1622,3 +1622,157 @@ class TestDefinitionJsonEncoding:
         text = self._definition(packager, tabbed_process, tabbed_robin_dir, cloudflow_dir, tmp_path)
         assert r"\u00e9" not in text
         assert json.loads(text).count("café") == 1
+
+
+class TestWorkflowManifestJson:
+    """Every <JsonFileName> must resolve to a file inside the .zip."""
+
+    @pytest.fixture
+    def one_page_process(self) -> BPProcess:
+        """A one-page process matching the `robin_dir` fixture's flow1.robin."""
+        stage = BPStage(
+            stage_id="S1",
+            stage_type=StageType.DATA,
+            name="In_txt_Config",
+            data_items=[],
+        )
+        return BPProcess(
+            process_id="test_manifest",
+            name="TestManifest",
+            version="1.0",
+            pages=[BPPage(page_id="P1", name="flow1", stages=[stage], is_main=True)],
+            source_file="test.bprelease",
+        )
+
+    def test_every_json_file_name_exists_in_zip(
+        self,
+        packager: SolutionPackager,
+        one_page_process: BPProcess,
+        robin_dir: Path,
+        cloudflow_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """No Workflow element points at a missing Workflows/*.json entry."""
+        output_path = tmp_path / "solution.zip"
+        packager.package(
+            one_page_process,
+            robin_dir=robin_dir,
+            cloudflow_dir=cloudflow_dir,
+            output_path=output_path,
+        )
+
+        with zipfile.ZipFile(output_path) as zf:
+            names = set(zf.namelist())
+            root = etree.fromstring(zf.read("customizations.xml"))
+
+        referenced = [
+            w.findtext("JsonFileName").lstrip("/") for w in root.findall(".//{*}Workflow")
+        ]
+        assert referenced
+        assert [r for r in referenced if r not in names] == []
+
+    def test_json_file_name_embeds_workflow_id(
+        self,
+        packager: SolutionPackager,
+        one_page_process: BPProcess,
+        robin_dir: Path,
+        cloudflow_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """Manifest filenames follow the reference "<Name>-<WorkflowId>.json"."""
+        output_path = tmp_path / "solution.zip"
+        packager.package(
+            one_page_process,
+            robin_dir=robin_dir,
+            cloudflow_dir=cloudflow_dir,
+            output_path=output_path,
+        )
+
+        with zipfile.ZipFile(output_path) as zf:
+            root = etree.fromstring(zf.read("customizations.xml"))
+
+        workflow = root.find(".//{*}Workflow")
+        assert workflow is not None
+        workflow_id = workflow.get("WorkflowId").strip("{}")
+        assert workflow.findtext("JsonFileName") == f"/Workflows/flow1-{workflow_id}.json"
+
+    def test_manifest_json_has_expected_shape(
+        self,
+        packager: SolutionPackager,
+        one_page_process: BPProcess,
+        robin_dir: Path,
+        cloudflow_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """Manifest mirrors the reference DF_*.json structure."""
+        output_path = tmp_path / "solution.zip"
+        packager.package(
+            one_page_process,
+            robin_dir=robin_dir,
+            cloudflow_dir=cloudflow_dir,
+            output_path=output_path,
+        )
+
+        with zipfile.ZipFile(output_path) as zf:
+            root = etree.fromstring(zf.read("customizations.xml"))
+            name = root.find(".//{*}Workflow").findtext("JsonFileName").lstrip("/")
+            manifest = json.loads(zf.read(name))
+
+        assert manifest["schemaversion"] == "ROBIN_202208_DVRS"
+        assert manifest["properties"]["definition"] == {"package": ""}
+        assert "inputs" in manifest["properties"]
+        assert "outputs" in manifest["properties"]
+
+    def test_build_definition_json_rejects_malformed_workflow(self) -> None:
+        """A workflow dict without valid inputs/outputs raises GenerationError."""
+        from flowsmith.generator.workflow_builder import WorkflowBuilder
+
+        with pytest.raises(GenerationError):
+            WorkflowBuilder.build_definition_json({"name": "bad", "inputs": "{not json"})
+
+
+class TestManagedFlag:
+    """Sub-Task 6 — <Managed> reflects the packager's managed argument."""
+
+    def test_managed_true_emits_one(
+        self,
+        packager: SolutionPackager,
+        minimal_process: BPProcess,
+        robin_dir: Path,
+        cloudflow_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """managed=True produces <Managed>1</Managed>."""
+        output_path = tmp_path / "solution.zip"
+        packager.package(
+            minimal_process,
+            robin_dir=robin_dir,
+            cloudflow_dir=cloudflow_dir,
+            output_path=output_path,
+            managed=True,
+        )
+
+        with zipfile.ZipFile(output_path) as zf:
+            root = etree.fromstring(zf.read("solution.xml"))
+        assert root.findtext(".//{*}Managed") == "1"
+
+    def test_managed_default_emits_zero(
+        self,
+        packager: SolutionPackager,
+        minimal_process: BPProcess,
+        robin_dir: Path,
+        cloudflow_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """The default produces <Managed>0</Managed>."""
+        output_path = tmp_path / "solution.zip"
+        packager.package(
+            minimal_process,
+            robin_dir=robin_dir,
+            cloudflow_dir=cloudflow_dir,
+            output_path=output_path,
+        )
+
+        with zipfile.ZipFile(output_path) as zf:
+            root = etree.fromstring(zf.read("solution.xml"))
+        assert root.findtext(".//{*}Managed") == "0"

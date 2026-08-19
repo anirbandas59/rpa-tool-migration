@@ -107,7 +107,10 @@ class WorkflowBuilder:
             page: The BPPage to build from.
             process: The parent BPProcess (for name context).
             robin_file: Path to the generated .robin file containing PAD script.
-            json_file: Optional path to Cloud Flow JSON file.
+            json_file: Optional path to the page's Cloud Flow JSON file.
+                Retained for caller compatibility; the Workflow element's
+                <JsonFileName> is always the generated
+                "<Name>-<WorkflowId>.json" manifest, not this file.
 
         Returns:
             Dictionary containing workflow XML element data ready for templating.
@@ -153,7 +156,11 @@ class WorkflowBuilder:
             workflow = {
                 "workflow_id": workflow_id,
                 "name": page.name,
-                "json_file_name": json_file.name if json_file else f"{page.name}.json",
+                # Reference convention: "<Name>-<WorkflowId>.json". The packager
+                # writes this file, so <JsonFileName> always resolves inside
+                # the .zip. `json_file` (the per-page Cloud Flow JSON) is kept
+                # as a separate payload and is not the workflow's own manifest.
+                "json_file_name": f"{self._sanitise_name(page.name)}-{workflow_id}.json",
                 "type": 1,  # Workflow type
                 "subprocess": 0,
                 "category": category,  # 6 = desktop flow, 5 = cloud flow
@@ -194,6 +201,56 @@ class WorkflowBuilder:
             raise
         except Exception as e:
             raise GenerationError(f"Failed to build workflow for page '{page.name}': {e}") from e
+
+    @staticmethod
+    def _sanitise_name(name: str) -> str:
+        """Make a page name safe for use inside a zip entry path.
+
+        Args:
+            name: Blue Prism page name.
+
+        Returns:
+            The name with every character outside [A-Za-z0-9_-] replaced by
+            an underscore.
+        """
+        return "".join(ch if (ch.isalnum() or ch in "_-") else "_" for ch in name)
+
+    @staticmethod
+    def build_definition_json(workflow: dict[str, Any]) -> str:
+        """Build the per-workflow manifest JSON referenced by <JsonFileName>.
+
+        Every Workflow element in customizations.xml names a JSON file under
+        `Workflows/`. For a desktop flow that file is a thin manifest — the
+        PAD script itself lives in <Definition> — carrying only the inputs and
+        outputs schemas, mirroring the reference managed solution's
+        `DF_PID_171_US_Loader-*.json`.
+
+        Args:
+            workflow: A workflow dict as returned by `build_workflow()`.
+
+        Returns:
+            The manifest as a JSON string.
+
+        Raises:
+            GenerationError: If the workflow's inputs/outputs are not valid JSON.
+        """
+        try:
+            inputs = json.loads(workflow["inputs"])
+            outputs = json.loads(workflow["outputs"])
+        except (KeyError, ValueError) as e:
+            raise GenerationError(
+                f"Cannot build manifest JSON for workflow '{workflow.get('name')}': {e}"
+            ) from e
+
+        manifest = {
+            "properties": {
+                "definition": {"package": ""},
+                "inputs": inputs,
+                "outputs": outputs,
+            },
+            "schemaversion": "ROBIN_202208_DVRS",
+        }
+        return json.dumps(manifest, indent=1)
 
     def _escape_definition(self, robin_content: str) -> str:
         """Encode PAD script as the JSON string literal held by <Definition>.

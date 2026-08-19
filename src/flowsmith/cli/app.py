@@ -23,6 +23,9 @@ def convert(
     input: str = typer.Option(..., "--input", "-i", help="Path to .bprelease file"),
     output: str = typer.Option("output", "--output", "-o", help="Output directory"),
     overrides: str = typer.Option(None, "--overrides", help="Path to overrides.yaml"),
+    managed: bool = typer.Option(
+        False, "--managed", help="Flag the solution as managed (<Managed>1</Managed>)"
+    ),
 ):
     """Parse, transform and generate Power Automate flows from a .bprelease files"""
     from pathlib import Path
@@ -56,7 +59,7 @@ def convert(
 
         console.print("[bold]Packaging[/bold] solution...")
         zip_path = output_dir / f"{process.name}_solution.zip"
-        SolutionPackager().package(process, robin_dir, cf_dir, zip_path)
+        SolutionPackager().package(process, robin_dir, cf_dir, zip_path, managed=managed)
 
         console.print(f"[green]Done[/green] -> {zip_path}")
     except (ParseError, Exception) as exc:

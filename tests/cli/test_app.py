@@ -52,3 +52,14 @@ def test_deploy_requires_solution_and_env_flags():
         text=True,
     )
     assert result.returncode != 0
+
+
+def test_convert_exposes_managed_flag():
+    """convert must expose --managed so a managed solution can be produced."""
+    result = subprocess.run(
+        ["uv", "run", "flowsmith", "convert", "--help"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0
+    assert "--managed" in result.stdout

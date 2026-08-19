@@ -185,6 +185,16 @@ class SolutionPackager:
                 zf.writestr("[Content_Types].xml", content_types_xml)
                 zf.writestr("customizations.xml", customizations_xml)
 
+                # Per-workflow manifest JSON — the file every Workflow
+                # element's <JsonFileName> points at. Without it the
+                # customizations.xml references dangle and the solution
+                # cannot be imported.
+                for workflow in builder.workflows:
+                    zf.writestr(
+                        f"Workflows/{workflow['json_file_name']}",
+                        WorkflowBuilder.build_definition_json(workflow),
+                    )
+
                 # Cloud Flow JSON files (if any)
                 for cf_file in cf_files:
                     arcname = f"Workflows/{cf_file.name}"
