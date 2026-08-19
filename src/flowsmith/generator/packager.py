@@ -3,6 +3,12 @@
 Converts generated .robin and Cloud Flow JSON files into a deployment-ready
 Power Platform solution package (.zip) that can be imported via:
   pac solution import --path solution.zip
+
+Architecture (Phase 6.4):
+  - Embeds full PAD script code in customizations.xml Workflow elements
+  - Uses GUID-based RootComponent IDs in solution.xml
+  - Creates per-flow metadata (Inputs, Outputs, Dependencies, ConnectionReferences)
+  - Generates workflow definitions with complete metadata JSON
 """
 
 from __future__ import annotations
@@ -15,6 +21,7 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 from flowsmith.ast.models import BPProcess
 from flowsmith.exceptions import GenerationError
+from flowsmith.generator.workflow_builder import WorkflowBuilder
 
 
 class SolutionPackager:
@@ -54,20 +61,23 @@ class SolutionPackager:
         publisher_prefix: str = "flowsmith",
         version: str = "1.0.0.0",
     ) -> Path:
-        """Assemble a Power Platform solution .zip package.
+        """Assemble a Power Platform solution .zip package with embedded definitions.
 
-        Collects all generated .robin and .json files and
-        packs them into a solution .zip ready for
-        pac solution import.
+        Converts annotated BPProcess pages into Workflow elements with embedded
+        PAD script definitions in customizations.xml. Uses GUID-based RootComponent
+        references in solution.xml.
+
+        Architecture (Phase 6.4):
+          - Embeds full .robin script content in <Workflow><Definition> elements
+          - Generates complete workflow metadata (Inputs, Outputs, Dependencies)
+          - Creates solution.xml with GUID-based RootComponent ids
+          - Includes per-flow connection and module references
 
         Args:
-            process:          Annotated BPProcess (for names).
-            robin_dir:        Directory containing .robin files
-                              from PADGenerator.
-            cloudflow_dir:    Directory containing .json files
-                              from CloudFlowGenerator.
+            process:          Fully annotated BPProcess.
+            robin_dir:        Directory containing .robin files from PADGenerator.
+            cloudflow_dir:    Directory containing .json files from CloudFlowGenerator.
             output_path:      Full path for output .zip file.
-                              Parent created if missing.
             publisher_prefix: PA publisher unique name.
             version:          Solution version string.
 
@@ -75,8 +85,8 @@ class SolutionPackager:
             Path to the created .zip file.
 
         Raises:
-            GenerationError: If robin_dir or cloudflow_dir
-                do not exist, or if .zip cannot be written.
+            GenerationError: If input directories missing, files unreadable,
+                or .zip cannot be written.
         """
         # Validate input directories exist
         if not robin_dir.exists():
@@ -89,25 +99,42 @@ class SolutionPackager:
             robin_files = sorted(robin_dir.glob("*.robin"))
             cf_files = sorted(cloudflow_dir.glob("*.json"))
 
+            # Build workflows from annotated pages
+            builder = WorkflowBuilder()
+            workflow_ids = []
+
+            for page in process.pages:
+                # Find matching .robin file for this page
+                robin_file = self._find_robin_file(page, robin_files)
+                if not robin_file:
+                    continue  # Skip pages without robin files
+
+                # Find matching Cloud Flow JSON if available
+                cf_file = self._find_cloudflow_file(page, cf_files)
+
+                # Build the workflow with embedded definition
+                workflow = builder.build_workflow(page, process, robin_file, cf_file)
+                workflow_ids.append(workflow["workflow_id"])
+
             # Prepare template variables
             solution_name = self._sanitise_filename(process.name)
-            cloud_flow_names = [f.stem for f in cf_files]
-            desktop_flow_names = [f.stem for f in robin_files]
 
-            # Render templates
+            # Render templates with workflow data
             solution_xml = self._render_template(
-                "solution.xml.j2",
+                "solution_with_guids.xml.j2",
                 solution_name=solution_name,
                 publisher_prefix=publisher_prefix,
                 version=version,
-                cloud_flow_names=cloud_flow_names,
-                desktop_flow_names=desktop_flow_names,
+                workflow_ids=workflow_ids,
             )
 
             content_types_xml = self._render_template("content_types.xml.j2")
 
-            # Build stub files
-            customizations_xml = self._build_customizations_stub()
+            customizations_xml = self._render_template(
+                "customizations_workflows.xml.j2",
+                workflows=builder.workflows,
+            )
+
             manifest_json = self._build_manifest_stub(solution_name, version)
             dependencies_json = self._build_dependencies_stub()
 
@@ -121,19 +148,30 @@ class SolutionPackager:
                 zf.writestr("[Content_Types].xml", content_types_xml)
                 zf.writestr("customizations.xml", customizations_xml)
 
-                # Cloud Flow JSON files
+                # Cloud Flow JSON files (if any)
                 for cf_file in cf_files:
                     arcname = f"Workflows/{cf_file.name}"
                     zf.write(cf_file, arcname=arcname)
 
-                # Desktop Flow .robin files
-                for robin_file in robin_files:
-                    arcname = f"DesktopFlows/{robin_file.name}"
-                    zf.write(robin_file, arcname=arcname)
-
                 # Other files
                 zf.writestr("Other/ManifestFile.json", manifest_json)
                 zf.writestr("Other/DependenciesFile.json", dependencies_json)
+
+                # Environment variable definitions (one folder per variable)
+                for env_var in process.environment_variables:
+                    schema_name = self._env_var_schema_name(publisher_prefix, env_var.name)
+                    env_xml = self._render_template(
+                        "environmentvariabledefinition.xml.j2",
+                        schema_name=schema_name,
+                        display_name=env_var.name,
+                        default_value=env_var.value,
+                        data_type=env_var.data_type,
+                    )
+                    arcname = (
+                        f"environmentvariabledefinitions/{schema_name}/"
+                        "environmentvariabledefinition.xml"
+                    )
+                    zf.writestr(arcname, env_xml)
 
             return output_path
 
@@ -162,6 +200,58 @@ class SolutionPackager:
             return template.render(**kwargs)
         except Exception as e:
             raise GenerationError(f"Failed to render template '{template_name}': {e}") from e
+
+    def _find_robin_file(self, page, robin_files: list[Path]) -> Path | None:
+        """Find the .robin file matching a BP page.
+
+        Args:
+            page: The BPPage to match.
+            robin_files: List of available .robin files.
+
+        Returns:
+            Path to matching .robin file, or None if not found.
+        """
+        # Pages are stored as sanitised filenames
+        target_stem = self._sanitise_filename(page.name)
+
+        for robin_file in robin_files:
+            if robin_file.stem == target_stem or target_stem in robin_file.stem:
+                return robin_file
+
+        return None
+
+    def _find_cloudflow_file(self, page, cf_files: list[Path]) -> Path | None:
+        """Find the Cloud Flow JSON file matching a BP page.
+
+        Args:
+            page: The BPPage to match.
+            cf_files: List of available Cloud Flow JSON files.
+
+        Returns:
+            Path to matching JSON file, or None if not found.
+        """
+        target_stem = self._sanitise_filename(page.name)
+
+        for cf_file in cf_files:
+            if cf_file.stem == target_stem or target_stem in cf_file.stem:
+                return cf_file
+
+        return None
+
+    @staticmethod
+    def _env_var_schema_name(publisher_prefix: str, name: str) -> str:
+        """Build the Dataverse schema name for an environment variable.
+
+        Args:
+            publisher_prefix: Publisher customisation prefix (e.g. "cr3ac").
+            name: Blue Prism environment variable name.
+
+        Returns:
+            Schema name of the form <prefix>_<name> with all characters
+            outside [A-Za-z0-9_] replaced by underscores.
+        """
+        safe = "".join(c if c.isalnum() or c == "_" else "_" for c in name.strip())
+        return f"{publisher_prefix}_{safe}"
 
     def _sanitise_filename(self, name: str) -> str:
         """Sanitise a process name for use as a filename.

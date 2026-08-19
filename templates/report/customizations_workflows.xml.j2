@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?><ImportExportXml xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" OrganizationVersion="9.2.26031.175" OrganizationSchemaType="Standard" CRMServerServiceabilityVersion="9.2.26031.00175">
+  <Entities></Entities>
+  <Roles></Roles>
+  <Workflows>
+{%- for workflow in workflows %}
+    <Workflow WorkflowId="{{ '{' }}{{ workflow.workflow_id }}{{ '}' }}" Name="{{ workflow.name }}">
+      <JsonFileName>/Workflows/{{ workflow.json_file_name }}</JsonFileName>
+      <Type>{{ workflow.type }}</Type>
+      <Subprocess>{{ workflow.subprocess }}</Subprocess>
+      <Category>{{ workflow.category }}</Category>
+      <Mode>{{ workflow.mode }}</Mode>
+      <Scope>{{ workflow.scope }}</Scope>
+      <OnDemand>{{ workflow.on_demand }}</OnDemand>
+      <TriggerOnCreate>{{ workflow.trigger_on_create }}</TriggerOnCreate>
+      <TriggerOnDelete>{{ workflow.trigger_on_delete }}</TriggerOnDelete>
+      <AsyncAutodelete>{{ workflow.async_autodelete }}</AsyncAutodelete>
+      <SyncWorkflowLogOnFailure>{{ workflow.sync_workflow_log_on_failure }}</SyncWorkflowLogOnFailure>
+      <StateCode>{{ workflow.state_code }}</StateCode>
+      <StatusCode>{{ workflow.status_code }}</StatusCode>
+      <RunAs>{{ workflow.run_as }}</RunAs>
+      <IsTransacted>{{ workflow.is_transacted }}</IsTransacted>
+      <IntroducedVersion>{{ workflow.introduced_version }}</IntroducedVersion>
+      <IsCustomizable>{{ workflow.is_customizable }}</IsCustomizable>
+      <BusinessProcessType>{{ workflow.business_process_type }}</BusinessProcessType>
+      <UIFlowType>{{ workflow.ui_flow_type }}</UIFlowType>
+      <IsCustomProcessingStepAllowedForOtherPublishers>{{ workflow.is_custom_processing_step_allowed_for_other_publishers }}</IsCustomProcessingStepAllowedForOtherPublishers>
+      <ModernFlowType>{{ workflow.modern_flow_type }}</ModernFlowType>
+      <Metadata>{{ workflow.metadata }}</Metadata>
+      <Inputs>{{ workflow.inputs }}</Inputs>
+      <Outputs>{{ workflow.outputs }}</Outputs>
+      <Dependencies>{{ workflow.dependencies }}</Dependencies>
+      <ConnectionReferences>{{ workflow.connection_references }}</ConnectionReferences>
+      <Definition>{{ workflow.definition }}</Definition>
+      <SchemaVersion>{{ workflow.schema_version }}</SchemaVersion>
+      <Claims>{{ workflow.claims | tojson }}</Claims>
+      <DesktopFlowModules>[]</DesktopFlowModules>
+      <Credentials>[]</Credentials>
+      <PrimaryEntity>{{ workflow.primary_entity }}</PrimaryEntity>
+      <LocalizedNames>
+        <LocalizedName languagecode="1033" description="{{ workflow.localized_name }}" />
+      </LocalizedNames>
+    </Workflow>
+{%- endfor %}
+  </Workflows>
+  <FieldSecurityProfiles/>
+  <Templates/>
+  <EntityMaps/>
+  <EntityRelationships/>
+  <OrganizationSettings/>
+  <optionsets/>
+  <CustomControls/>
+  <SolutionPluginAssemblies/>
+  <EntityDataProviders/>
+</ImportExportXml>

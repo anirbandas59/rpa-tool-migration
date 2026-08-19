@@ -1,0 +1,18 @@
+<environmentvariabledefinition schemaname="{{ schema_name | e }}">
+  <defaultvalue>{{ default_value | e }}</defaultvalue>
+  <displayname default="{{ display_name | e }}">
+    <label description="{{ display_name | e }}" languagecode="1033" />
+  </displayname>
+  <introducedversion>1.0.0.0</introducedversion>
+  <iscustomizable>1</iscustomizable>
+  <isrequired>0</isrequired>
+  <secretstore>0</secretstore>
+  {# Dataverse type codes: 100000000 String, 100000001 Number, 100000002 Boolean #}
+  {% if data_type == "number" %}
+  <type>100000001</type>
+  {% elif data_type == "flag" %}
+  <type>100000002</type>
+  {% else %}
+  <type>100000000</type>
+  {% endif %}
+</environmentvariabledefinition>

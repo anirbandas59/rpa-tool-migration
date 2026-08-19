@@ -236,7 +236,12 @@ class TestZipContents:
         cloudflow_dir: Path,
         tmp_path: Path,
     ) -> None:
-        """Test that all .robin files appear in Workflows/."""
+        """Test that .robin content is embedded in customizations.xml (not as separate files).
+
+        In Phase 6.4, PAD script content from .robin files is embedded directly in
+        the Workflow elements' Definition field within customizations.xml, so separate
+        .robin files should NOT appear in the solution package.
+        """
         output_path = tmp_path / "solution.zip"
         packager.package(
             minimal_process,
@@ -249,8 +254,12 @@ class TestZipContents:
             names = zf.namelist()
             robin_files = [n for n in names if n.endswith(".robin")]
 
-            assert len(robin_files) == 3
-            assert all("DesktopFlows/" in n for n in robin_files)
+            # Robin files should be embedded in customizations.xml, not separate
+            assert len(robin_files) == 0, (
+                "Robin files should not be in zip (embedded in customizations.xml)"
+            )
+            # Verify customizations.xml exists with workflows
+            assert "customizations.xml" in names
 
     def test_zip_contains_cloudflow_files(
         self,
@@ -594,6 +603,113 @@ class TestZipSize:
             test_result = zf.testzip()
             # testzip() returns None if all files are OK
             assert test_result is None
+
+
+class TestEnvironmentVariableDefinitions:
+    """Tests for environmentvariabledefinitions/ emission."""
+
+    @pytest.fixture
+    def process_with_env_vars(self) -> BPProcess:
+        """Return a BPProcess declaring two environment variables."""
+        from flowsmith.ast.models import BPEnvironmentVariable
+
+        return BPProcess(
+            process_id="test_123",
+            name="TestProcess",
+            version="1.0",
+            pages=[],
+            environment_variables=[
+                BPEnvironmentVariable(name="Config File", data_type="text", value="a.xlsx"),
+                BPEnvironmentVariable(name="Retry Count", data_type="number", value="3"),
+            ],
+            source_file="test.bprelease",
+        )
+
+    def test_env_var_folders_created(
+        self,
+        packager: SolutionPackager,
+        process_with_env_vars: BPProcess,
+        robin_dir: Path,
+        cloudflow_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """Each env var gets environmentvariabledefinitions/<schema>/…xml."""
+        output_path = tmp_path / "solution.zip"
+        packager.package(
+            process_with_env_vars,
+            robin_dir=robin_dir,
+            cloudflow_dir=cloudflow_dir,
+            output_path=output_path,
+            publisher_prefix="cr3ac",
+        )
+
+        with zipfile.ZipFile(output_path) as zf:
+            names = zf.namelist()
+        assert (
+            "environmentvariabledefinitions/cr3ac_Config_File/"
+            "environmentvariabledefinition.xml" in names
+        )
+        assert (
+            "environmentvariabledefinitions/cr3ac_Retry_Count/"
+            "environmentvariabledefinition.xml" in names
+        )
+
+    def test_env_var_xml_content(
+        self,
+        packager: SolutionPackager,
+        process_with_env_vars: BPProcess,
+        robin_dir: Path,
+        cloudflow_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """Definition XML carries schemaname, defaultvalue and mapped type code."""
+        output_path = tmp_path / "solution.zip"
+        packager.package(
+            process_with_env_vars,
+            robin_dir=robin_dir,
+            cloudflow_dir=cloudflow_dir,
+            output_path=output_path,
+            publisher_prefix="cr3ac",
+        )
+
+        with zipfile.ZipFile(output_path) as zf:
+            text_var = etree.fromstring(
+                zf.read(
+                    "environmentvariabledefinitions/cr3ac_Config_File/"
+                    "environmentvariabledefinition.xml"
+                )
+            )
+            num_var = etree.fromstring(
+                zf.read(
+                    "environmentvariabledefinitions/cr3ac_Retry_Count/"
+                    "environmentvariabledefinition.xml"
+                )
+            )
+
+        assert text_var.get("schemaname") == "cr3ac_Config_File"
+        assert text_var.findtext("defaultvalue") == "a.xlsx"
+        assert text_var.findtext("type") == "100000000"
+        assert num_var.findtext("type") == "100000001"
+
+    def test_no_env_vars_no_folder(
+        self,
+        packager: SolutionPackager,
+        minimal_process: BPProcess,
+        robin_dir: Path,
+        cloudflow_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """No env vars → no environmentvariabledefinitions/ entries."""
+        output_path = tmp_path / "solution.zip"
+        packager.package(
+            minimal_process,
+            robin_dir=robin_dir,
+            cloudflow_dir=cloudflow_dir,
+            output_path=output_path,
+        )
+
+        with zipfile.ZipFile(output_path) as zf:
+            assert not [n for n in zf.namelist() if n.startswith("environmentvariabledefinitions/")]
 
 
 class TestPublisherPrefix:
