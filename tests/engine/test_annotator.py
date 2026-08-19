@@ -295,6 +295,71 @@ class TestUnitAnnotations:
         returned = annotator.annotate_process(process)
         assert returned is process
 
+    def test_code_stage_suggested_fix_includes_code_text(
+        self, annotator: StageAnnotator, make_stage
+    ) -> None:
+        """CODE stage suggested_fix embeds the original VBScript body."""
+        stage = make_stage(stage_type=StageType.CODE, code_text="some code")
+        annotation = annotator.annotate_stage(stage)
+        assert "some code" in annotation.flags[0].suggested_fix
+
+    def test_code_stage_suggested_fix_truncates_to_500_chars(
+        self, annotator: StageAnnotator, make_stage
+    ) -> None:
+        """CODE stage suggested_fix only includes the first 500 chars of code_text."""
+        long_code = "x" * 1000
+        stage = make_stage(stage_type=StageType.CODE, code_text=long_code)
+        annotation = annotator.annotate_stage(stage)
+        assert ("x" * 500) in annotation.flags[0].suggested_fix
+        assert ("x" * 501) not in annotation.flags[0].suggested_fix
+
+    def test_code_stage_without_code_text_has_generic_suggested_fix(
+        self, annotator: StageAnnotator, make_stage
+    ) -> None:
+        """CODE stage with no code_text falls back to the generic suggested_fix."""
+        stage = make_stage(stage_type=StageType.CODE, code_text=None)
+        annotation = annotator.annotate_stage(stage)
+        assert "Original VBScript" not in annotation.flags[0].suggested_fix
+
+    def test_exception_usecurrent_true_throws_error(
+        self, annotator: StageAnnotator, make_stage
+    ) -> None:
+        """EXCEPTION stage with usecurrent=True re-raises via ThrowError/FlowControl."""
+        stage = make_stage(stage_type=StageType.EXCEPTION, exception_usecurrent=True)
+        annotation = annotator.annotate_stage(stage)
+        assert annotation.target_type == "ThrowError"
+        assert annotation.target_module == "FlowControl"
+        assert annotation.params_map == {}
+
+    def test_exception_usecurrent_false_throws_custom_error(
+        self, annotator: StageAnnotator, make_stage
+    ) -> None:
+        """EXCEPTION stage with usecurrent=False throws a typed custom error."""
+        stage = make_stage(
+            stage_type=StageType.EXCEPTION,
+            exception_usecurrent=False,
+            exception_type="Business Exception",
+            exception_detail="txt_ExceptionMessage",
+        )
+        annotation = annotator.annotate_stage(stage)
+        assert annotation.target_type == "ThrowCustomError"
+        assert annotation.target_module == "FlowControl"
+        assert annotation.params_map["exception_type"] == "Business Exception"
+        assert annotation.params_map["detail_expr"] == "txt_ExceptionMessage"
+
+    def test_exception_without_type_or_detail_has_warn_flag(
+        self, annotator: StageAnnotator, make_stage
+    ) -> None:
+        """EXCEPTION stage missing both type and detail gets a warn flag."""
+        stage = make_stage(
+            stage_type=StageType.EXCEPTION,
+            exception_usecurrent=False,
+            exception_type=None,
+            exception_detail=None,
+        )
+        annotation = annotator.annotate_stage(stage)
+        assert any(f.severity == "warn" for f in annotation.flags)
+
 
 # ── Integration tests ──────────────────────────────────────────────────────
 

@@ -88,7 +88,8 @@ class StageAnnotator:
           2. StageType.DATA    → _annotate_data()
           3. StageType.COLLECTION → _annotate_collection()
           4. StageType.CODE    → _annotate_code()
-          5. All others        → _annotate_from_rules()
+          5. StageType.EXCEPTION → _annotate_exception()
+          6. All others        → _annotate_from_rules()
 
         Args:
             stage: A BPStage from the AST.
@@ -105,6 +106,8 @@ class StageAnnotator:
             return self._annotate_collection(stage)
         if stage.stage_type == StageType.CODE:
             return self._annotate_code(stage)
+        if stage.stage_type == StageType.EXCEPTION:
+            return self._annotate_exception(stage)
         return self._annotate_from_rules(stage)
 
     def _annotate_action(self, stage: BPStage) -> PAAnnotation:
@@ -220,6 +223,10 @@ class StageAnnotator:
     def _annotate_code(self, stage: BPStage) -> PAAnnotation:
         """Annotate CODE stage (always MANUAL band)."""
         confidence = 0.30  # Always MANUAL band
+        code_preview = (stage.code_text or "")[:500]
+        suggested_fix = "Extract code logic and rewrite as System.RunPowershellScript action"
+        if code_preview:
+            suggested_fix = f"Rewrite as PowerShell/C# script.\nOriginal VBScript:\n{code_preview}"
         return PAAnnotation(
             target_type="RunPowershellScript",
             target_module="Scripting",
@@ -233,10 +240,66 @@ class StageAnnotator:
                     reason="Code stage contains inline VBScript/VB.NET — "
                     "must be rewritten as PowerShell or PAD script action",
                     severity="error",
-                    suggested_fix="Extract code logic and rewrite as "
-                    "System.RunPowershellScript action",
+                    suggested_fix=suggested_fix,
                 )
             ],
+        )
+
+    def _annotate_exception(self, stage: BPStage) -> PAAnnotation:
+        """Annotate EXCEPTION stage (throw or re-raise).
+
+        A BP <exception usecurrent="yes"> stage re-raises whatever exception
+        is currently active — this maps to a plain `THROW ERROR` in PAD, so
+        no custom message parameters are needed. Otherwise, the stage throws
+        a new typed exception and must carry its type/detail forward so the
+        generator can emit `FlowControl.ThrowCustomError`.
+
+        Args:
+            stage: A BPStage with stage_type == StageType.EXCEPTION.
+
+        Returns:
+            PAAnnotation targeting FlowControl.ThrowError or
+            FlowControl.ThrowCustomError.
+
+        """
+        if stage.exception_usecurrent:
+            confidence = 0.90
+            return PAAnnotation(
+                target_type="ThrowError",
+                target_module="FlowControl",
+                runtime=Runtime.DESKTOP,
+                confidence=confidence,
+                band=ConfidenceBand.from_score(confidence),
+                params_map={},
+                flags=[],
+            )
+
+        confidence = 0.80
+        params_map: dict[str, str] = {}
+        if stage.exception_type:
+            params_map["exception_type"] = stage.exception_type
+        if stage.exception_detail:
+            params_map["detail_expr"] = stage.exception_detail
+
+        flags = []
+        if not stage.exception_type and not stage.exception_detail:
+            flags.append(
+                ReviewFlag(
+                    stage_id=stage.stage_id,
+                    reason="Exception stage has neither a type nor a detail expression",
+                    severity="warn",
+                    suggested_fix="Verify the original BP <exception> element was parsed correctly",
+                )
+            )
+
+        return PAAnnotation(
+            target_type="ThrowCustomError",
+            target_module="FlowControl",
+            runtime=Runtime.DESKTOP,
+            confidence=confidence,
+            band=ConfidenceBand.from_score(confidence),
+            params_map=params_map,
+            flags=flags,
         )
 
     def _annotate_from_rules(self, stage: BPStage) -> PAAnnotation:

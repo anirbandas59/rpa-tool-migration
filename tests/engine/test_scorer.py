@@ -699,15 +699,25 @@ class TestRealSampleScoring:
         score = scorer.score_process(annotated_process)
         assert score.stage_count == 6576
 
-    def test_real_sample_auto_count_1043(self, scorer, annotated_process):
-        """Real sample has 1043 AUTO stages."""
-        score = scorer.score_process(annotated_process)
-        assert score.auto_count == 1043
+    def test_real_sample_auto_count_1125(self, scorer, annotated_process):
+        """Real sample has 1125 AUTO stages.
 
-    def test_real_sample_spot_check_count_4890(self, scorer, annotated_process):
-        """Real sample has 4890 SPOT_CHECK stages."""
+        EXCEPTION stages with exception_usecurrent=True are annotated at
+        confidence 0.90 (AUTO band) by StageAnnotator._annotate_exception(),
+        shifting 82 stages from SPOT_CHECK to AUTO relative to the pre
+        Sub-Task-3 baseline (previously 1043).
+        """
         score = scorer.score_process(annotated_process)
-        assert score.spot_check_count == 4890
+        assert score.auto_count == 1125
+
+    def test_real_sample_spot_check_count_4808(self, scorer, annotated_process):
+        """Real sample has 4808 SPOT_CHECK stages.
+
+        See test_real_sample_auto_count_1125 — 82 EXCEPTION stages moved out
+        of SPOT_CHECK into AUTO (previously 4890).
+        """
+        score = scorer.score_process(annotated_process)
+        assert score.spot_check_count == 4808
 
     def test_real_sample_partial_count_154(self, scorer, annotated_process):
         """Real sample has 154 PARTIAL stages."""
