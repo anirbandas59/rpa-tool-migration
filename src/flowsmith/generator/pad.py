@@ -14,8 +14,23 @@ from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
-from flowsmith.ast.models import BPProcess, BPStage, ConfidenceBand
+from flowsmith.ast.models import BPProcess, BPStage, ConfidenceBand, StageType
 from flowsmith.exceptions import GenerationError
+
+# Data types that always make a variable sensitive in the generated @SENSITIVE list.
+SENSITIVE_DATA_TYPES: frozenset[str] = frozenset({"password", "binary"})
+
+# Substrings that mark a variable name as sensitive (matched case-insensitively).
+SENSITIVE_NAME_TOKENS: tuple[str, ...] = ("pass", "key", "secret", "pwd")
+
+# Structural stage types rendered directly from stage_type rather than from
+# pa_annotation.target_type. mapping/stage_rules.yaml deliberately leaves
+# pa_target_action empty for Block/Recover/Resume (they are scope markers, not
+# PAD actions), so there is nothing in the annotation to route on — the Robin
+# construct is determined by the stage's structural role alone.
+STRUCTURAL_STAGE_TYPES: frozenset[StageType] = frozenset(
+    {StageType.BLOCK, StageType.RECOVER, StageType.RESUME}
+)
 
 
 class PADGenerator:
@@ -123,9 +138,8 @@ class PADGenerator:
 
             # Flow header (@@ConnectionString etc) — only on main page
             if page.is_main:
-                # Collect input variables and sensitive vars from all stages
+                # Collect input variables from all stages
                 input_vars = []
-                sensitive_vars = []
                 for stage in page.stages:
                     for data_item in stage.data_items:
                         if data_item.is_input:
@@ -136,13 +150,11 @@ class PADGenerator:
                                     "is_optional": False,
                                 }
                             )
-                            if "pass" in data_item.name.lower() or "key" in data_item.name.lower():
-                                sensitive_vars.append(data_item.name)
 
                 header_template = self.env.get_template("flow_header.robin.j2")
                 header = header_template.render(
                     inputs=input_vars,
-                    sensitive_vars=sensitive_vars,
+                    sensitive_vars=self._collect_sensitive_vars(page.stages),
                 )
                 lines.append(header)
 
@@ -169,8 +181,13 @@ class PADGenerator:
     def _render_stage(self, stage: BPStage) -> str:
         """Render a single stage to Robin action line(s).
 
-        Dispatches on pa_annotation.band and target_type.
-        Never reads stage_type directly.
+        Dispatches on pa_annotation.band and target_type for every stage that
+        maps to a PAD action. The single exception is the structural stage
+        types in ``STRUCTURAL_STAGE_TYPES`` (BLOCK/RECOVER/RESUME): those carry
+        an empty ``pa_target_action`` in mapping/stage_rules.yaml because they
+        are Robin scope markers rather than PAD actions, so they are rendered
+        from stage_type — and rendered before the MANUAL-band check, since a
+        stub in place of a BLOCK/END would unbalance the script.
 
         Args:
             stage: An annotated BPStage.
@@ -192,6 +209,10 @@ class PADGenerator:
         target_type = annotation.target_type
         target_module = annotation.target_module
 
+        # Structural constructs: rendered from stage_type (see docstring)
+        if stage.stage_type in STRUCTURAL_STAGE_TYPES:
+            return self._render_structural_stage(stage)
+
         # MANUAL band: always render stub
         if band == ConfidenceBand.MANUAL:
             flags = annotation.flags
@@ -208,7 +229,16 @@ class PADGenerator:
         # Dispatch on target_type
         lines: list[str] = []
 
-        if target_type == "SetVariable":
+        if target_type in ("ThrowError", "ThrowCustomError"):
+            throw_template = self.env.get_template("actions/throw_error.robin.j2")
+            rendered = throw_template.render(
+                custom=target_type == "ThrowCustomError",
+                error_code=annotation.params_map.get("exception_type", "%txt_ExceptionType%"),
+                message_var="txt_ExceptionMessage",
+            )
+            lines.append(rendered)
+
+        elif target_type == "SetVariable":
             set_template = self.env.get_template("actions/set_variable.robin.j2")
             verify_comment = (
                 f"{stage.name} (confidence {annotation.confidence:.2f})"
@@ -362,6 +392,110 @@ class PADGenerator:
             lines.append(comment)
 
         return "\n".join(lines) if lines else ""
+
+    def _render_structural_stage(self, stage: BPStage) -> str:
+        """Render a BLOCK/RECOVER/RESUME stage to its Robin scope construct.
+
+        BLOCK stages are paired by ``pair_id`` (assigned by the AST builder):
+        the opener carries ``pair_id == stage_id`` and emits the
+        ``BLOCK … ON BLOCK ERROR … END`` handler prologue; its partner emits
+        the closing ``END``. An unpaired (singleton) BLOCK is treated as an
+        opener so the emitted construct is still balanced.
+
+        Args:
+            stage: A BPStage whose stage_type is in STRUCTURAL_STAGE_TYPES.
+
+        Returns:
+            One or more Robin lines as a string.
+
+        Raises:
+            GenerationError: If the stage_type is not a structural type.
+        """
+        if stage.stage_type == StageType.BLOCK:
+            is_closer = stage.pair_id is not None and stage.pair_id != stage.stage_id
+            if is_closer:
+                return "END"
+            return self._render_block_open(stage)
+
+        if stage.stage_type == StageType.RECOVER:
+            recover_template = self.env.get_template("actions/recover.robin.j2")
+            return recover_template.render(
+                error_var="obj_LastError",
+                handler_name="Get Error",
+                goto_label="Error Block",
+            )
+
+        if stage.stage_type == StageType.RESUME:
+            goto_template = self.env.get_template("actions/goto.robin.j2")
+            return goto_template.render(label="End")
+
+        raise GenerationError(
+            f"Stage '{stage.name}' (ID: {stage.stage_id}) has non-structural "
+            f"type '{stage.stage_type.value}' and cannot be rendered as a scope construct."
+        )
+
+    def _render_block_open(self, stage: BPStage) -> str:
+        """Render the opening ``BLOCK … END`` handler prologue for a BLOCK stage.
+
+        When the stage carries an ``exception_type`` a typed handler branch
+        (``ON BLOCK ERROR '<type>' IsUserDefinedErrorCode: True``) is emitted
+        ahead of the catch-all ``ON BLOCK ERROR all`` branch.
+
+        Args:
+            stage: The opening BLOCK stage.
+
+        Returns:
+            The rendered Robin block prologue.
+        """
+        typed_handlers: list[dict[str, object]] = []
+        if stage.exception_type:
+            typed_handlers.append(
+                {
+                    "error_code": stage.exception_type,
+                    "actions": [
+                        f"SET txt_ExceptionType TO $'''{stage.exception_type}'''",
+                        "GOTO 'End'",
+                    ],
+                }
+            )
+
+        block_template = self.env.get_template("actions/error_block.robin.j2")
+        return block_template.render(
+            block_name=stage.name,
+            typed_handlers=typed_handlers,
+            catchall_actions=["CALL 'Get Error'", "GOTO 'Error Block'"],
+        )
+
+    @staticmethod
+    def _collect_sensitive_vars(stages: list[BPStage]) -> list[str]:
+        """Collect the variable names that must appear in the @SENSITIVE header.
+
+        A variable is sensitive when its BP data type is ``password`` or
+        ``binary``, or when its name contains any of ``pass``, ``key``,
+        ``secret`` or ``pwd`` (case-insensitive).
+
+        Args:
+            stages: The stages of one page.
+
+        Returns:
+            De-duplicated variable names in first-seen order.
+        """
+        sensitive: list[str] = []
+        seen: set[str] = set()
+
+        for stage in stages:
+            for data_item in stage.data_items:
+                if data_item.name in seen:
+                    continue
+                lowered_name = data_item.name.lower()
+                is_sensitive = data_item.data_type.lower() in SENSITIVE_DATA_TYPES or any(
+                    token in lowered_name for token in SENSITIVE_NAME_TOKENS
+                )
+                if is_sensitive:
+                    seen.add(data_item.name)
+                    sensitive.append(data_item.name)
+
+        return sensitive
 
     @staticmethod
     def _sanitise_filename(name: str) -> str:

@@ -1,5 +1,12 @@
 BLOCK '{{ block_name }}'
+{% for handler in typed_handlers %}
+ON BLOCK ERROR '{{ handler.error_code }}' IsUserDefinedErrorCode: True
+{% for action in handler.actions %}
+    {{ action }}
+{% endfor %}
+{% endfor %}
 ON BLOCK ERROR all
-    CALL '{{ handler_name }}'
-    THROW ERROR
+{% for action in catchall_actions %}
+    {{ action }}
+{% endfor %}
 END

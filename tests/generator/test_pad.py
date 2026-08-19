@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from flowsmith.ast.models import (
+    BPDataItem,
     BPPage,
     BPProcess,
     BPStage,
@@ -48,6 +49,10 @@ def make_annotated_stage(
     confidence: float = 0.95,
     flags: list[ReviewFlag] | None = None,
     is_subsheet_call: bool = False,
+    pair_id: str | None = None,
+    exception_type: str | None = None,
+    params_map: dict[str, str] | None = None,
+    data_items: list[BPDataItem] | None = None,
 ) -> BPStage:
     """Create a BPStage with full PAAnnotation.
 
@@ -60,6 +65,10 @@ def make_annotated_stage(
         confidence: The confidence score.
         flags: List of review flags.
         is_subsheet_call: Whether this is a subsheet call.
+        pair_id: Partner stage ID for paired stages (BLOCK/WAIT/LOOP).
+        exception_type: Exception type string for EXCEPTION/BLOCK stages.
+        params_map: Annotation params_map contents.
+        data_items: Data items declared on the stage.
 
     Returns:
         A fully annotated BPStage.
@@ -73,12 +82,14 @@ def make_annotated_stage(
         stage_id=stage_id,
         stage_type=stage_type,
         name=name,
-        data_items=[],
+        data_items=data_items or [],
+        pair_id=pair_id,
+        exception_type=exception_type,
         pa_annotation=PAAnnotation(
             target_type=target_type,
             target_module=target_module,
             runtime=Runtime.DESKTOP,
-            params_map={},
+            params_map=params_map or {},
             confidence=confidence,
             band=band,
             flags=flags,
@@ -427,6 +438,278 @@ def test_no_python_traceback_in_output(tmp_path: Path) -> None:
         assert "Traceback" not in content
 
 
+# ── Structural Robin constructs (Sub-Task 4) ───────────────────────────────
+
+
+def test_main_page_header_contains_imports() -> None:
+    """Test that the main page header emits both hardcoded IMPORT lines."""
+    gen = PADGenerator()
+    page = make_page(is_main=True)
+    result = gen.generate_page(page, "TestProcess")
+    assert "IMPORT 'controlRepo.appmask' AS appmask" in result
+    assert "IMPORT 'imageRepo.imgrepo' AS imgrepo" in result
+
+
+def test_imports_appear_after_desktop_type_and_before_inputs() -> None:
+    """Test IMPORT lines sit between the @@ block and the @INPUT declarations."""
+    gen = PADGenerator()
+    stage = make_annotated_stage(
+        data_items=[BPDataItem(name="In_txt_Config", data_type="text", is_input=True)],
+    )
+    page = make_page(stages=[stage], is_main=True)
+    result = gen.generate_page(page, "TestProcess")
+
+    assert result.index("@@DisplayName") < result.index("IMPORT 'controlRepo.appmask'")
+    assert result.index("IMPORT 'imageRepo.imgrepo'") < result.index("@INPUT In_txt_Config")
+
+
+def test_non_main_page_has_no_imports() -> None:
+    """Test that sub-pages do not emit the flow header IMPORT lines."""
+    gen = PADGenerator()
+    page = make_page(is_main=False)
+    result = gen.generate_page(page, "TestProcess")
+    assert "IMPORT" not in result
+
+
+def test_block_opener_renders_block_structure() -> None:
+    """Test that an opening BLOCK stage renders BLOCK/ON BLOCK ERROR/END."""
+    gen = PADGenerator()
+    stage = make_annotated_stage(
+        stage_id="B1",
+        name="Get unprocessed emails",
+        stage_type=StageType.BLOCK,
+        target_type="",
+        confidence=0.70,
+        pair_id="B1",
+    )
+    result = gen._render_stage(stage)
+
+    assert result.splitlines()[0] == "BLOCK 'Get unprocessed emails'"
+    assert "ON BLOCK ERROR all" in result
+    assert "    CALL 'Get Error'" in result
+    assert "    GOTO 'Error Block'" in result
+    assert result.strip().endswith("END")
+
+
+def test_block_closer_renders_end_only() -> None:
+    """Test that the partner BLOCK stage renders a bare END."""
+    gen = PADGenerator()
+    stage = make_annotated_stage(
+        stage_id="B2",
+        name="Get unprocessed emails",
+        stage_type=StageType.BLOCK,
+        target_type="",
+        confidence=0.70,
+        pair_id="B1",
+    )
+    assert gen._render_stage(stage) == "END"
+
+
+def test_singleton_block_renders_as_opener() -> None:
+    """Test that an unpaired BLOCK still renders a balanced BLOCK … END."""
+    gen = PADGenerator()
+    stage = make_annotated_stage(
+        stage_id="B9",
+        name="Lonely Block",
+        stage_type=StageType.BLOCK,
+        target_type="",
+        confidence=0.70,
+    )
+    result = gen._render_stage(stage)
+    assert "BLOCK 'Lonely Block'" in result
+    assert result.strip().endswith("END")
+
+
+def test_block_with_exception_type_renders_typed_handler() -> None:
+    """Test that a typed BLOCK emits an IsUserDefinedErrorCode handler branch."""
+    gen = PADGenerator()
+    stage = make_annotated_stage(
+        stage_id="B1",
+        name="Typed Block",
+        stage_type=StageType.BLOCK,
+        target_type="",
+        confidence=0.70,
+        pair_id="B1",
+        exception_type="Business Exception",
+    )
+    result = gen._render_stage(stage)
+
+    assert "ON BLOCK ERROR 'Business Exception' IsUserDefinedErrorCode: True" in result
+    assert "    SET txt_ExceptionType TO $'''Business Exception'''" in result
+    # Catch-all branch still present after the typed branch
+    assert result.index("IsUserDefinedErrorCode") < result.index("ON BLOCK ERROR all")
+
+
+def test_block_is_not_rendered_as_stub_when_manual_band() -> None:
+    """Test that a MANUAL-band BLOCK still renders its scope construct."""
+    gen = PADGenerator()
+    stage = make_annotated_stage(
+        stage_id="B1",
+        name="Low Confidence Block",
+        stage_type=StageType.BLOCK,
+        target_type="",
+        confidence=0.10,
+        pair_id="B1",
+    )
+    result = gen._render_stage(stage)
+    assert "# STUB:" not in result
+    assert "BLOCK 'Low Confidence Block'" in result
+
+
+def test_recover_stage_renders_error_capture() -> None:
+    """Test that a RECOVER stage renders ERROR capture, CALL and GOTO."""
+    gen = PADGenerator()
+    stage = make_annotated_stage(
+        stage_id="R1",
+        name="Recover",
+        stage_type=StageType.RECOVER,
+        target_type="",
+        confidence=0.80,
+    )
+    result = gen._render_stage(stage)
+
+    assert "ERROR => obj_LastError" in result
+    assert "CALL 'Get Error'" in result
+    assert "GOTO 'Error Block'" in result
+
+
+def test_resume_stage_renders_goto_end() -> None:
+    """Test that a RESUME stage renders GOTO 'End'."""
+    gen = PADGenerator()
+    stage = make_annotated_stage(
+        stage_id="RS1",
+        name="Resume",
+        stage_type=StageType.RESUME,
+        target_type="",
+        confidence=0.80,
+    )
+    assert gen._render_stage(stage).strip() == "GOTO 'End'"
+
+
+def test_exception_throw_error_renders_throw_error() -> None:
+    """Test that a ThrowError annotation renders a bare THROW ERROR."""
+    gen = PADGenerator()
+    stage = make_annotated_stage(
+        stage_id="E1",
+        name="Re-raise",
+        stage_type=StageType.EXCEPTION,
+        target_type="ThrowError",
+        target_module="FlowControl",
+        confidence=0.90,
+    )
+    result = gen._render_stage(stage)
+
+    assert result.strip() == "THROW ERROR"
+    assert "ThrowCustomError" not in result
+
+
+def test_exception_throw_custom_error_renders_flowcontrol_action() -> None:
+    """Test that a ThrowCustomError annotation renders the FlowControl action."""
+    gen = PADGenerator()
+    stage = make_annotated_stage(
+        stage_id="E2",
+        name="Throw",
+        stage_type=StageType.EXCEPTION,
+        target_type="ThrowCustomError",
+        target_module="FlowControl",
+        confidence=0.80,
+    )
+    result = gen._render_stage(stage)
+
+    assert "FlowControl.ThrowCustomError" in result
+    assert "CustomErrorCode: $'''%txt_ExceptionType%'''" in result
+    assert "CustomErrorMessage: txt_ExceptionMessage" in result
+
+
+def test_exception_custom_error_uses_annotated_exception_type() -> None:
+    """Test that the annotated exception_type becomes the CustomErrorCode."""
+    gen = PADGenerator()
+    stage = make_annotated_stage(
+        stage_id="E3",
+        name="Throw",
+        stage_type=StageType.EXCEPTION,
+        target_type="ThrowCustomError",
+        target_module="FlowControl",
+        confidence=0.80,
+        params_map={"exception_type": "System Exception"},
+    )
+    result = gen._render_stage(stage)
+    assert "CustomErrorCode: $'''System Exception'''" in result
+
+
+def test_sensitive_vars_detected_from_password_data_type() -> None:
+    """Test that a password-typed data item produces an @SENSITIVE entry."""
+    gen = PADGenerator()
+    stage = make_annotated_stage(
+        stage_type=StageType.DATA,
+        data_items=[BPDataItem(name="obj_DBSecretValue", data_type="password")],
+    )
+    page = make_page(stages=[stage], is_main=True)
+    result = gen.generate_page(page, "TestProcess")
+    assert "@SENSITIVE: [obj_DBSecretValue]" in result
+
+
+def test_sensitive_vars_detected_from_binary_data_type() -> None:
+    """Test that a binary-typed data item produces an @SENSITIVE entry."""
+    gen = PADGenerator()
+    stage = make_annotated_stage(
+        stage_type=StageType.DATA,
+        data_items=[BPDataItem(name="bin_Payload", data_type="binary")],
+    )
+    page = make_page(stages=[stage], is_main=True)
+    result = gen.generate_page(page, "TestProcess")
+    assert "@SENSITIVE: [bin_Payload]" in result
+
+
+@pytest.mark.parametrize(
+    "var_name",
+    ["txt_DbPassword", "txt_EncDec_Key", "Client_Secret", "txt_PWD_Value"],
+)
+def test_sensitive_vars_detected_from_name_tokens(var_name: str) -> None:
+    """Test that sensitive-looking names are detected regardless of data type."""
+    gen = PADGenerator()
+    stage = make_annotated_stage(
+        stage_type=StageType.DATA,
+        data_items=[BPDataItem(name=var_name, data_type="text")],
+    )
+    page = make_page(stages=[stage], is_main=True)
+    result = gen.generate_page(page, "TestProcess")
+    assert f"@SENSITIVE: [{var_name}]" in result
+
+
+def test_sensitive_vars_deduplicated() -> None:
+    """Test that a repeated sensitive variable appears once in @SENSITIVE."""
+    gen = PADGenerator()
+    item = BPDataItem(name="txt_Password", data_type="password")
+    stages = [
+        make_annotated_stage(stage_id="D1", stage_type=StageType.DATA, data_items=[item]),
+        make_annotated_stage(stage_id="D2", stage_type=StageType.DATA, data_items=[item]),
+    ]
+    page = make_page(stages=stages, is_main=True)
+    result = gen.generate_page(page, "TestProcess")
+    assert result.count("txt_Password") == 1
+
+
+def test_no_sensitive_line_without_sensitive_data_items() -> None:
+    """Test that @SENSITIVE is omitted when no data item is sensitive."""
+    gen = PADGenerator()
+    stage = make_annotated_stage(
+        stage_type=StageType.DATA,
+        data_items=[BPDataItem(name="txt_PlainValue", data_type="text")],
+    )
+    page = make_page(stages=[stage], is_main=True)
+    result = gen.generate_page(page, "TestProcess")
+    assert "@SENSITIVE" not in result
+
+
+def test_render_structural_stage_rejects_non_structural_type() -> None:
+    """Test that the structural renderer refuses a non-structural stage."""
+    gen = PADGenerator()
+    stage = make_annotated_stage(stage_type=StageType.ACTION)
+    with pytest.raises(GenerationError):
+        gen._render_structural_stage(stage)
+
+
 # ── Integration Tests ──────────────────────────────────────────────────────
 
 
@@ -529,3 +812,71 @@ def test_real_sample_all_files_have_content(tmp_path: Path) -> None:
     for f in files:
         lines = f.read_text(encoding="utf-8").splitlines()
         assert len(lines) > 0
+
+
+@pytest.mark.integration
+def test_pid_0171_generates_imports_and_block_structure(tmp_path: Path) -> None:
+    """Test that the real PID_0171 release produces IMPORT and BLOCK constructs."""
+    sample_path = Path("samples/blueprism/PID_0171.bprelease")
+    if not sample_path.exists():
+        pytest.skip("Sample file not found")
+
+    from flowsmith.ast.builder import build_ast
+    from flowsmith.engine import create_annotator
+    from flowsmith.parser import parse_process
+
+    raw = parse_process(sample_path)
+    process = build_ast(raw)
+    create_annotator().annotate_process(process)
+
+    gen = PADGenerator()
+    files = gen.generate_process(process, tmp_path / "robin")
+    texts = [f.read_text(encoding="utf-8") for f in files]
+
+    # Main-page header carries the hardcoded IMPORT lines
+    assert any("IMPORT 'controlRepo.appmask' AS appmask" in t for t in texts)
+    assert any("IMPORT 'imageRepo.imgrepo' AS imgrepo" in t for t in texts)
+
+    # BLOCK stages produce a BLOCK … END scope construct
+    block_texts = [t for t in texts if "BLOCK '" in t]
+    assert block_texts
+    for text in block_texts:
+        assert "ON BLOCK ERROR" in text
+        assert "END" in text
+
+    # RECOVER / RESUME structural constructs are emitted
+    assert any("ERROR => obj_LastError" in t for t in texts)
+    assert any("GOTO 'End'" in t for t in texts)
+
+
+@pytest.mark.integration
+def test_pid_0171_page_with_password_item_emits_sensitive() -> None:
+    """Test that @SENSITIVE is emitted for a real page holding a password item."""
+    sample_path = Path("samples/blueprism/PID_0171.bprelease")
+    if not sample_path.exists():
+        pytest.skip("Sample file not found")
+
+    from flowsmith.ast.builder import build_ast
+    from flowsmith.engine import create_annotator
+    from flowsmith.parser import parse_process
+
+    raw = parse_process(sample_path)
+    process = build_ast(raw)
+    create_annotator().annotate_process(process)
+
+    page = next(
+        (
+            p
+            for p in process.pages
+            for s in p.stages
+            for d in s.data_items
+            if d.data_type.lower() == "password"
+        ),
+        None,
+    )
+    assert page is not None, "PID_0171 is expected to declare password data items"
+
+    gen = PADGenerator()
+    result = gen.generate_page(page.model_copy(update={"is_main": True}), process.name)
+
+    assert "@SENSITIVE: [" in result
