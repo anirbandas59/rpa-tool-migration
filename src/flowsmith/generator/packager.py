@@ -24,6 +24,7 @@ from flowsmith.exceptions import GenerationError
 from flowsmith.generator.cloudflow import CloudFlowGenerator
 from flowsmith.generator.naming import env_var_schema_name
 from flowsmith.generator.workflow_builder import WORKQUEUES_MODULE, WorkflowBuilder
+from flowsmith.generator.xml_escape import escape_xml_attr, escape_xml_text
 
 
 class SolutionPackager:
@@ -53,6 +54,11 @@ class SolutionPackager:
             trim_blocks=True,
             lstrip_blocks=True,
         )
+        # Embedded PAD script and JSON metadata contain raw <, > and &
+        # (e.g. VBScript `IndexOf("DISP_E_BADINDEX")<>-1`). Without these
+        # filters the rendered customizations.xml is not well-formed XML.
+        self.env.filters["xmltext"] = escape_xml_text
+        self.env.filters["xmlattr_value"] = escape_xml_attr
 
     def package(
         self,

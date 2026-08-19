@@ -1412,3 +1412,124 @@ class TestOrchestratorCloudFlow:
             r["connectionReferenceLogicalName"].startswith("cr3ac_sharedcommondataserviceforapps")
             for r in refs
         )
+
+
+class TestXmlEscaping:
+    """Regression tests — embedded PAD script must not break XML well-formedness."""
+
+    # Verbatim from samples/blueprism/PID_0171.bprelease (CheckInstanceAndWorkbook
+    # Code stage). The `<>` inequality opened a bogus element before the fix.
+    VBSCRIPT_SNIPPET = 'If ex.Message.IndexOf("DISP_E_BADINDEX")<>-1 Then'
+
+    @pytest.fixture
+    def hostile_robin_dir(self, tmp_path: Path) -> Path:
+        """A .robin directory whose script contains raw <, > and & characters."""
+        robin_path = tmp_path / "robin_hostile"
+        robin_path.mkdir(parents=True, exist_ok=True)
+        (robin_path / "flow1.robin").write_text(
+            "# Narrative: compare A & B, then <check> the result\n"
+            f"    {self.VBSCRIPT_SNIPPET}\n"
+            "    If a < b And c > d Then\n",
+            encoding="utf-8",
+        )
+        return robin_path
+
+    @pytest.fixture
+    def hostile_process(self) -> BPProcess:
+        """A one-page process whose page name also contains XML metacharacters."""
+        stage = BPStage(
+            stage_id="S1",
+            stage_type=StageType.CODE,
+            name="Check <Instance> & Workbook",
+            data_items=[],
+            code_text=TestXmlEscaping.VBSCRIPT_SNIPPET,
+            pa_annotation=PAAnnotation(
+                target_type="Scripting.RunVBScript",
+                target_module="Scripting",
+                runtime=Runtime.DESKTOP,
+                params_map={},
+                confidence=0.40,
+                band=ConfidenceBand.MANUAL,
+                flags=[],
+            ),
+        )
+        return BPProcess(
+            process_id="test_escape",
+            name="TestEscape",
+            version="1.0",
+            pages=[BPPage(page_id="P1", name="flow1", stages=[stage], is_main=True)],
+            source_file="test.bprelease",
+        )
+
+    def test_customizations_xml_parses_with_hostile_definition(
+        self,
+        packager: SolutionPackager,
+        hostile_process: BPProcess,
+        hostile_robin_dir: Path,
+        cloudflow_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """customizations.xml stays well-formed when the script contains `<>`."""
+        output_path = tmp_path / "solution.zip"
+        packager.package(
+            hostile_process,
+            robin_dir=hostile_robin_dir,
+            cloudflow_dir=cloudflow_dir,
+            output_path=output_path,
+        )
+
+        with zipfile.ZipFile(output_path) as zf:
+            root = etree.fromstring(zf.read("customizations.xml"))
+
+        assert root is not None
+
+    def test_definition_round_trips_to_original_script(
+        self,
+        packager: SolutionPackager,
+        hostile_process: BPProcess,
+        hostile_robin_dir: Path,
+        cloudflow_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """The escaped Definition parses back to the exact PAD script."""
+        output_path = tmp_path / "solution.zip"
+        packager.package(
+            hostile_process,
+            robin_dir=hostile_robin_dir,
+            cloudflow_dir=cloudflow_dir,
+            output_path=output_path,
+        )
+
+        with zipfile.ZipFile(output_path) as zf:
+            root = etree.fromstring(zf.read("customizations.xml"))
+
+        definition = root.find(".//{*}Definition")
+        assert definition is not None
+        script = json.loads(definition.text)
+        assert self.VBSCRIPT_SNIPPET in script
+        assert "compare A & B, then <check> the result" in script
+
+    def test_workflow_name_attribute_is_escaped(
+        self,
+        packager: SolutionPackager,
+        hostile_process: BPProcess,
+        hostile_robin_dir: Path,
+        cloudflow_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """A page name containing `&` survives as an XML attribute value."""
+        hostile_process.pages[0].stages[0].pa_annotation = None
+        output_path = tmp_path / "solution.zip"
+        packager.package(
+            hostile_process,
+            robin_dir=hostile_robin_dir,
+            cloudflow_dir=cloudflow_dir,
+            output_path=output_path,
+        )
+
+        with zipfile.ZipFile(output_path) as zf:
+            root = etree.fromstring(zf.read("customizations.xml"))
+
+        workflow = root.find(".//{*}Workflow")
+        assert workflow is not None
+        assert workflow.get("Name") == "flow1"

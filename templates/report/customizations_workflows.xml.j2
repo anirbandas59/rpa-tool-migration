@@ -3,8 +3,8 @@
   <Roles></Roles>
   <Workflows>
 {%- for workflow in workflows %}
-    <Workflow WorkflowId="{{ '{' }}{{ workflow.workflow_id }}{{ '}' }}" Name="{{ workflow.name }}">
-      <JsonFileName>/Workflows/{{ workflow.json_file_name }}</JsonFileName>
+    <Workflow WorkflowId="{{ '{' }}{{ workflow.workflow_id | xmlattr_value }}{{ '}' }}" Name="{{ workflow.name | xmlattr_value }}">
+      <JsonFileName>/Workflows/{{ workflow.json_file_name | xmltext }}</JsonFileName>
       <Type>{{ workflow.type }}</Type>
       <Subprocess>{{ workflow.subprocess }}</Subprocess>
       <Category>{{ workflow.category }}</Category>
@@ -19,7 +19,7 @@
       <StatusCode>{{ workflow.status_code }}</StatusCode>
       <RunAs>{{ workflow.run_as }}</RunAs>
       <IsTransacted>{{ workflow.is_transacted }}</IsTransacted>
-      <IntroducedVersion>{{ workflow.introduced_version }}</IntroducedVersion>
+      <IntroducedVersion>{{ workflow.introduced_version | xmltext }}</IntroducedVersion>
       <IsCustomizable>{{ workflow.is_customizable }}</IsCustomizable>
       <BusinessProcessType>{{ workflow.business_process_type }}</BusinessProcessType>
 {% if workflow.ui_flow_type %}
@@ -27,19 +27,19 @@
 {% endif %}
       <IsCustomProcessingStepAllowedForOtherPublishers>{{ workflow.is_custom_processing_step_allowed_for_other_publishers }}</IsCustomProcessingStepAllowedForOtherPublishers>
       <ModernFlowType>{{ workflow.modern_flow_type }}</ModernFlowType>
-      <Metadata>{{ workflow.metadata }}</Metadata>
-      <Inputs>{{ workflow.inputs }}</Inputs>
-      <Outputs>{{ workflow.outputs }}</Outputs>
-      <Dependencies>{{ workflow.dependencies }}</Dependencies>
-      <ConnectionReferences>{{ workflow.connection_references }}</ConnectionReferences>
-      <Definition>{{ workflow.definition }}</Definition>
-      <SchemaVersion>{{ workflow.schema_version }}</SchemaVersion>
+      <Metadata>{{ workflow.metadata | xmltext }}</Metadata>
+      <Inputs>{{ workflow.inputs | xmltext }}</Inputs>
+      <Outputs>{{ workflow.outputs | xmltext }}</Outputs>
+      <Dependencies>{{ workflow.dependencies | xmltext }}</Dependencies>
+      <ConnectionReferences>{{ workflow.connection_references | xmltext }}</ConnectionReferences>
+      <Definition>{{ workflow.definition | xmltext }}</Definition>
+      <SchemaVersion>{{ workflow.schema_version | xmltext }}</SchemaVersion>
       <Claims>{{ workflow.claims | tojson }}</Claims>
       <DesktopFlowModules>[]</DesktopFlowModules>
       <Credentials>[]</Credentials>
-      <PrimaryEntity>{{ workflow.primary_entity }}</PrimaryEntity>
+      <PrimaryEntity>{{ workflow.primary_entity | xmltext }}</PrimaryEntity>
       <LocalizedNames>
-        <LocalizedName languagecode="1033" description="{{ workflow.localized_name }}" />
+        <LocalizedName languagecode="1033" description="{{ workflow.localized_name | xmlattr_value }}" />
       </LocalizedNames>
     </Workflow>
 {%- endfor %}
