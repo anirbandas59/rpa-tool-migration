@@ -1533,3 +1533,92 @@ class TestXmlEscaping:
         workflow = root.find(".//{*}Workflow")
         assert workflow is not None
         assert workflow.get("Name") == "flow1"
+
+
+class TestDefinitionJsonEncoding:
+    """Regression tests — <Definition> must hold a valid JSON string literal."""
+
+    @pytest.fixture
+    def tabbed_robin_dir(self, tmp_path: Path) -> Path:
+        """A .robin directory whose script is tab-indented, as PADGenerator emits."""
+        robin_path = tmp_path / "robin_tabbed"
+        robin_path.mkdir(parents=True, exist_ok=True)
+        (robin_path / "flow1.robin").write_text(
+            "BLOCK 'Main'\n\tSET txt_A TO $'''café'''\n\tIf a <> b Then\nEND\n",
+            encoding="utf-8",
+        )
+        return robin_path
+
+    @pytest.fixture
+    def tabbed_process(self) -> BPProcess:
+        """A one-page process matching the tabbed_robin_dir filename."""
+        return BPProcess(
+            process_id="test_json",
+            name="TestJson",
+            version="1.0",
+            pages=[BPPage(page_id="P1", name="flow1", stages=[], is_main=True)],
+            source_file="test.bprelease",
+        )
+
+    def _definition(
+        self,
+        packager: SolutionPackager,
+        process: BPProcess,
+        robin_dir_: Path,
+        cloudflow_dir: Path,
+        tmp_path: Path,
+    ) -> str:
+        """Package the process and return the raw <Definition> text."""
+        output_path = tmp_path / "solution.zip"
+        packager.package(
+            process,
+            robin_dir=robin_dir_,
+            cloudflow_dir=cloudflow_dir,
+            output_path=output_path,
+        )
+        with zipfile.ZipFile(output_path) as zf:
+            root = etree.fromstring(zf.read("customizations.xml"))
+        definition = root.find(".//{*}Definition")
+        assert definition is not None
+        assert definition.text is not None
+        return definition.text
+
+    def test_tab_indented_script_yields_parseable_json(
+        self,
+        packager: SolutionPackager,
+        tabbed_process: BPProcess,
+        tabbed_robin_dir: Path,
+        cloudflow_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """Tabs are escaped, so json.loads() on <Definition> succeeds."""
+        text = self._definition(packager, tabbed_process, tabbed_robin_dir, cloudflow_dir, tmp_path)
+        script = json.loads(text)
+        assert "\tSET txt_A" in script
+
+    def test_line_endings_normalised_to_crlf(
+        self,
+        packager: SolutionPackager,
+        tabbed_process: BPProcess,
+        tabbed_robin_dir: Path,
+        cloudflow_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """Decoded script uses CRLF line endings, matching the reference."""
+        text = self._definition(packager, tabbed_process, tabbed_robin_dir, cloudflow_dir, tmp_path)
+        script = json.loads(text)
+        assert "\r\n" in script
+        assert "\n" not in script.replace("\r\n", "")
+
+    def test_non_ascii_kept_literal(
+        self,
+        packager: SolutionPackager,
+        tabbed_process: BPProcess,
+        tabbed_robin_dir: Path,
+        cloudflow_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        r"""Non-ASCII characters are not \uXXXX-escaped, matching the reference."""
+        text = self._definition(packager, tabbed_process, tabbed_robin_dir, cloudflow_dir, tmp_path)
+        assert r"\u00e9" not in text
+        assert json.loads(text).count("café") == 1

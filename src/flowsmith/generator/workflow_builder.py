@@ -196,19 +196,27 @@ class WorkflowBuilder:
             raise GenerationError(f"Failed to build workflow for page '{page.name}': {e}") from e
 
     def _escape_definition(self, robin_content: str) -> str:
-        """Escape PAD script for embedding in JSON Definition element.
+        """Encode PAD script as the JSON string literal held by <Definition>.
+
+        The reference managed solution stores the whole .robin script as a
+        single quoted JSON string with CRLF line endings, so line breaks are
+        normalised to `\\r\\n` before encoding.
+
+        Encoding goes through `json.dumps` rather than hand-rolled
+        replacements: tabs and other C0 control characters are illegal raw
+        inside a JSON string, and generated .robin bodies are tab-indented.
+        `ensure_ascii=False` keeps non-ASCII characters literal, matching the
+        reference (the surrounding XML document is UTF-8).
 
         Args:
             robin_content: Raw PAD script source code.
 
         Returns:
-            Escaped string suitable for JSON string embedding.
+            A complete JSON string literal, including the surrounding quotes.
         """
-        # Convert CRLF and LF to \r\n for XML compatibility
-        normalized = robin_content.replace("\r\n", "\n").replace("\r", "\n")
-        # Escape for JSON embedding
-        escaped = normalized.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\r\\n")
-        return f'"{escaped}"'
+        # Normalise every line ending to CRLF, matching the reference solution.
+        normalized = robin_content.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\r\n")
+        return json.dumps(normalized, ensure_ascii=False)
 
     def _page_runtime(self, page: BPPage) -> Runtime:
         """Classify a page as a Cloud Flow or a Desktop (PAD) flow.
