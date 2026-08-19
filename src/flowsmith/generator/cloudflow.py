@@ -18,6 +18,30 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 from flowsmith.ast.models import BPProcess, BPStage, Runtime, StageType
 from flowsmith.exceptions import GenerationError
+from flowsmith.generator.connections import (
+    DATAVERSE_CONNECTION,
+    OFFICE365_CONNECTION,
+    UIFLOW_CONNECTION,
+    build_cloudflow_connection_references,
+    resolve_connection_names,
+)
+from flowsmith.generator.naming import env_var_parameter_key, env_var_schema_name
+
+# Connections the orchestrator always uses: it invokes desktop flows
+# (shared_uiflow), queries the work queue (Dataverse) and mails the global
+# error handler output (Office 365).
+ORCHESTRATOR_CONNECTIONS = (
+    UIFLOW_CONNECTION,
+    OFFICE365_CONNECTION,
+    DATAVERSE_CONNECTION,
+)
+
+# Blue Prism data type → Power Automate flow parameter type.
+_PARAMETER_TYPES = {
+    "number": "Float",
+    "flag": "Bool",
+    "collection": "Object",
+}
 
 
 class CloudFlowGenerator:
@@ -51,6 +75,7 @@ class CloudFlowGenerator:
         self,
         process: BPProcess,
         output_dir: Path,
+        publisher_prefix: str = "new",
     ) -> list[Path]:
         """Generate Cloud Flow JSON files for CLOUD-runtime stages.
 
@@ -62,6 +87,8 @@ class CloudFlowGenerator:
             process: Fully annotated BPProcess.
             output_dir: Directory to write .json files.
                         Created if it does not exist.
+            publisher_prefix: Publisher customisation prefix used to derive
+                connection reference logical names.
 
         Returns:
             List of Path objects for all generated files.
@@ -77,7 +104,7 @@ class CloudFlowGenerator:
 
         try:
             for page in process.pages:
-                flow_json = self.generate_page(page, process.name)
+                flow_json = self.generate_page(page, process.name, publisher_prefix)
 
                 if flow_json is None:
                     # Page has no CLOUD stages, skip it
@@ -115,6 +142,7 @@ class CloudFlowGenerator:
         self,
         page,  # BPPage type annotation deferred to avoid circular import
         process_name: str,
+        publisher_prefix: str = "new",
     ) -> str | None:
         """Generate Cloud Flow JSON for one page.
 
@@ -124,6 +152,8 @@ class CloudFlowGenerator:
         Args:
             page: The BPPage to generate.
             process_name: Parent process name.
+            publisher_prefix: Publisher customisation prefix used to derive
+                connection reference logical names.
 
         Returns:
             JSON string or None if no CLOUD stages.
@@ -226,7 +256,12 @@ class CloudFlowGenerator:
                         },
                         "actions": all_actions_dict,
                     },
-                    "connectionReferences": {},
+                    "connectionReferences": build_cloudflow_connection_references(
+                        resolve_connection_names(
+                            s.pa_annotation.target_module for s in cloud_stages
+                        ),
+                        publisher_prefix,
+                    ),
                 }
             }
 
@@ -238,6 +273,173 @@ class CloudFlowGenerator:
             raise GenerationError(
                 f"Failed to generate Cloud Flow for page '{page.name}': {e}"
             ) from e
+
+    # ── Orchestrator Cloud Flow ────────────────────────────────────────────
+
+    def generate_orchestrator(
+        self,
+        process: BPProcess,
+        desktop_flow_ids: dict[str, str],
+        publisher_prefix: str = "new",
+    ) -> str:
+        """Generate the orchestrator Cloud Flow JSON for a whole process.
+
+        The orchestrator is the button-triggered Cloud Flow that drives the
+        generated desktop flows: it initialises the shared variables, resolves
+        configuration from environment variables, invokes the Loader and
+        Performer desktop flows by their WorkflowId, and mails out any failure
+        from a global catch scope.
+
+        The `desktop_flow_ids` map must be produced *before* this call — see
+        `WorkflowBuilder.prepare_workflow_ids()`. That is what resolves the
+        forward reference between the CF JSON and the desktop flow GUIDs.
+
+        Args:
+            process: Fully annotated BPProcess.
+            desktop_flow_ids: Map of desktop flow page name → WorkflowId GUID.
+            publisher_prefix: Publisher customisation prefix used for
+                connection reference logical names and env var schema names.
+
+        Returns:
+            The orchestrator Cloud Flow JSON as a string.
+
+        Raises:
+            GenerationError: If `desktop_flow_ids` is empty, template rendering
+                fails, or the rendered result is not valid JSON.
+        """
+        loader_id, performer_id = self._resolve_role_ids(desktop_flow_ids)
+
+        modules = [
+            stage.pa_annotation.target_module
+            for page in process.pages
+            for stage in page.stages
+            if stage.pa_annotation
+        ]
+        connection_names = resolve_connection_names(modules, always=ORCHESTRATOR_CONNECTIONS)
+        connection_references = build_cloudflow_connection_references(
+            connection_names, publisher_prefix
+        )
+
+        parameters = self._build_parameters(process, publisher_prefix)
+        config_compose = self._build_config_compose(process, publisher_prefix)
+
+        try:
+            template = self.env.get_template("orchestrator.json.j2")
+            rendered = template.render(
+                connection_references_json=json.dumps(connection_references, indent=2),
+                parameters_json=json.dumps(parameters, indent=2),
+                config_compose_json=json.dumps(config_compose, indent=2),
+                loader_uiflow_id=loader_id,
+                performer_uiflow_id=performer_id,
+            )
+        except Exception as e:
+            raise GenerationError(
+                f"Failed to render orchestrator Cloud Flow for '{process.name}': {e}"
+            ) from e
+
+        try:
+            parsed = json.loads(rendered)
+        except json.JSONDecodeError as e:
+            raise GenerationError(
+                f"Orchestrator Cloud Flow for '{process.name}' is not valid JSON: {e}"
+            ) from e
+
+        return json.dumps(parsed, indent=2)
+
+    @staticmethod
+    def _resolve_role_ids(desktop_flow_ids: dict[str, str]) -> tuple[str, str]:
+        """Pick the Loader and Performer WorkflowIds from the desktop flow map.
+
+        Matches on page name first ("loader" / "performer" or "main"), and
+        falls back to positional order. When only one desktop flow exists it
+        fills both roles, so the generated CF JSON still references a real
+        WorkflowId rather than a placeholder.
+
+        Args:
+            desktop_flow_ids: Map of desktop flow page name → WorkflowId GUID.
+
+        Returns:
+            Tuple of (loader_workflow_id, performer_workflow_id).
+
+        Raises:
+            GenerationError: If `desktop_flow_ids` is empty.
+        """
+        if not desktop_flow_ids:
+            raise GenerationError(
+                "Cannot generate an orchestrator Cloud Flow: no desktop flow "
+                "WorkflowIds were supplied."
+            )
+
+        names = list(desktop_flow_ids)
+
+        loader_name = next((n for n in names if "loader" in n.lower()), names[0])
+        performer_name = next(
+            (n for n in names if n != loader_name and "performer" in n.lower()),
+            next(
+                (n for n in names if n != loader_name and "main" in n.lower()),
+                next((n for n in names if n != loader_name), loader_name),
+            ),
+        )
+
+        return desktop_flow_ids[loader_name], desktop_flow_ids[performer_name]
+
+    def _build_parameters(
+        self,
+        process: BPProcess,
+        publisher_prefix: str,
+    ) -> dict[str, dict]:
+        """Build the Cloud Flow `parameters` section.
+
+        Always emits the two Power Automate built-ins (`$authentication`,
+        `$connections`), then one entry per Blue Prism environment variable.
+        Processes with no environment variables yield just the built-ins.
+
+        Args:
+            process: The BPProcess whose environment variables to project.
+            publisher_prefix: Publisher customisation prefix.
+
+        Returns:
+            The parameters mapping, keyed by parameter name.
+        """
+        parameters: dict[str, dict] = {
+            "$authentication": {"defaultValue": {}, "type": "SecureObject"},
+            "$connections": {"defaultValue": {}, "type": "Object"},
+        }
+
+        for env_var in process.environment_variables:
+            schema_name = env_var_schema_name(publisher_prefix, env_var.name)
+            parameters[env_var_parameter_key(env_var.name, schema_name)] = {
+                "defaultValue": env_var.value or "",
+                "type": _PARAMETER_TYPES.get(env_var.data_type.lower(), "String"),
+                "metadata": {"schemaName": schema_name},
+            }
+
+        return parameters
+
+    def _build_config_compose(
+        self,
+        process: BPProcess,
+        publisher_prefix: str,
+    ) -> dict[str, str]:
+        """Build the Try:_Init Compose inputs that seed the `var` config object.
+
+        Each environment variable becomes one key resolved from the matching
+        flow parameter, mirroring how the reference flow hydrates `var` from
+        its configuration source.
+
+        Args:
+            process: The BPProcess whose environment variables to project.
+            publisher_prefix: Publisher customisation prefix.
+
+        Returns:
+            Mapping of config key → Power Automate parameter expression.
+        """
+        compose: dict[str, str] = {}
+        for env_var in process.environment_variables:
+            schema_name = env_var_schema_name(publisher_prefix, env_var.name)
+            key = env_var_parameter_key(env_var.name, schema_name)
+            compose[env_var.name] = f"@parameters('{key}')"
+        return compose
 
     def _render_action(self, stage: BPStage, run_after: str) -> dict:
         """Render a single CLOUD stage to a Cloud Flow action dict.

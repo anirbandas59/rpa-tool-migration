@@ -21,6 +21,8 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 from flowsmith.ast.models import BPProcess
 from flowsmith.exceptions import GenerationError
+from flowsmith.generator.cloudflow import CloudFlowGenerator
+from flowsmith.generator.naming import env_var_schema_name
 from flowsmith.generator.workflow_builder import WORKQUEUES_MODULE, WorkflowBuilder
 
 
@@ -102,20 +104,35 @@ class SolutionPackager:
             robin_files = sorted(robin_dir.glob("*.robin"))
             cf_files = sorted(cloudflow_dir.glob("*.json"))
 
-            # Build workflows from annotated pages
-            builder = WorkflowBuilder()
+            # Pass 1 — pre-allocate every WorkflowId.
+            #
+            # The Cloud Flow orchestrator references desktop flow WorkflowIds
+            # via `uiFlowId`, but those GUIDs used to be minted inside
+            # build_workflow(), i.e. after the CF JSON would have to exist.
+            # Allocating them up front resolves that forward reference without
+            # changing the CLI's generate-then-package ordering.
+            builder = WorkflowBuilder(publisher_prefix=publisher_prefix)
+
+            packaged_pages = [
+                (page, robin_file, self._find_cloudflow_file(page, cf_files))
+                for page in process.pages
+                if (robin_file := self._find_robin_file(page, robin_files)) is not None
+            ]
+            pages = [page for page, _robin, _cf in packaged_pages]
+            builder.prepare_workflow_ids(pages)
+            desktop_flow_ids = builder.desktop_flow_ids(pages)
+
+            # Orchestrator Cloud Flow — only meaningful when the solution
+            # actually contains desktop flows to invoke.
+            orchestrator_json: str | None = None
+            if desktop_flow_ids:
+                orchestrator_json = CloudFlowGenerator().generate_orchestrator(
+                    process, desktop_flow_ids, publisher_prefix
+                )
+
+            # Pass 2 — build the Workflow elements using the allocated GUIDs.
             workflow_ids = []
-
-            for page in process.pages:
-                # Find matching .robin file for this page
-                robin_file = self._find_robin_file(page, robin_files)
-                if not robin_file:
-                    continue  # Skip pages without robin files
-
-                # Find matching Cloud Flow JSON if available
-                cf_file = self._find_cloudflow_file(page, cf_files)
-
-                # Build the workflow with embedded definition
+            for page, robin_file, cf_file in packaged_pages:
                 workflow = builder.build_workflow(page, process, robin_file, cf_file)
                 workflow_ids.append(workflow["workflow_id"])
 
@@ -166,6 +183,13 @@ class SolutionPackager:
                 for cf_file in cf_files:
                     arcname = f"Workflows/{cf_file.name}"
                     zf.write(cf_file, arcname=arcname)
+
+                # Orchestrator Cloud Flow (references the desktop flow GUIDs)
+                if orchestrator_json is not None:
+                    zf.writestr(
+                        f"Workflows/CF_{solution_name}_Cloud_Main.json",
+                        orchestrator_json,
+                    )
 
                 # Other files
                 zf.writestr("Other/ManifestFile.json", manifest_json)
@@ -263,9 +287,11 @@ class SolutionPackager:
         Returns:
             Schema name of the form <prefix>_<name> with all characters
             outside [A-Za-z0-9_] replaced by underscores.
+
+        Raises:
+            GenerationError: If `name` is empty.
         """
-        safe = "".join(c if c.isalnum() or c == "_" else "_" for c in name.strip())
-        return f"{publisher_prefix}_{safe}"
+        return env_var_schema_name(publisher_prefix, name)
 
     def _sanitise_filename(self, name: str) -> str:
         """Sanitise a process name for use as a filename.

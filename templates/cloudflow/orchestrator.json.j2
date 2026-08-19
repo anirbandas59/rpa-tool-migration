@@ -1,0 +1,265 @@
+{
+  "properties": {
+    "connectionReferences": {{ connection_references_json }},
+    "definition": {
+      "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+      "contentVersion": "1.0.0.0",
+      "parameters": {{ parameters_json }},
+      "triggers": {
+        "manual": {
+          "type": "Request",
+          "kind": "Button",
+          "inputs": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "boolean": {
+                  "title": "Loader_Flag",
+                  "description": "No",
+                  "type": "boolean",
+                  "x-ms-content-hint": "BOOLEAN",
+                  "x-ms-dynamically-added": true
+                },
+                "boolean_1": {
+                  "title": "Performer_Flag",
+                  "description": "No",
+                  "type": "boolean",
+                  "x-ms-content-hint": "BOOLEAN",
+                  "x-ms-dynamically-added": true
+                }
+              },
+              "required": ["boolean", "boolean_1"]
+            }
+          }
+        }
+      },
+      "actions": {
+        "Init_Flow_Status": {
+          "type": "InitializeVariable",
+          "inputs": {
+            "variables": [{ "name": "Flow_Status", "type": "boolean", "value": false }]
+          },
+          "runAfter": {}
+        },
+        "Init_var_Config": {
+          "type": "InitializeVariable",
+          "inputs": {
+            "variables": [{ "name": "var", "type": "object", "value": {} }]
+          },
+          "runAfter": { "Init_Flow_Status": ["Succeeded"] }
+        },
+        "Init_Flow_Message": {
+          "type": "InitializeVariable",
+          "inputs": {
+            "variables": [{ "name": "Flow_Message", "type": "string" }]
+          },
+          "runAfter": { "Init_var_Config": ["Succeeded"] }
+        },
+        "Init_Exception_Message": {
+          "type": "InitializeVariable",
+          "inputs": {
+            "variables": [{ "name": "Exception_Message", "type": "string" }]
+          },
+          "runAfter": { "Init_Flow_Message": ["Succeeded"] }
+        },
+        "Init_Work_Queue_ID": {
+          "type": "InitializeVariable",
+          "inputs": {
+            "variables": [{ "name": "WorkQueue_ID", "type": "string" }]
+          },
+          "runAfter": { "Init_Exception_Message": ["Succeeded"] }
+        },
+        "Try:_Init": {
+          "type": "Scope",
+          "actions": {
+            "Compose:_Config": {
+              "type": "Compose",
+              "inputs": {{ config_compose_json }},
+              "runAfter": {}
+            },
+            "Set_Config_value": {
+              "type": "SetVariable",
+              "inputs": {
+                "name": "var",
+                "value": "@outputs('Compose:_Config')"
+              },
+              "runAfter": { "Compose:_Config": ["Succeeded"] }
+            },
+            "Set_Init_Status": {
+              "type": "SetVariable",
+              "inputs": { "name": "Flow_Status", "value": true },
+              "runAfter": { "Set_Config_value": ["Succeeded"] }
+            }
+          },
+          "runAfter": { "Init_Work_Queue_ID": ["Succeeded"] }
+        },
+        "Try:_Loader": {
+          "type": "Scope",
+          "actions": {
+            "Assign_Work_Queue_ID": {
+              "type": "SetVariable",
+              "inputs": {
+                "name": "WorkQueue_ID",
+                "value": "@variables('var')?['Ctrl_WorkQueueId']"
+              },
+              "runAfter": {}
+            },
+            "If_Loader_flag_=_yes": {
+              "type": "If",
+              "expression": {
+                "and": [{ "equals": ["@triggerBody()?['boolean']", true] }]
+              },
+              "actions": {
+                "Desktop_Flow_-_Loader": {
+                  "type": "OpenApiConnection",
+                  "inputs": {
+                    "parameters": {
+                      "uiFlowId": "{{ loader_uiflow_id }}",
+                      "runMode": "attended",
+                      "item/In_txt_Config": "@string(variables('var'))"
+                    },
+                    "host": {
+                      "apiId": "/providers/Microsoft.PowerApps/apis/shared_uiflow",
+                      "operationId": "RunUIFlow_V2",
+                      "connectionName": "shared_uiflow"
+                    },
+                    "authentication": "@parameters('$authentication')"
+                  },
+                  "runAfter": {}
+                },
+                "Loader_Flow_Success": {
+                  "type": "SetVariable",
+                  "inputs": { "name": "Flow_Status", "value": true },
+                  "runAfter": { "Desktop_Flow_-_Loader": ["Succeeded"] }
+                }
+              },
+              "else": { "actions": {} },
+              "runAfter": { "Assign_Work_Queue_ID": ["Succeeded"] }
+            }
+          },
+          "runAfter": { "Try:_Init": ["Succeeded"] }
+        },
+        "Try:_Performer": {
+          "type": "Scope",
+          "actions": {
+            "If_Performer_flag_=_yes": {
+              "type": "If",
+              "expression": {
+                "and": [{ "equals": ["@triggerBody()?['boolean_1']", true] }]
+              },
+              "actions": {
+                "List_rows_-_Get_Queue_Item_count": {
+                  "type": "OpenApiConnection",
+                  "inputs": {
+                    "parameters": {
+                      "entityName": "workqueueitems",
+                      "$filter": "_workqueueid_value eq '@{variables('WorkQueue_ID')}' and statecode eq 0"
+                    },
+                    "host": {
+                      "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps",
+                      "operationId": "ListRecords",
+                      "connectionName": "shared_commondataserviceforapps"
+                    },
+                    "authentication": "@parameters('$authentication')"
+                  },
+                  "runAfter": {}
+                },
+                "Total_Queue_Items": {
+                  "type": "Compose",
+                  "inputs": "@length(outputs('List_rows_-_Get_Queue_Item_count')?['body/value'])",
+                  "runAfter": { "List_rows_-_Get_Queue_Item_count": ["Succeeded"] }
+                },
+                "If_Work_Queue_Items_present": {
+                  "type": "If",
+                  "expression": {
+                    "and": [{ "greater": ["@outputs('Total_Queue_Items')", 0] }]
+                  },
+                  "actions": {
+                    "Desktop_Flow_-_Performer": {
+                      "type": "OpenApiConnection",
+                      "inputs": {
+                        "parameters": {
+                          "uiFlowId": "{{ performer_uiflow_id }}",
+                          "runMode": "attended",
+                          "item/In_txt_Config": "@string(variables('var'))"
+                        },
+                        "host": {
+                          "apiId": "/providers/Microsoft.PowerApps/apis/shared_uiflow",
+                          "operationId": "RunUIFlow_V2",
+                          "connectionName": "shared_uiflow"
+                        },
+                        "authentication": "@parameters('$authentication')"
+                      },
+                      "runAfter": {}
+                    },
+                    "Performer_Flow_Success": {
+                      "type": "SetVariable",
+                      "inputs": { "name": "Flow_Status", "value": true },
+                      "runAfter": { "Desktop_Flow_-_Performer": ["Succeeded"] }
+                    }
+                  },
+                  "else": { "actions": {} },
+                  "runAfter": { "Total_Queue_Items": ["Succeeded"] }
+                }
+              },
+              "else": { "actions": {} },
+              "runAfter": {}
+            }
+          },
+          "runAfter": { "Try:_Loader": ["Succeeded"] }
+        },
+        "Catch:_Global_Error_Handler": {
+          "type": "Scope",
+          "actions": {
+            "Filter_array": {
+              "type": "Query",
+              "inputs": {
+                "from": "@result('Try:_Loader')",
+                "where": "@or(equals(item()?['status'],'Failed'),equals(item()?['status'],'TimedOut'))"
+              },
+              "runAfter": {}
+            },
+            "Set_Exception_Message": {
+              "type": "SetVariable",
+              "inputs": {
+                "name": "Exception_Message",
+                "value": "@coalesce(first(body('Filter_array'))?['outputs']?['body']?['error']?['message'], first(body('Filter_array'))?['error']?['message'], 'Unknown error')"
+              },
+              "runAfter": { "Filter_array": ["Succeeded"] }
+            },
+            "Get_workflow_details": {
+              "type": "Compose",
+              "inputs": "@workflow()",
+              "runAfter": { "Set_Exception_Message": ["Succeeded"] }
+            },
+            "Send_an_email_(V2)": {
+              "type": "OpenApiConnection",
+              "inputs": {
+                "parameters": {
+                  "emailMessage/To": "@variables('var')?['Mail_BusinessExceptionTo']",
+                  "emailMessage/Subject": "@{workflow()?['tags']['flowDisplayName']} - System Exception",
+                  "emailMessage/Body": "<p>An exception occurred in the Power Automate flow.</p><p>Flow name: @{workflow()?['tags']['flowDisplayName']}</p><p>Action: @{first(body('Filter_array'))?['name']}</p><p>Error message: @{variables('Exception_Message')}</p>",
+                  "emailMessage/Importance": "Normal"
+                },
+                "host": {
+                  "apiId": "/providers/Microsoft.PowerApps/apis/shared_office365",
+                  "operationId": "SendEmailV2",
+                  "connectionName": "shared_office365-1"
+                },
+                "authentication": "@parameters('$authentication')"
+              },
+              "runAfter": { "Get_workflow_details": ["Succeeded"] }
+            }
+          },
+          "runAfter": {
+            "Try:_Init": ["Failed", "TimedOut"],
+            "Try:_Loader": ["Failed", "TimedOut"],
+            "Try:_Performer": ["Failed", "TimedOut"]
+          }
+        }
+      }
+    },
+    "templateName": null
+  },
+  "schemaVersion": "1.0.0.0"
+}

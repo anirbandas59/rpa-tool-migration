@@ -441,6 +441,174 @@ def test_filename_sanitised() -> None:
     assert "&" not in sanitised
 
 
+# ── Orchestrator Cloud Flow ────────────────────────────────────────────────
+
+
+DESKTOP_FLOW_IDS = {
+    "Loader": "5231954C-98DC-4575-8B2F-7CBFC0E3C42F",
+    "Performer": "A08A518C-E955-4E3A-AF5B-262E29BC6A9B",
+}
+
+
+def make_process_with_env_vars() -> BPProcess:
+    """Return a BPProcess declaring two environment variables.
+
+    Returns:
+        A BPProcess with environment variables and one cloud page.
+    """
+    from flowsmith.ast.models import BPEnvironmentVariable
+
+    return BPProcess(
+        process_id="PROC1",
+        name="PID_171",
+        version="1.0.0",
+        pages=[make_page_with_cloud(is_main=True)],
+        environment_variables=[
+            BPEnvironmentVariable(name="Config File", data_type="text", value="a.xlsx"),
+            BPEnvironmentVariable(name="Retry Count", data_type="number", value="3"),
+        ],
+        source_file="test.bprelease",
+    )
+
+
+def orchestrator_json(
+    process: BPProcess | None = None,
+    desktop_flow_ids: dict[str, str] | None = None,
+) -> dict:
+    """Generate and parse an orchestrator Cloud Flow.
+
+    Args:
+        process: The process to generate for. Defaults to a process with
+            environment variables.
+        desktop_flow_ids: Desktop flow name → WorkflowId map.
+
+    Returns:
+        The parsed orchestrator JSON.
+    """
+    gen = CloudFlowGenerator()
+    result = gen.generate_orchestrator(
+        process if process is not None else make_process_with_env_vars(),
+        desktop_flow_ids if desktop_flow_ids is not None else DESKTOP_FLOW_IDS,
+        publisher_prefix="cr3ac",
+    )
+    return json.loads(result)
+
+
+def test_orchestrator_is_valid_json() -> None:
+    """Orchestrator output parses as JSON with a definition."""
+    data = orchestrator_json()
+    assert "definition" in data["properties"]
+
+
+def test_orchestrator_connection_references() -> None:
+    """connectionReferences carries at least shared_uiflow and shared_office365-1."""
+    refs = orchestrator_json()["properties"]["connectionReferences"]
+    assert "shared_uiflow" in refs
+    assert "shared_office365-1" in refs
+
+
+def test_orchestrator_parameters_section_exists() -> None:
+    """parameters holds the PA built-ins plus one entry per environment variable."""
+    params = orchestrator_json()["properties"]["definition"]["parameters"]
+    assert "$authentication" in params
+    assert "$connections" in params
+    assert "Config File (cr3ac_Config_File)" in params
+    entry = params["Config File (cr3ac_Config_File)"]
+    assert entry["defaultValue"] == "a.xlsx"
+    assert entry["metadata"]["schemaName"] == "cr3ac_Config_File"
+
+
+def test_orchestrator_parameter_type_mapping() -> None:
+    """A BP number environment variable becomes a Float parameter."""
+    params = orchestrator_json()["properties"]["definition"]["parameters"]
+    assert params["Retry Count (cr3ac_Retry_Count)"]["type"] == "Float"
+
+
+def test_orchestrator_without_env_vars_still_has_parameters() -> None:
+    """A process with no environment variables keeps the built-in parameters."""
+    params = orchestrator_json(process=make_process())["properties"]["definition"]["parameters"]
+    assert set(params) == {"$authentication", "$connections"}
+
+
+def test_orchestrator_trigger_is_button() -> None:
+    """The trigger is a manual Request button with both flag inputs."""
+    trigger = orchestrator_json()["properties"]["definition"]["triggers"]["manual"]
+    assert trigger["type"] == "Request"
+    assert trigger["kind"] == "Button"
+    properties = trigger["inputs"]["schema"]["properties"]
+    assert properties["boolean"]["title"] == "Loader_Flag"
+    assert properties["boolean_1"]["title"] == "Performer_Flag"
+
+
+def test_orchestrator_top_level_scopes() -> None:
+    """All four Try/Catch scopes are present at the top level."""
+    actions = orchestrator_json()["properties"]["definition"]["actions"]
+    for name in ("Try:_Init", "Try:_Loader", "Try:_Performer", "Catch:_Global_Error_Handler"):
+        assert name in actions
+        assert actions[name]["type"] == "Scope"
+
+
+def test_orchestrator_loader_invokes_real_desktop_flow_id() -> None:
+    """Try:_Loader invokes RunUIFlow_V2 with the generated Loader WorkflowId."""
+    actions = orchestrator_json()["properties"]["definition"]["actions"]
+    invocation = actions["Try:_Loader"]["actions"]["If_Loader_flag_=_yes"]["actions"][
+        "Desktop_Flow_-_Loader"
+    ]
+    assert invocation["type"] == "OpenApiConnection"
+    assert invocation["inputs"]["host"]["operationId"] == "RunUIFlow_V2"
+    assert invocation["inputs"]["host"]["connectionName"] == "shared_uiflow"
+    assert invocation["inputs"]["parameters"]["uiFlowId"] == DESKTOP_FLOW_IDS["Loader"]
+
+
+def test_orchestrator_performer_invokes_real_desktop_flow_id() -> None:
+    """Try:_Performer invokes the Performer desktop flow by WorkflowId."""
+    actions = orchestrator_json()["properties"]["definition"]["actions"]
+    performer = actions["Try:_Performer"]["actions"]["If_Performer_flag_=_yes"]["actions"][
+        "If_Work_Queue_Items_present"
+    ]["actions"]["Desktop_Flow_-_Performer"]
+    assert performer["inputs"]["parameters"]["uiFlowId"] == DESKTOP_FLOW_IDS["Performer"]
+
+
+def test_orchestrator_catch_runs_after_all_try_scopes() -> None:
+    """The global error handler runs after every Try scope fails or times out."""
+    actions = orchestrator_json()["properties"]["definition"]["actions"]
+    run_after = actions["Catch:_Global_Error_Handler"]["runAfter"]
+    assert set(run_after) == {"Try:_Init", "Try:_Loader", "Try:_Performer"}
+    assert run_after["Try:_Loader"] == ["Failed", "TimedOut"]
+
+
+def test_orchestrator_single_desktop_flow_fills_both_roles() -> None:
+    """One desktop flow is reused for Loader and Performer, never a placeholder."""
+    data = orchestrator_json(desktop_flow_ids={"Main": "ONLY-ONE-ID"})
+    actions = data["properties"]["definition"]["actions"]
+    loader = actions["Try:_Loader"]["actions"]["If_Loader_flag_=_yes"]["actions"][
+        "Desktop_Flow_-_Loader"
+    ]
+    performer = actions["Try:_Performer"]["actions"]["If_Performer_flag_=_yes"]["actions"][
+        "If_Work_Queue_Items_present"
+    ]["actions"]["Desktop_Flow_-_Performer"]
+    assert loader["inputs"]["parameters"]["uiFlowId"] == "ONLY-ONE-ID"
+    assert performer["inputs"]["parameters"]["uiFlowId"] == "ONLY-ONE-ID"
+
+
+def test_orchestrator_without_desktop_flows_raises() -> None:
+    """No desktop flow IDs is an error, not a placeholder uiFlowId."""
+    gen = CloudFlowGenerator()
+    with pytest.raises(GenerationError):
+        gen.generate_orchestrator(make_process(), {}, publisher_prefix="cr3ac")
+
+
+def test_page_flow_has_connection_references() -> None:
+    """Per-page Cloud Flows derive connectionReferences from stage modules."""
+    gen = CloudFlowGenerator()
+    stage = make_cloud_stage(target_module="Outlook", target_type="SendEmail")
+    page = make_page_with_cloud(stages=[stage], is_main=False)
+    result = gen.generate_page(page, "TestProcess", publisher_prefix="cr3ac")
+    assert result is not None
+    refs = json.loads(result)["properties"]["connectionReferences"]
+    assert "shared_office365-1" in refs
+
+
 # ── Integration Tests ──────────────────────────────────────────────────────
 
 

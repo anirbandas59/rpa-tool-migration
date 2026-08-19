@@ -1215,3 +1215,200 @@ class TestMetadataAndClaims:
         assert missing_deps is not None
         required = missing_deps.find(".//{*}Required")
         assert required.get("schemaName") == "workqueueitem"
+
+
+class TestOrchestratorCloudFlow:
+    """Sub-Task 7 — orchestrator CF JSON and desktop flow GUID cross-reference."""
+
+    @pytest.fixture
+    def two_desktop_page_process(self) -> BPProcess:
+        """A process with two desktop pages (Loader and Performer roles).
+
+        Page names match the .robin filenames created by the `robin_dir`
+        fixture so both pages are packaged as Workflow elements. Role
+        assignment therefore falls back to page order: flow1 = Loader,
+        flow2 = Performer.
+        """
+        from flowsmith.ast.models import BPEnvironmentVariable
+
+        def page(page_id: str, name: str) -> BPPage:
+            stage = BPStage(
+                stage_id=f"{page_id}_S1",
+                stage_type=StageType.ACTION,
+                name="Get Next Item",
+                data_items=[],
+                pa_annotation=PAAnnotation(
+                    target_type="WorkQueues.GetNextItem",
+                    target_module="WorkQueues",
+                    runtime=Runtime.DESKTOP,
+                    params_map={},
+                    confidence=0.90,
+                    band=ConfidenceBand.AUTO,
+                    flags=[],
+                ),
+            )
+            return BPPage(
+                page_id=page_id,
+                name=name,
+                stages=[stage],
+                is_main=(page_id == "P1"),
+                published=True,
+            )
+
+        return BPProcess(
+            process_id="test_orch",
+            name="TestProcessOrch",
+            version="1.0",
+            pages=[page("P1", "flow1"), page("P2", "flow2")],
+            environment_variables=[
+                BPEnvironmentVariable(name="Config File", data_type="text", value="a.xlsx"),
+            ],
+            source_file="test.bprelease",
+        )
+
+    @staticmethod
+    def _orchestrator(zip_path: Path) -> dict:
+        """Read and parse the orchestrator CF JSON from a packaged solution."""
+        with zipfile.ZipFile(zip_path) as zf:
+            names = [
+                n
+                for n in zf.namelist()
+                if n.startswith("Workflows/CF_") and n.endswith("_Cloud_Main.json")
+            ]
+            assert len(names) == 1, f"Expected one orchestrator, got {names}"
+            return json.loads(zf.read(names[0]).decode("utf-8"))
+
+    def test_orchestrator_written_to_workflows(
+        self,
+        packager: SolutionPackager,
+        two_desktop_page_process: BPProcess,
+        robin_dir: Path,
+        cloudflow_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """The packaged zip carries an orchestrator CF JSON under Workflows/."""
+        output_path = tmp_path / "solution.zip"
+        packager.package(
+            two_desktop_page_process,
+            robin_dir=robin_dir,
+            cloudflow_dir=cloudflow_dir,
+            output_path=output_path,
+            publisher_prefix="cr3ac",
+        )
+
+        data = self._orchestrator(output_path)
+        assert data["properties"]["definition"]["triggers"]["manual"]["kind"] == "Button"
+
+    def test_orchestrator_connection_references_and_parameters(
+        self,
+        packager: SolutionPackager,
+        two_desktop_page_process: BPProcess,
+        robin_dir: Path,
+        cloudflow_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """Orchestrator declares its connections and environment parameters."""
+        output_path = tmp_path / "solution.zip"
+        packager.package(
+            two_desktop_page_process,
+            robin_dir=robin_dir,
+            cloudflow_dir=cloudflow_dir,
+            output_path=output_path,
+            publisher_prefix="cr3ac",
+        )
+
+        data = self._orchestrator(output_path)
+        refs = data["properties"]["connectionReferences"]
+        assert "shared_uiflow" in refs
+        assert "shared_office365-1" in refs
+
+        params = data["properties"]["definition"]["parameters"]
+        assert "Config File (cr3ac_Config_File)" in params
+
+    def test_orchestrator_uiflow_ids_match_customizations_workflow_ids(
+        self,
+        packager: SolutionPackager,
+        two_desktop_page_process: BPProcess,
+        robin_dir: Path,
+        cloudflow_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """uiFlowId values are real generated WorkflowIds, not placeholders."""
+        output_path = tmp_path / "solution.zip"
+        packager.package(
+            two_desktop_page_process,
+            robin_dir=robin_dir,
+            cloudflow_dir=cloudflow_dir,
+            output_path=output_path,
+            publisher_prefix="cr3ac",
+        )
+
+        data = self._orchestrator(output_path)
+        actions = data["properties"]["definition"]["actions"]
+        loader_id = actions["Try:_Loader"]["actions"]["If_Loader_flag_=_yes"]["actions"][
+            "Desktop_Flow_-_Loader"
+        ]["inputs"]["parameters"]["uiFlowId"]
+        performer_id = actions["Try:_Performer"]["actions"]["If_Performer_flag_=_yes"]["actions"][
+            "If_Work_Queue_Items_present"
+        ]["actions"]["Desktop_Flow_-_Performer"]["inputs"]["parameters"]["uiFlowId"]
+
+        with zipfile.ZipFile(output_path) as zf:
+            root = etree.fromstring(zf.read("customizations.xml"))
+        workflow_ids = {
+            wf.get("WorkflowId").strip("{}").lower() for wf in root.findall(".//{*}Workflow")
+        }
+
+        assert len(workflow_ids) == 2
+        assert loader_id.strip("{}").lower() in workflow_ids
+        assert performer_id.strip("{}").lower() in workflow_ids
+        assert loader_id != performer_id
+
+    def test_no_desktop_flows_produces_no_orchestrator(
+        self,
+        packager: SolutionPackager,
+        minimal_process: BPProcess,
+        robin_dir: Path,
+        cloudflow_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """A process with no packaged pages emits no orchestrator CF JSON."""
+        output_path = tmp_path / "solution.zip"
+        packager.package(
+            minimal_process,
+            robin_dir=robin_dir,
+            cloudflow_dir=cloudflow_dir,
+            output_path=output_path,
+        )
+
+        with zipfile.ZipFile(output_path) as zf:
+            names = [n for n in zf.namelist() if n.endswith("_Cloud_Main.json")]
+        assert names == []
+
+    def test_connection_references_element_populated(
+        self,
+        packager: SolutionPackager,
+        two_desktop_page_process: BPProcess,
+        robin_dir: Path,
+        cloudflow_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """<ConnectionReferences> is derived from stage modules, not left empty."""
+        output_path = tmp_path / "solution.zip"
+        packager.package(
+            two_desktop_page_process,
+            robin_dir=robin_dir,
+            cloudflow_dir=cloudflow_dir,
+            output_path=output_path,
+            publisher_prefix="cr3ac",
+        )
+
+        with zipfile.ZipFile(output_path) as zf:
+            root = etree.fromstring(zf.read("customizations.xml"))
+
+        element = root.find(".//{*}ConnectionReferences")
+        assert element is not None
+        refs = json.loads(element.text)
+        assert any(
+            r["connectionReferenceLogicalName"].startswith("cr3ac_sharedcommondataserviceforapps")
+            for r in refs
+        )

@@ -13,11 +13,16 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
 from flowsmith.ast.models import BPPage, BPProcess, Runtime
 from flowsmith.exceptions import GenerationError
+from flowsmith.generator.connections import (
+    build_workflow_connection_references,
+    resolve_connection_names,
+)
 
 # Blue Prism VBO catalogue module name used for Work Queue actions
 # (mapping/vbo_catalogue.yaml: pa_module: "WorkQueues"). Any stage annotated
@@ -34,9 +39,60 @@ class WorkflowBuilder:
     DEFAULT_SCHEMA_VERSION = "2022.07"
     DEFAULT_ROBIN_SCHEMA = "ROBIN_20211012"
 
-    def __init__(self) -> None:
-        """Initialise the workflow builder."""
+    def __init__(self, publisher_prefix: str = "new") -> None:
+        """Initialise the workflow builder.
+
+        Args:
+            publisher_prefix: Publisher customisation prefix used to derive
+                connection reference logical names.
+        """
         self.workflows: list[dict[str, Any]] = []
+        self.publisher_prefix = publisher_prefix
+        # page_id → WorkflowId, populated by prepare_workflow_ids().
+        self._page_workflow_ids: dict[str, str] = {}
+
+    def prepare_workflow_ids(self, pages: Iterable[BPPage]) -> dict[str, str]:
+        """Pre-allocate a WorkflowId for every page, before any build.
+
+        The Cloud Flow orchestrator has to reference desktop flow WorkflowIds
+        (`uiFlowId`) that `build_workflow()` would otherwise mint lazily,
+        creating a forward reference. Calling this first fixes every GUID up
+        front; `build_workflow()` then reuses the pre-allocated value.
+
+        Idempotent: a page that already has an allocated ID keeps it.
+
+        Args:
+            pages: The pages that will be packaged as Workflow elements.
+
+        Returns:
+            Map of page_id → WorkflowId GUID for the supplied pages.
+        """
+        allocated: dict[str, str] = {}
+        for page in pages:
+            workflow_id = self._page_workflow_ids.get(page.page_id)
+            if workflow_id is None:
+                workflow_id = str(uuid.uuid4()).upper()
+                self._page_workflow_ids[page.page_id] = workflow_id
+            allocated[page.page_id] = workflow_id
+        return allocated
+
+    def desktop_flow_ids(self, pages: Iterable[BPPage]) -> dict[str, str]:
+        """Return the pre-allocated WorkflowIds of the desktop (PAD) pages.
+
+        Args:
+            pages: The pages that will be packaged as Workflow elements.
+                  Must already have been passed to `prepare_workflow_ids()`.
+
+        Returns:
+            Map of page name → WorkflowId GUID, restricted to DESKTOP pages
+            that have an allocated ID. Empty when the process has no desktop
+            flows.
+        """
+        return {
+            page.name: self._page_workflow_ids[page.page_id]
+            for page in pages
+            if self._page_runtime(page) != Runtime.CLOUD and page.page_id in self._page_workflow_ids
+        }
 
     def build_workflow(
         self,
@@ -80,8 +136,12 @@ class WorkflowBuilder:
             # Build metadata JSON
             metadata = self._build_metadata(page)
 
-            # Generate a GUID for the workflow
-            workflow_id = str(uuid.uuid4()).upper()
+            # Reuse the GUID pre-allocated by prepare_workflow_ids() so the
+            # Cloud Flow orchestrator's uiFlowId references stay valid.
+            workflow_id = self._page_workflow_ids.get(page.page_id)
+            if workflow_id is None:
+                workflow_id = str(uuid.uuid4()).upper()
+                self._page_workflow_ids[page.page_id] = workflow_id
 
             # Category/UIFlowType depend on whether the page is a desktop
             # (PAD .robin) flow or a cloud (Power Automate) flow.
@@ -288,13 +348,20 @@ class WorkflowBuilder:
     def _build_connection_references(self, page: BPPage) -> str:
         """Build connection references for cloud connectors used by the flow.
 
+        Derived from the `target_module` of every annotated stage on the page
+        (see `flowsmith.generator.connections`), so the same derivation drives
+        both this element and the Cloud Flow `connectionReferences` mapping.
+
         Args:
             page: The BPPage to extract connector references from.
 
         Returns:
             JSON string containing connection references array.
         """
-        connections: list[dict[str, Any]] = []
+        connection_names = resolve_connection_names(
+            stage.pa_annotation.target_module for stage in page.stages if stage.pa_annotation
+        )
+        connections = build_workflow_connection_references(connection_names, self.publisher_prefix)
         return json.dumps(connections, separators=(",", ":"))
 
     def _build_metadata(self, page: BPPage) -> str:
