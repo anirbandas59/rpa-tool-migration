@@ -41,6 +41,15 @@ class RawStage(TypedDict):
     exception_handler_id: str | None
     exception_type: str | None
     params_map: dict[str, str]
+    decision_expression: str | None
+    code_text: str | None
+    narrative: str | None
+    initial_value: str | None
+    timeout_seconds: int | None
+    group_id: str | None
+    exception_detail: str | None
+    exception_usecurrent: bool
+    input_friendlynames: dict[str, str]
 
 
 class RawPage(TypedDict):
@@ -50,6 +59,7 @@ class RawPage(TypedDict):
     name: str
     stages: list[RawStage]
     is_main: bool
+    published: bool
 
 
 class RawProcess(TypedDict):

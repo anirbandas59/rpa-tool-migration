@@ -121,6 +121,16 @@ def _parse_stage(stage_elem: Any) -> RawStage:
             for di_elem in stage_elem.findall("dataitem"):
                 data_items.append(_parse_data_item(di_elem))
 
+        # Extract <initialvalue> text for Data/Collection stages (namespace-aware).
+        # A self-closing <initialvalue /> element has no text — that is a
+        # genuinely-absent initial value, not a parse failure, so it stays None.
+        initial_value: str | None = None
+        initialvalue_elem = stage_elem.find(_ns("initialvalue"))
+        if initialvalue_elem is None:
+            initialvalue_elem = stage_elem.find("initialvalue")
+        if initialvalue_elem is not None and initialvalue_elem.text:
+            initial_value = initialvalue_elem.text.strip()
+
         # Synthesise BPDataItem for DATA and COLLECTION stages
         # These stage types store their type in a <datatype> child element
         # rather than <dataitem> children.
@@ -139,7 +149,7 @@ def _parse_stage(stage_elem: Any) -> RawStage:
                 RawDataItem(
                     name=name,  # variable name = stage name
                     data_type=raw_type,
-                    initial_value=None,
+                    initial_value=initial_value,
                     is_input=False,
                     is_output=False,
                 )
@@ -155,8 +165,10 @@ def _parse_stage(stage_elem: Any) -> RawStage:
             if exception_handler_id:
                 exception_handler_id = exception_handler_id.strip()
 
-        # Parse exception type from <exception> child (namespace-aware)
+        # Parse exception type/detail/usecurrent from <exception> child (namespace-aware)
         exception_type: str | None = None
+        exception_detail: str | None = None
+        exception_usecurrent: bool = False
         exc_elem = stage_elem.find(_ns("exception"))
         if exc_elem is None:
             exc_elem = stage_elem.find("exception")
@@ -164,11 +176,59 @@ def _parse_stage(stage_elem: Any) -> RawStage:
             exc_type = exc_elem.get("type", None)
             if exc_type:
                 exception_type = exc_type.strip()
+            exc_detail = exc_elem.get("detail", None)
+            if exc_detail:
+                exception_detail = exc_detail.strip()
+            exception_usecurrent = exc_elem.get("usecurrent", "no").strip().lower() == "yes"
+
+        # Parse <decision> expression (namespace-aware) — DECISION and CHOICE stages
+        decision_expression: str | None = None
+        dec_el = stage_elem.find(_ns("decision"))
+        if dec_el is None:
+            dec_el = stage_elem.find("decision")
+        if dec_el is not None:
+            dec_expr = dec_el.get("expression", None)
+            if dec_expr:
+                decision_expression = dec_expr
+
+        # Parse <narrative> text (namespace-aware) — stage-level comment
+        narrative: str | None = None
+        narrative_elem = stage_elem.find(_ns("narrative"))
+        if narrative_elem is None:
+            narrative_elem = stage_elem.find("narrative")
+        if narrative_elem is not None and narrative_elem.text:
+            narrative = narrative_elem.text.strip()
+
+        # Parse <timeout> for WaitStart stages (namespace-aware)
+        timeout_seconds: int | None = None
+        timeout_elem = stage_elem.find(_ns("timeout"))
+        if timeout_elem is None:
+            timeout_elem = stage_elem.find("timeout")
+        if timeout_elem is not None and timeout_elem.text and timeout_elem.text.strip().isdigit():
+            timeout_seconds = int(timeout_elem.text.strip())
+
+        # Parse <groupid> for WaitStart/WaitEnd/LoopStart/LoopEnd bracket matching
+        # (namespace-aware) — the correct matcher, more reliable than positional order.
+        group_id: str | None = None
+        groupid_elem = stage_elem.find(_ns("groupid"))
+        if groupid_elem is None:
+            groupid_elem = stage_elem.find("groupid")
+        if groupid_elem is not None and groupid_elem.text:
+            group_id = groupid_elem.text.strip()
+
+        # Parse <code> text content for Code stages (namespace-aware, CDATA)
+        code_text: str | None = None
+        code_elem = stage_elem.find(_ns("code"))
+        if code_elem is None:
+            code_elem = stage_elem.find("code")
+        if code_elem is not None and code_elem.text:
+            code_text = code_elem.text
 
         # Parse params_map
         params_map: dict[str, str] = {}
 
         # For Action stages: extract inputs (namespace-aware)
+        input_friendlynames: dict[str, str] = {}
         inputs_elem = stage_elem.find(_ns("inputs"))
         if inputs_elem is None:
             inputs_elem = stage_elem.find("inputs")
@@ -178,6 +238,9 @@ def _parse_stage(stage_elem: Any) -> RawStage:
                 input_expr = input_elem.get("expr", "").strip()
                 if input_name:
                     params_map[input_name] = input_expr
+                    friendlyname = input_elem.get("friendlyname", "").strip()
+                    if friendlyname:
+                        input_friendlynames[input_name] = friendlyname
             # Also try without namespace
             if not params_map:
                 for input_elem in inputs_elem.findall("input"):
@@ -185,6 +248,9 @@ def _parse_stage(stage_elem: Any) -> RawStage:
                     input_expr = input_elem.get("expr", "").strip()
                     if input_name:
                         params_map[input_name] = input_expr
+                        friendlyname = input_elem.get("friendlyname", "").strip()
+                        if friendlyname:
+                            input_friendlynames[input_name] = friendlyname
 
         # For Calculation stages: extract calculation expressions (namespace-aware)
         calc_elem = stage_elem.find(_ns("calculation"))
@@ -216,6 +282,15 @@ def _parse_stage(stage_elem: Any) -> RawStage:
             exception_handler_id=exception_handler_id,
             exception_type=exception_type,
             params_map=params_map,
+            decision_expression=decision_expression,
+            code_text=code_text,
+            narrative=narrative,
+            initial_value=initial_value,
+            timeout_seconds=timeout_seconds,
+            group_id=group_id,
+            exception_detail=exception_detail,
+            exception_usecurrent=exception_usecurrent,
+            input_friendlynames=input_friendlynames,
         )
     except (ValueError, AttributeError) as exc:
         raise ParseError(f"Failed to parse stage: {exc}") from exc
@@ -243,6 +318,9 @@ def _parse_page(subsheet_elem: Any) -> RawPage:
             # Fallback to id if name is missing
             name = page_id
 
+        # Extract published flag — determines which pages become PAD Workflows
+        published = subsheet_elem.get("published", "false").strip().lower() == "true"
+
         # In Blue Prism XML, stages are children of <subsheet>
         # They may be nested under other elements (like <view>), so we search recursively
         stages: list[RawStage] = []
@@ -257,6 +335,7 @@ def _parse_page(subsheet_elem: Any) -> RawPage:
             name=name,
             stages=stages,
             is_main=is_main,
+            published=published,
         )
     except (ValueError, AttributeError) as exc:
         raise ParseError(f"Failed to parse page: {exc}") from exc
@@ -360,6 +439,7 @@ def parse_process(path: Path) -> RawProcess:
         # Step 1: Collect ALL subsheets from entire document
         # Try namespace-aware first, then fall back to non-namespaced for test fixtures
         subsheets_by_id: dict[str, Any] = {}
+        subsheets_published: dict[str, bool] = {}
         all_subsheet_elems = list(root.iter(_ns("subsheet")))
         if not all_subsheet_elems:
             all_subsheet_elems = list(root.iter("subsheet"))
@@ -384,6 +464,9 @@ def parse_process(path: Path) -> RawProcess:
                 page_name = page_id
 
             subsheets_by_id[page_id] = page_name
+            subsheets_published[page_id] = (
+                subsheet_elem.get("published", "false").strip().lower() == "true"
+            )
 
         # Step 2: Collect stages — supports two formats:
         # Format A (test): stages nested inside subsheet elements
@@ -475,6 +558,7 @@ def parse_process(path: Path) -> RawProcess:
                 name=main_page_name,
                 stages=main_page_stages,
                 is_main=True,
+                published=subsheets_published.get(main_page_id, False),
             )
         )
 
@@ -487,6 +571,7 @@ def parse_process(path: Path) -> RawProcess:
                     name=page_name,
                     stages=stages,
                     is_main=False,
+                    published=subsheets_published.get(page_id, False),
                 )
             )
 

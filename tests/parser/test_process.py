@@ -624,3 +624,346 @@ def test_vbo_constants_exported() -> None:
     """VBO constants are exported from flowsmith.parser."""
     assert VBO_OBJECT_KEY == "_vbo_object"
     assert VBO_ACTION_KEY == "_vbo_action"
+
+
+# ── New field extraction tests (decision, code, narrative, initial_value, ──
+# ── timeout, groupid, exception detail/usecurrent, friendlyname, published) ─
+
+
+@pytest.fixture
+def decision_bprelease(tmp_path: Path) -> Path:
+    """Blue Prism .bprelease with a Decision stage carrying an expression."""
+    xml_content = """\
+<?xml version="1.0" encoding="utf-8"?>
+<process id="proc_dec" name="DecisionTest" version="1.0">
+  <subsheet subsheetid="pg_001" name="DecisionTest" type="0">
+    <stage stageid="s_001" type="Start" name="Start"/>
+    <stage stageid="s_002" type="Decision" name="Check">
+      <decision expression="[Flag] = True"/>
+      <ontrue>s_003</ontrue>
+      <onfalse>s_003</onfalse>
+    </stage>
+    <stage stageid="s_003" type="End" name="End"/>
+  </subsheet>
+</process>
+"""
+    filepath = tmp_path / "test_decision.bprelease"
+    filepath.write_text(xml_content, encoding="utf-8")
+    return filepath
+
+
+@pytest.fixture
+def code_narrative_bprelease(tmp_path: Path) -> Path:
+    """Blue Prism .bprelease with a Code stage (CDATA body) and a narrative."""
+    xml_content = """\
+<?xml version="1.0" encoding="utf-8"?>
+<process id="proc_code" name="CodeTest" version="1.0">
+  <subsheet subsheetid="pg_001" name="CodeTest" type="0">
+    <stage stageid="s_001" type="Start" name="Start"/>
+    <stage stageid="s_002" type="Code" name="Run Script">
+      <narrative>Runs a small VBScript snippet.</narrative>
+      <code><![CDATA[System.Console.WriteLine("hi")]]></code>
+    </stage>
+    <stage stageid="s_003" type="End" name="End"/>
+  </subsheet>
+</process>
+"""
+    filepath = tmp_path / "test_code.bprelease"
+    filepath.write_text(xml_content, encoding="utf-8")
+    return filepath
+
+
+@pytest.fixture
+def data_initialvalue_bprelease(tmp_path: Path) -> Path:
+    """Blue Prism .bprelease with Data stages: one with an initial value, one without."""
+    xml_content = """\
+<?xml version="1.0" encoding="utf-8"?>
+<process id="proc_data" name="DataTest" version="1.0">
+  <subsheet subsheetid="pg_001" name="DataTest" type="0">
+    <stage stageid="s_001" type="Data" name="Counter">
+      <datatype>number</datatype>
+      <initialvalue>0</initialvalue>
+    </stage>
+    <stage stageid="s_002" type="Data" name="Empty">
+      <datatype>text</datatype>
+      <initialvalue />
+    </stage>
+  </subsheet>
+</process>
+"""
+    filepath = tmp_path / "test_data_initial.bprelease"
+    filepath.write_text(xml_content, encoding="utf-8")
+    return filepath
+
+
+@pytest.fixture
+def wait_loop_bprelease(tmp_path: Path) -> Path:
+    """Blue Prism .bprelease with WaitStart/LoopStart stages carrying timeout/groupid."""
+    xml_content = """\
+<?xml version="1.0" encoding="utf-8"?>
+<process id="proc_wait" name="WaitTest" version="1.0">
+  <subsheet subsheetid="pg_001" name="WaitTest" type="0">
+    <stage stageid="s_001" type="WaitStart" name="Wait1">
+      <groupid>grp_1</groupid>
+      <timeout>120</timeout>
+    </stage>
+    <stage stageid="s_002" type="WaitEnd" name="Wait1 End">
+      <groupid>grp_1</groupid>
+    </stage>
+    <stage stageid="s_003" type="LoopStart" name="Loop1">
+      <groupid>grp_2</groupid>
+    </stage>
+    <stage stageid="s_004" type="LoopEnd" name="Loop1 End">
+      <groupid>grp_2</groupid>
+    </stage>
+  </subsheet>
+</process>
+"""
+    filepath = tmp_path / "test_wait_loop.bprelease"
+    filepath.write_text(xml_content, encoding="utf-8")
+    return filepath
+
+
+@pytest.fixture
+def exception_detail_bprelease(tmp_path: Path) -> Path:
+    """Blue Prism .bprelease with exception detail expression and usecurrent flag."""
+    xml_content = """\
+<?xml version="1.0" encoding="utf-8"?>
+<process id="proc_exc" name="ExcDetailTest" version="1.0">
+  <subsheet subsheetid="pg_001" name="ExcDetailTest" type="0">
+    <stage stageid="s_001" type="Exception" name="Throw Custom">
+      <exception type="Business Exception" detail="[Message]"/>
+    </stage>
+    <stage stageid="s_002" type="Exception" name="Rethrow">
+      <exception type="" detail="" usecurrent="yes"/>
+    </stage>
+  </subsheet>
+</process>
+"""
+    filepath = tmp_path / "test_exc_detail.bprelease"
+    filepath.write_text(xml_content, encoding="utf-8")
+    return filepath
+
+
+@pytest.fixture
+def friendlyname_bprelease(tmp_path: Path) -> Path:
+    """Blue Prism .bprelease with an Action stage input carrying a friendlyname."""
+    xml_content = """\
+<?xml version="1.0" encoding="utf-8"?>
+<process id="proc_fn" name="FriendlyNameTest" version="1.0">
+  <subsheet subsheetid="pg_001" name="FriendlyNameTest" type="0">
+    <stage stageid="s_001" type="Action" name="Call Action">
+      <inputs>
+        <input name="Param1" expr="Hello" type="text" friendlyname="Greeting"/>
+      </inputs>
+      <resource object="Utility - Strings" action="Split Text"/>
+    </stage>
+  </subsheet>
+</process>
+"""
+    filepath = tmp_path / "test_friendlyname.bprelease"
+    filepath.write_text(xml_content, encoding="utf-8")
+    return filepath
+
+
+@pytest.fixture
+def published_page_bprelease(tmp_path: Path) -> Path:
+    """Blue Prism .bprelease with one published and one unpublished subsheet."""
+    xml_content = """\
+<?xml version="1.0" encoding="utf-8"?>
+<process id="proc_pub" name="PublishedTest" version="1.0">
+  <subsheet subsheetid="pg_001" name="PublishedTest" type="0" published="true">
+    <stage stageid="s_001" type="Start" name="Start"/>
+  </subsheet>
+  <subsheet subsheetid="pg_002" name="Helper" type="0" published="false">
+    <stage stageid="s_002" type="Start" name="Start"/>
+  </subsheet>
+</process>
+"""
+    filepath = tmp_path / "test_published.bprelease"
+    filepath.write_text(xml_content, encoding="utf-8")
+    return filepath
+
+
+def test_decision_expression_extracted(decision_bprelease: Path) -> None:
+    """decision_expression is extracted from <decision expression="...">."""
+    result = parse_process(decision_bprelease)
+    decision_stage = result["pages"][0]["stages"][1]
+    assert decision_stage["decision_expression"] == "[Flag] = True"
+
+
+def test_decision_expression_none_when_absent(minimal_bprelease: Path) -> None:
+    """decision_expression is None for stages without a <decision> child."""
+    result = parse_process(minimal_bprelease)
+    start_stage = result["pages"][0]["stages"][0]
+    assert start_stage["decision_expression"] is None
+
+
+def test_code_text_extracted(code_narrative_bprelease: Path) -> None:
+    """code_text is extracted from the <code> CDATA body."""
+    result = parse_process(code_narrative_bprelease)
+    code_stage = result["pages"][0]["stages"][1]
+    assert code_stage["code_text"] == 'System.Console.WriteLine("hi")'
+
+
+def test_narrative_extracted(code_narrative_bprelease: Path) -> None:
+    """narrative is extracted from the <narrative> text child."""
+    result = parse_process(code_narrative_bprelease)
+    code_stage = result["pages"][0]["stages"][1]
+    assert code_stage["narrative"] == "Runs a small VBScript snippet."
+
+
+def test_narrative_none_when_absent(minimal_bprelease: Path) -> None:
+    """narrative is None when no <narrative> child is present."""
+    result = parse_process(minimal_bprelease)
+    start_stage = result["pages"][0]["stages"][0]
+    assert start_stage["narrative"] is None
+
+
+def test_data_stage_initial_value_extracted(data_initialvalue_bprelease: Path) -> None:
+    """initial_value is extracted from a non-empty <initialvalue> element."""
+    result = parse_process(data_initialvalue_bprelease)
+    counter_stage = result["pages"][0]["stages"][0]
+    assert counter_stage["initial_value"] == "0"
+    # It should also be reflected on the synthesised data item.
+    assert counter_stage["data_items"][0]["initial_value"] == "0"
+
+
+def test_data_stage_empty_initial_value_is_none(data_initialvalue_bprelease: Path) -> None:
+    """A self-closing <initialvalue /> element yields initial_value=None."""
+    result = parse_process(data_initialvalue_bprelease)
+    empty_stage = result["pages"][0]["stages"][1]
+    assert empty_stage["initial_value"] is None
+    assert empty_stage["data_items"][0]["initial_value"] is None
+
+
+def test_waitstart_timeout_and_groupid_extracted(wait_loop_bprelease: Path) -> None:
+    """timeout_seconds and group_id are extracted from WaitStart's children."""
+    result = parse_process(wait_loop_bprelease)
+    stages = result["pages"][0]["stages"]
+    wait_start = next(s for s in stages if s["stage_id"] == "s_001")
+    assert wait_start["group_id"] == "grp_1"
+    assert wait_start["timeout_seconds"] == 120
+
+
+def test_waitend_groupid_extracted_no_timeout(wait_loop_bprelease: Path) -> None:
+    """WaitEnd carries the same group_id but has no <timeout> (so None)."""
+    result = parse_process(wait_loop_bprelease)
+    stages = result["pages"][0]["stages"]
+    wait_end = next(s for s in stages if s["stage_id"] == "s_002")
+    assert wait_end["group_id"] == "grp_1"
+    assert wait_end["timeout_seconds"] is None
+
+
+def test_loopstart_groupid_extracted(wait_loop_bprelease: Path) -> None:
+    """LoopStart/LoopEnd also carry group_id for bracket matching."""
+    result = parse_process(wait_loop_bprelease)
+    stages = result["pages"][0]["stages"]
+    loop_start = next(s for s in stages if s["stage_id"] == "s_003")
+    loop_end = next(s for s in stages if s["stage_id"] == "s_004")
+    assert loop_start["group_id"] == "grp_2"
+    assert loop_end["group_id"] == "grp_2"
+
+
+def test_exception_detail_extracted(exception_detail_bprelease: Path) -> None:
+    """exception_detail is extracted from <exception detail="...">."""
+    result = parse_process(exception_detail_bprelease)
+    throw_stage = result["pages"][0]["stages"][0]
+    assert throw_stage["exception_detail"] == "[Message]"
+    assert throw_stage["exception_usecurrent"] is False
+
+
+def test_exception_usecurrent_true(exception_detail_bprelease: Path) -> None:
+    """exception_usecurrent=True when usecurrent="yes"."""
+    result = parse_process(exception_detail_bprelease)
+    rethrow_stage = result["pages"][0]["stages"][1]
+    assert rethrow_stage["exception_usecurrent"] is True
+
+
+def test_exception_usecurrent_defaults_false(minimal_bprelease: Path) -> None:
+    """exception_usecurrent defaults to False when no <exception> child exists."""
+    result = parse_process(minimal_bprelease)
+    start_stage = result["pages"][0]["stages"][0]
+    assert start_stage["exception_usecurrent"] is False
+
+
+def test_input_friendlyname_extracted(friendlyname_bprelease: Path) -> None:
+    """friendlyname attribute on <input> is captured in input_friendlynames."""
+    result = parse_process(friendlyname_bprelease)
+    action_stage = result["pages"][0]["stages"][0]
+    assert action_stage["input_friendlynames"]["Param1"] == "Greeting"
+
+
+def test_input_friendlyname_empty_when_absent(minimal_bprelease: Path) -> None:
+    """input_friendlynames is empty when no <input> has a friendlyname attribute."""
+    result = parse_process(minimal_bprelease)
+    action_stage = result["pages"][0]["stages"][1]
+    assert action_stage["input_friendlynames"] == {}
+
+
+def test_page_published_true(published_page_bprelease: Path) -> None:
+    """published=True for a subsheet with published="true"."""
+    result = parse_process(published_page_bprelease)
+    main_page = next(p for p in result["pages"] if p["page_id"] == "pg_001")
+    assert main_page["published"] is True
+
+
+def test_page_published_false(published_page_bprelease: Path) -> None:
+    """published=False for a subsheet with published="false"."""
+    result = parse_process(published_page_bprelease)
+    helper_page = next(p for p in result["pages"] if p["page_id"] == "pg_002")
+    assert helper_page["published"] is False
+
+
+def test_page_published_defaults_false(minimal_bprelease: Path) -> None:
+    """published defaults to False when the subsheet has no published attribute."""
+    result = parse_process(minimal_bprelease)
+    assert result["pages"][0]["published"] is False
+
+
+# ── Real sample validation (PID_0171.bprelease) ─────────────────────────────
+
+PID_0171 = Path("samples/blueprism/PID_0171.bprelease")
+
+
+@pytest.fixture(scope="module")
+def pid_0171_raw() -> dict:
+    """Parse the real PID_0171 sample once per test module."""
+    if not PID_0171.exists():
+        pytest.skip("PID_0171 sample not available")
+    return parse_process(PID_0171)
+
+
+def test_pid171_decision_stage_has_expression(pid_0171_raw: dict) -> None:
+    """At least one Decision stage in PID_0171 has a non-None decision_expression."""
+    decision_stages = [
+        s for page in pid_0171_raw["pages"] for s in page["stages"] if s["stage_type"] == "Decision"
+    ]
+    assert decision_stages, "Expected at least one Decision stage in PID_0171"
+    with_expr = [s for s in decision_stages if s["decision_expression"] is not None]
+    assert with_expr, "Expected at least one Decision stage with a non-None decision_expression"
+
+
+def test_pid171_data_stage_has_initial_value(pid_0171_raw: dict) -> None:
+    """At least one Data stage with a non-empty <initialvalue> has non-None initial_value."""
+    data_stages = [
+        s for page in pid_0171_raw["pages"] for s in page["stages"] if s["stage_type"] == "Data"
+    ]
+    assert data_stages, "Expected at least one Data stage in PID_0171"
+    with_value = [s for s in data_stages if s["initial_value"] is not None]
+    assert with_value, "Expected at least one Data stage with a non-None initial_value"
+
+
+def test_pid171_wait_loop_start_have_group_id(pid_0171_raw: dict) -> None:
+    """WaitStart and LoopStart stages in PID_0171 have non-None group_id."""
+    bracket_starts = [
+        s
+        for page in pid_0171_raw["pages"]
+        for s in page["stages"]
+        if s["stage_type"] in ("WaitStart", "LoopStart")
+    ]
+    assert bracket_starts, "Expected at least one WaitStart/LoopStart stage in PID_0171"
+    for stage in bracket_starts:
+        assert stage["group_id"] is not None, (
+            f"Stage {stage['stage_id']} ({stage['stage_type']}) has no group_id"
+        )
