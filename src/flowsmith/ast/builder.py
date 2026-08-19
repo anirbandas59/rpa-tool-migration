@@ -99,6 +99,34 @@ _DIRECT_MAP: dict[str, StageType] = {
 # ── Private helpers ─────────────────────────────────────────────────────────
 
 
+def _extract_common_stage_fields(raw: RawStage) -> dict[str, object]:
+    """Extract the fields shared by every BPStage construction path.
+
+    Uses `.get()` (not direct indexing) for every field introduced after the
+    original RawStage contract so that older/minimal RawStage fixtures
+    (e.g. hand-built test dicts that only set the original keys) keep
+    working — missing keys fall back to None/empty defaults.
+
+    Args:
+        raw: RawStage dict from the parser.
+
+    Returns:
+        Dict of keyword arguments ready to spread into a BPStage(...) call.
+    """
+    return {
+        "exception_handler_id": raw.get("exception_handler_id"),
+        "exception_type": raw.get("exception_type"),
+        "params_map": raw.get("params_map") or {},
+        "decision_expression": raw.get("decision_expression"),
+        "code_text": raw.get("code_text"),
+        "narrative": raw.get("narrative"),
+        "timeout_seconds": raw.get("timeout_seconds"),
+        "group_id": raw.get("group_id"),
+        "exception_detail": raw.get("exception_detail"),
+        "exception_usecurrent": raw.get("exception_usecurrent") or False,
+    }
+
+
 def _build_data_items(raw_items: list[RawDataItem]) -> list[BPDataItem]:
     """Convert raw data item dicts to BPDataItem models.
 
@@ -152,6 +180,7 @@ def _normalise_stages(
             continue
 
         data_items = _build_data_items(raw["data_items"])
+        common_fields = _extract_common_stage_fields(raw)
 
         # 2. Collapse rules
 
@@ -159,15 +188,14 @@ def _normalise_stages(
             params = raw["params_map"]
             for i, (bp_param, pa_param) in enumerate(params.items(), start=1):
                 sub_id = f"{stage_id}__calc_{i}"
+                sub_fields = {**common_fields, "params_map": {bp_param: pa_param}}
                 stages.append(
                     BPStage(
                         stage_id=sub_id,
                         stage_type=StageType.CALCULATION,
                         name=f"{raw['name']} [{i}]",
                         data_items=data_items,
-                        exception_handler_id=raw["exception_handler_id"],
-                        exception_type=raw["exception_type"],
-                        params_map={bp_param: pa_param},
+                        **sub_fields,
                     )
                 )
             continue
@@ -179,10 +207,8 @@ def _normalise_stages(
                     stage_type=StageType.ACTION,
                     name=raw["name"],
                     data_items=data_items,
-                    exception_handler_id=raw["exception_handler_id"],
-                    exception_type=raw["exception_type"],
-                    params_map=raw["params_map"],
                     is_subsheet_call=True,
+                    **common_fields,
                 )
             )
             continue
@@ -193,9 +219,7 @@ def _normalise_stages(
                 stage_type=StageType.WAIT,
                 name=raw["name"],
                 data_items=data_items,
-                exception_handler_id=raw["exception_handler_id"],
-                exception_type=raw["exception_type"],
-                params_map=raw["params_map"],
+                **common_fields,
             )
             stages.append(stage)
             bracket_roles[stage_id] = stage_type
@@ -207,9 +231,7 @@ def _normalise_stages(
                 stage_type=StageType.LOOP,
                 name=raw["name"],
                 data_items=data_items,
-                exception_handler_id=raw["exception_handler_id"],
-                exception_type=raw["exception_type"],
-                params_map=raw["params_map"],
+                **common_fields,
             )
             stages.append(stage)
             bracket_roles[stage_id] = stage_type
@@ -223,9 +245,7 @@ def _normalise_stages(
                     stage_type=_DIRECT_MAP[stage_type],
                     name=raw["name"],
                     data_items=data_items,
-                    exception_handler_id=raw["exception_handler_id"],
-                    exception_type=raw["exception_type"],
-                    params_map=raw["params_map"],
+                    **common_fields,
                 )
             )
             continue
@@ -235,6 +255,57 @@ def _normalise_stages(
     return stages, bracket_roles
 
 
+def _stack_pair_brackets(
+    ordered_stages: list[BPStage],
+    bracket_roles: dict[str, str],
+    bracket_start: str,
+    bracket_end: str,
+) -> tuple[list[BPStage], list[BPStage]]:
+    """Stack-match Start/End bracket stages, in the given order, setting pair_id.
+
+    Also handles End appearing before its Start (out-of-order brackets).
+    pair_id is always the Start stage_id, assigned to both partners.
+
+    Args:
+        ordered_stages: Bracket stages of one kind (Wait or Loop), in
+            page-encounter order, already filtered to a single pairing scope
+            (either one group_id's stages, or the no-group_id fallback set).
+        bracket_roles: Dict mapping stage_id → raw bracket role string.
+        bracket_start: The Start role string (e.g. "WaitStart").
+        bracket_end: The End role string (e.g. "WaitEnd").
+
+    Returns:
+        A tuple of (unmatched Start stages, unmatched End stages) — both
+        empty when every stage found a partner.
+    """
+    start_stack: list[BPStage] = []
+    end_queue: list[BPStage] = []  # unpaired End stages
+
+    for stage in ordered_stages:
+        role = bracket_roles[stage.stage_id]
+        if role == bracket_start:
+            # If we have unpaired End stages, pair with the oldest one
+            if end_queue:
+                end_stage = end_queue.pop(0)
+                pair_id = stage.stage_id
+                end_stage.pair_id = pair_id
+                stage.pair_id = pair_id
+            else:
+                start_stack.append(stage)
+        elif role == bracket_end:
+            # If we have unpaired Start stages, pair with the most recent one
+            if start_stack:
+                partner = start_stack.pop()
+                pair_id = partner.stage_id
+                partner.pair_id = pair_id
+                stage.pair_id = pair_id
+            else:
+                # No Start available yet, queue this End for later pairing
+                end_queue.append(stage)
+
+    return start_stack, end_queue
+
+
 def _assign_wait_loop_pairs(
     stages: list[BPStage],
     bracket_roles: dict[str, str],
@@ -242,9 +313,16 @@ def _assign_wait_loop_pairs(
 ) -> None:
     """Match WaitStart/WaitEnd and LoopStart/LoopEnd pairs, setting pair_id in-place.
 
-    Uses a stack so nested pairs are matched correctly. Also handles the case
-    where WaitEnd or LoopEnd appears before its corresponding Start (out-of-order
-    brackets). pair_id is always the Start stage_id, assigned to both partners.
+    Bracket stages that carry a `group_id` (from the BP <groupid> element) are
+    scoped to that group before stack-matching: real BP exports can fan a
+    single logical Wait/Loop construct out into several WaitStart/WaitEnd (or
+    LoopStart/LoopEnd) pairs that all share one groupid (e.g. multiple wait
+    conditions on one Wait stage), so group_id is a pairing *scope*, not a
+    guarantee of exactly one Start and one End. Within each scope (and within
+    the no-group_id fallback set), pairing is stack-based so nested/out-of-
+    order pairs are still matched correctly — this is the same algorithm used
+    when group_id is absent entirely (older BP exports).
+    pair_id is always the Start stage_id, assigned to both partners.
 
     Args:
         stages: Normalised stage list for one page (modified in-place).
@@ -258,40 +336,42 @@ def _assign_wait_loop_pairs(
         ("WaitStart", "WaitEnd", "Wait"),
         ("LoopStart", "LoopEnd", "Loop"),
     ):
-        start_stack: list[BPStage] = []
-        end_queue: list[BPStage] = []  # unpaired End stages
+        grouped: dict[str, list[BPStage]] = defaultdict(list)
+        positional: list[BPStage] = []
 
         for stage in stages:
             role = bracket_roles.get(stage.stage_id)
-            if role == bracket_start:
-                # If we have unpaired End stages, pair with the oldest one
-                if end_queue:
-                    end_stage = end_queue.pop(0)
-                    pair_id = stage.stage_id
-                    end_stage.pair_id = pair_id
-                    stage.pair_id = pair_id
-                else:
-                    start_stack.append(stage)
-            elif role == bracket_end:
-                # If we have unpaired Start stages, pair with the most recent one
-                if start_stack:
-                    partner = start_stack.pop()
-                    pair_id = partner.stage_id
-                    partner.pair_id = pair_id
-                    stage.pair_id = pair_id
-                else:
-                    # No Start available yet, queue this End for later pairing
-                    end_queue.append(stage)
+            if role not in (bracket_start, bracket_end):
+                continue
+            if stage.group_id is not None:
+                grouped[stage.group_id].append(stage)
+            else:
+                positional.append(stage)
+
+        unmatched_starts: list[BPStage] = []
+        unmatched_ends: list[BPStage] = []
+
+        # 1. group_id-scoped stack matching (reliable — pairs only within
+        #    stages that share the same logical Wait/Loop construct)
+        for group_stages in grouped.values():
+            s, e = _stack_pair_brackets(group_stages, bracket_roles, bracket_start, bracket_end)
+            unmatched_starts.extend(s)
+            unmatched_ends.extend(e)
+
+        # 2. Fallback: stack-based positional matching for stages with no group_id
+        s, e = _stack_pair_brackets(positional, bracket_roles, bracket_start, bracket_end)
+        unmatched_starts.extend(s)
+        unmatched_ends.extend(e)
 
         # Check for unmatched brackets
-        if start_stack:
-            unmatched = ", ".join(s.stage_id for s in start_stack)
+        if unmatched_starts:
+            unmatched = ", ".join(s.stage_id for s in unmatched_starts)
             raise ASTBuildError(
                 f"Unmatched {bracket_start} stage(s) [{unmatched}] "
                 f"with no {bracket_end} on page '{page_name}'"
             )
-        if end_queue:
-            unmatched = ", ".join(s.stage_id for s in end_queue)
+        if unmatched_ends:
+            unmatched = ", ".join(s.stage_id for s in unmatched_ends)
             raise ASTBuildError(
                 f"Unmatched {bracket_end} stage(s) [{unmatched}] "
                 f"with no {bracket_start} on page '{page_name}'"
@@ -347,6 +427,7 @@ def _build_page(raw_page: RawPage) -> BPPage:
         name=raw_page["name"],
         stages=stages,
         is_main=raw_page.get("is_main", False),
+        published=raw_page.get("published", False),
     )
 
 

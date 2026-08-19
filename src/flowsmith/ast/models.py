@@ -238,10 +238,61 @@ class BPStage(BaseModel):
         default_factory=dict,
         description="Stage-level BP parameter name -> PA parameter name mapping.",
     )
+    decision_expression: str | None = Field(
+        default=None,
+        description=(
+            "The BP expression evaluated by a DECISION (or CHOICE) stage, "
+            'taken from <decision expression="...">. None for other stage types.'
+        ),
+    )
+    code_text: str | None = Field(
+        default=None,
+        description="Raw VBScript/code body text, only populated for CODE stages.",
+    )
+    code_length: int = Field(
+        default=0,
+        description="Length in characters of code_text — derived automatically, never set directly.",
+    )
+    narrative: str | None = Field(
+        default=None,
+        description="Stage-level narrative/comment text from the BP XML <narrative> element.",
+    )
+    timeout_seconds: int | None = Field(
+        default=None,
+        description="Wait timeout in seconds, only populated for WaitStart-derived WAIT stages.",
+    )
+    group_id: str | None = Field(
+        default=None,
+        description=(
+            "The <groupid> value from the BP XML, used to reliably pair WaitStart/WaitEnd "
+            "and LoopStart/LoopEnd bracket stages. None on older BP exports that lack groupid."
+        ),
+    )
+    exception_detail: str | None = Field(
+        default=None,
+        description="Exception detail message expression, only populated for EXCEPTION stages.",
+    )
+    exception_usecurrent: bool = Field(
+        default=False,
+        description=(
+            "True when an EXCEPTION stage re-raises the currently active exception "
+            '(BP <exception usecurrent="yes">) rather than throwing a new one.'
+        ),
+    )
     pa_annotation: PAAnnotation | None = Field(
         default=None,
         description="Power Automate annotation set by the engine in Phase 5.",
     )
+
+    @model_validator(mode="after")
+    def _derive_code_length(self) -> BPStage:
+        """Keep code_length in sync with code_text.
+
+        Returns:
+            Self, with code_length always equal to len(code_text or "").
+        """
+        self.code_length = len(self.code_text) if self.code_text else 0
+        return self
 
 
 # ── Page and process models ────────────────────────────────────────────────
@@ -262,6 +313,29 @@ class BPPage(BaseModel):
         default=False,
         description="True if this is the process entry-point (Main) page.",
     )
+    published: bool = Field(
+        default=False,
+        description=(
+            'True when the BP <subsheet published="true"> flag is set — determines '
+            "whether this page becomes its own PAD Workflow element."
+        ),
+    )
+
+
+class BPEnvironmentVariable(BaseModel):
+    """A single Blue Prism environment variable declared on the release.
+
+    Populated from <environment-variable @name @type @value> elements.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str = Field(description="Environment variable name.")
+    data_type: str = Field(description="Raw BP type string (e.g. 'text', 'number', 'flag').")
+    value: str | None = Field(
+        default=None,
+        description="Default value expression, or None if not set.",
+    )
 
 
 class BPProcess(BaseModel):
@@ -275,6 +349,10 @@ class BPProcess(BaseModel):
     pages: list[BPPage] = Field(
         default_factory=list,
         description="All pages (sub-sheets) in the process.",
+    )
+    environment_variables: list[BPEnvironmentVariable] = Field(
+        default_factory=list,
+        description="Environment variables declared on the release (not yet parser-populated).",
     )
     source_file: str = Field(description="Absolute or relative path to the source .bprelease file.")
 

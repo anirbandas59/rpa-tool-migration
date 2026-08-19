@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from flowsmith.ast import (
     BPDataItem,
+    BPEnvironmentVariable,
     BPPage,
     BPProcess,
     BPStage,
@@ -250,6 +251,64 @@ def test_bp_stage_other_fields_are_mutable() -> None:
     assert stage.name == "Updated Name"
 
 
+# ── BPStage: new fields (Sub-Task 2) ────────────────────────────────────────
+
+
+def test_bp_stage_new_fields_default() -> None:
+    stage = _make_stage()
+    assert stage.decision_expression is None
+    assert stage.code_text is None
+    assert stage.code_length == 0
+    assert stage.narrative is None
+    assert stage.timeout_seconds is None
+    assert stage.group_id is None
+    assert stage.exception_detail is None
+    assert stage.exception_usecurrent is False
+
+
+def test_bp_stage_decision_expression_set() -> None:
+    stage = _make_stage(stage_type=StageType.DECISION, decision_expression="[Count] > 0")
+    assert stage.decision_expression == "[Count] > 0"
+
+
+def test_bp_stage_code_length_derived_from_code_text() -> None:
+    stage = _make_stage(stage_type=StageType.CODE, code_text="print('hi')")
+    assert stage.code_length == len("print('hi')")
+
+
+def test_bp_stage_code_length_zero_when_no_code_text() -> None:
+    stage = _make_stage()
+    assert stage.code_text is None
+    assert stage.code_length == 0
+
+
+def test_bp_stage_code_length_recomputed_on_mutation() -> None:
+    """code_length stays in sync even if code_text is reassigned post-construction."""
+    stage = _make_stage(stage_type=StageType.CODE, code_text="abc")
+    assert stage.code_length == 3
+
+
+def test_bp_stage_exception_detail_and_usecurrent() -> None:
+    stage = _make_stage(
+        stage_type=StageType.EXCEPTION,
+        exception_detail="Timeout expired",
+        exception_usecurrent=True,
+    )
+    assert stage.exception_detail == "Timeout expired"
+    assert stage.exception_usecurrent is True
+
+
+def test_bp_stage_timeout_and_group_id() -> None:
+    stage = _make_stage(stage_type=StageType.WAIT, timeout_seconds=30, group_id="grp-1")
+    assert stage.timeout_seconds == 30
+    assert stage.group_id == "grp-1"
+
+
+def test_bp_stage_narrative() -> None:
+    stage = _make_stage(narrative="This stage does X")
+    assert stage.narrative == "This stage does X"
+
+
 # ── BPPage ────────────────────────────────────────────────────────────────
 
 
@@ -257,6 +316,7 @@ def test_bp_page_valid_construction() -> None:
     page = BPPage(page_id="page-1", name="Main Page")
     assert page.stages == []
     assert page.is_main is False
+    assert page.published is False
 
 
 def test_bp_page_is_main_flag() -> None:
@@ -264,10 +324,36 @@ def test_bp_page_is_main_flag() -> None:
     assert page.is_main is True
 
 
+def test_bp_page_published_flag() -> None:
+    page = BPPage(page_id="page-1", name="Main Page", published=True)
+    assert page.published is True
+
+
 def test_bp_page_is_frozen() -> None:
     page = BPPage(page_id="page-1", name="Main Page")
     with pytest.raises(ValidationError):
         page.name = "Other"  # type: ignore[misc]
+
+
+# ── BPEnvironmentVariable ────────────────────────────────────────────────────
+
+
+def test_bp_environment_variable_valid_construction() -> None:
+    env_var = BPEnvironmentVariable(name="Config File", data_type="text", value="a.xlsx")
+    assert env_var.name == "Config File"
+    assert env_var.data_type == "text"
+    assert env_var.value == "a.xlsx"
+
+
+def test_bp_environment_variable_value_defaults_none() -> None:
+    env_var = BPEnvironmentVariable(name="Retry Count", data_type="number")
+    assert env_var.value is None
+
+
+def test_bp_environment_variable_is_frozen() -> None:
+    env_var = BPEnvironmentVariable(name="X", data_type="text")
+    with pytest.raises(ValidationError):
+        env_var.name = "Y"  # type: ignore[misc]
 
 
 # ── BPProcess ─────────────────────────────────────────────────────────────
@@ -289,6 +375,13 @@ def test_bp_process_valid_construction() -> None:
     proc = _make_process()
     assert proc.process_id == "proc-1"
     assert proc.pages == []
+    assert proc.environment_variables == []
+
+
+def test_bp_process_with_environment_variables() -> None:
+    env_var = BPEnvironmentVariable(name="Config File", data_type="text", value="a.xlsx")
+    proc = _make_process(environment_variables=[env_var])
+    assert proc.environment_variables == [env_var]
 
 
 def test_bp_process_get_stage_returns_correct_stage() -> None:

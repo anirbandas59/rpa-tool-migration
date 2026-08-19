@@ -14,6 +14,7 @@ Import all public model classes and enums from this package:
 from flowsmith.ast.builder import RawProcess, build_ast
 from flowsmith.ast.models import (
     BPDataItem,
+    BPEnvironmentVariable,
     BPPage,
     BPProcess,
     BPStage,
@@ -35,6 +36,7 @@ __all__ = [
     "BPStage",
     "BPPage",
     "BPProcess",
+    "BPEnvironmentVariable",
     "build_ast",
     "RawProcess",
     "serialise",

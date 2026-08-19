@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from flowsmith.ast import StageType, build_ast
 from flowsmith.ast.builder import RawDataItem, RawPage, RawProcess, RawStage  # noqa: F401
 from flowsmith.exceptions import ASTBuildError
+from flowsmith.parser import parse_process
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -416,3 +419,191 @@ def test_is_main_page_preserved() -> None:
     result = build_ast(raw)
     assert result.pages[0].is_main is True
     assert result.pages[1].is_main is False
+
+
+# ── New field propagation (Sub-Task 2) ──────────────────────────────────────
+
+
+def test_decision_expression_propagated_to_bpstage() -> None:
+    raw = single_page_process(
+        RawStage(
+            stage_id="d1",
+            stage_type="Decision",
+            name="Check",
+            data_items=[],
+            exception_handler_id=None,
+            exception_type=None,
+            params_map={},
+            decision_expression="[Retry Count] < 3",
+            code_text=None,
+            narrative=None,
+            initial_value=None,
+            timeout_seconds=None,
+            group_id=None,
+            exception_detail=None,
+            exception_usecurrent=False,
+            input_friendlynames={},
+        )
+    )
+    stage = build_ast(raw).pages[0].stages[0]
+    assert stage.decision_expression == "[Retry Count] < 3"
+
+
+def test_common_fields_default_when_absent_from_raw_stage() -> None:
+    """A minimal RawStage dict (missing the 9 new keys) still builds cleanly."""
+    raw = single_page_process(make_raw_stage(stage_type="Action", name="Click"))
+    stage = build_ast(raw).pages[0].stages[0]
+    assert stage.decision_expression is None
+    assert stage.code_text is None
+    assert stage.code_length == 0
+    assert stage.narrative is None
+    assert stage.timeout_seconds is None
+    assert stage.group_id is None
+    assert stage.exception_detail is None
+    assert stage.exception_usecurrent is False
+
+
+def test_published_propagated_to_bppage() -> None:
+    raw = make_raw_process(
+        pages=[
+            RawPage(page_id="pg1", name="Main", stages=[], is_main=True, published=True),
+            RawPage(page_id="pg2", name="Sub", stages=[], is_main=False, published=False),
+        ]
+    )
+    result = build_ast(raw)
+    assert result.pages[0].published is True
+    assert result.pages[1].published is False
+
+
+def test_published_defaults_false_when_absent_from_raw_page() -> None:
+    raw = make_raw_process()  # default page has no "published" key
+    result = build_ast(raw)
+    assert result.pages[0].published is False
+
+
+def _make_wait_stage(stage_id: str, name: str, group_id: str | None) -> RawStage:
+    return RawStage(
+        stage_id=stage_id,
+        stage_type="WaitStart" if stage_id.startswith("ws") else "WaitEnd",
+        name=name,
+        data_items=[],
+        exception_handler_id=None,
+        exception_type=None,
+        params_map={},
+        decision_expression=None,
+        code_text=None,
+        narrative=None,
+        initial_value=None,
+        timeout_seconds=None,
+        group_id=group_id,
+        exception_detail=None,
+        exception_usecurrent=False,
+        input_friendlynames={},
+    )
+
+
+def test_wait_pair_matched_by_group_id() -> None:
+    raw = single_page_process(
+        _make_wait_stage("ws1", "Wait", "grp-a"),
+        _make_wait_stage("we1", "Wait", "grp-a"),
+    )
+    stages = build_ast(raw).pages[0].stages
+    assert stages[0].pair_id == "ws1"
+    assert stages[1].pair_id == "ws1"
+
+
+def test_wait_pairs_scoped_by_distinct_group_ids() -> None:
+    """Two independent Wait constructs (different groupids) don't cross-pair."""
+    raw = single_page_process(
+        _make_wait_stage("ws1", "Wait A", "grp-a"),
+        _make_wait_stage("ws2", "Wait B", "grp-b"),
+        _make_wait_stage("we1", "Wait A", "grp-a"),
+        _make_wait_stage("we2", "Wait B", "grp-b"),
+    )
+    stages = build_ast(raw).pages[0].stages
+    by_id = {s.stage_id: s for s in stages}
+    assert by_id["ws1"].pair_id == "ws1"
+    assert by_id["we1"].pair_id == "ws1"
+    assert by_id["ws2"].pair_id == "ws2"
+    assert by_id["we2"].pair_id == "ws2"
+
+
+def test_wait_group_id_with_multiple_pairs_stack_matched() -> None:
+    """A single groupid can fan out into several Start/End pairs (real BP export
+    behaviour — one Wait stage with multiple wait conditions shares one groupid)."""
+    raw = single_page_process(
+        _make_wait_stage("ws1", "Cond 1", "grp-shared"),
+        _make_wait_stage("we1", "Cond 1", "grp-shared"),
+        _make_wait_stage("ws2", "Cond 2", "grp-shared"),
+        _make_wait_stage("we2", "Cond 2", "grp-shared"),
+        _make_wait_stage("ws3", "Cond 3", "grp-shared"),
+        _make_wait_stage("we3", "Cond 3", "grp-shared"),
+    )
+    stages = build_ast(raw).pages[0].stages
+    by_id = {s.stage_id: s for s in stages}
+    assert by_id["ws1"].pair_id == "ws1"
+    assert by_id["we1"].pair_id == "ws1"
+    assert by_id["ws2"].pair_id == "ws2"
+    assert by_id["we2"].pair_id == "ws2"
+    assert by_id["ws3"].pair_id == "ws3"
+    assert by_id["we3"].pair_id == "ws3"
+
+
+def test_wait_pair_no_group_id_falls_back_to_positional() -> None:
+    """Stages with group_id=None still pair via the original stack-based match."""
+    raw = single_page_process(
+        _make_wait_stage("ws1", "Wait", None),
+        _make_wait_stage("we1", "Wait", None),
+    )
+    stages = build_ast(raw).pages[0].stages
+    assert stages[0].pair_id == "ws1"
+    assert stages[1].pair_id == "ws1"
+
+
+# ── Real sample validation (PID_0171.bprelease) ─────────────────────────────
+
+PID_0171 = Path("samples/blueprism/PID_0171.bprelease")
+
+
+@pytest.fixture(scope="module")
+def pid_0171_process():  # type: ignore[no-untyped-def]
+    """Build the AST for the real PID_0171 sample once per test module."""
+    if not PID_0171.exists():
+        pytest.skip("PID_0171 sample not available")
+    return build_ast(parse_process(PID_0171))
+
+
+def test_pid171_decision_stage_has_expression_in_ast(pid_0171_process) -> None:  # type: ignore[no-untyped-def]
+    """At least one Decision BPStage in PID_0171 has a non-None decision_expression."""
+    decision_stages = [
+        s
+        for page in pid_0171_process.pages
+        for s in page.stages
+        if s.stage_type == StageType.DECISION
+    ]
+    assert decision_stages, "Expected at least one Decision stage in PID_0171"
+    with_expr = [s for s in decision_stages if s.decision_expression is not None]
+    assert with_expr, "Expected at least one Decision BPStage with a non-None decision_expression"
+
+
+def test_pid171_pages_have_published_field(pid_0171_process) -> None:  # type: ignore[no-untyped-def]
+    """Every BPPage in PID_0171 carries a bool published flag."""
+    assert pid_0171_process.pages, "Expected at least one page in PID_0171"
+    for page in pid_0171_process.pages:
+        assert isinstance(page.published, bool)
+
+
+def test_pid171_wait_or_loop_pairs_match_when_group_id_present(pid_0171_process) -> None:  # type: ignore[no-untyped-def]
+    """WaitStart/WaitEnd (or LoopStart/LoopEnd) stages with a group_id end up paired."""
+    grouped_bracket_stages = [
+        s
+        for page in pid_0171_process.pages
+        for s in page.stages
+        if s.stage_type in (StageType.WAIT, StageType.LOOP) and s.group_id is not None
+    ]
+    assert grouped_bracket_stages, "Expected at least one grouped WAIT/LOOP stage in PID_0171"
+    for stage in grouped_bracket_stages:
+        assert stage.pair_id is not None, (
+            f"Stage {stage.stage_id} ({stage.stage_type}) with group_id "
+            f"'{stage.group_id}' has no pair_id"
+        )
