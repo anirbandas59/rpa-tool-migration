@@ -15,6 +15,7 @@ from flowsmith.mapper import (
     VBOEntry,
     load_rules,
 )
+from flowsmith.mapper.config import VBOFusionPattern
 
 # ── Fixtures ───────────────────────────────────────────────────────────────
 
@@ -340,6 +341,80 @@ class TestVBOEntry:
                 confidence_base=0.50,
                 review_severity="invalid",
             )
+
+    def test_fusion_patterns_field_defaults_to_empty_list(self) -> None:
+        """fusion_patterns field defaults to empty list when absent."""
+        minimal = {
+            "vbo_name": "Test VBO",
+            "runtime": "CLOUD",
+            "confidence_base": 0.75,
+        }
+        entry = VBOEntry(**minimal)
+        assert entry.fusion_patterns == []
+        assert isinstance(entry.fusion_patterns, list)
+
+    def test_fusion_patterns_field_accepts_list(self) -> None:
+        """fusion_patterns field accepts list of VBOFusionPattern objects."""
+        pattern1 = VBOFusionPattern(
+            sequence=["Create Instance", "Open Workbook"],
+            fused_action="Excel.LaunchExcel.LaunchAndOpenUnderExistingProcess",
+            vestigial_stages=["Create Instance"],
+        )
+        pattern2 = VBOFusionPattern(
+            sequence=["Close Workbook", "Close Instance"],
+            fused_action="Excel.CloseExcel.Close",
+            vestigial_stages=["Close Workbook"],
+        )
+        entry = VBOEntry(
+            vbo_name="MS Excel VBO",
+            runtime="DESKTOP",
+            confidence_base=0.80,
+            fusion_patterns=[pattern1, pattern2],
+        )
+        assert len(entry.fusion_patterns) == 2
+        assert entry.fusion_patterns[0].sequence == ["Create Instance", "Open Workbook"]
+        assert entry.fusion_patterns[1].fused_action == "Excel.CloseExcel.Close"
+
+
+# ── VBOFusionPattern model tests ───────────────────────────────────────────
+
+
+class TestVBOFusionPattern:
+    """Test VBOFusionPattern Pydantic model validation."""
+
+    def test_create_minimal(self) -> None:
+        """A VBOFusionPattern can be created with just sequence and fused_action."""
+        pattern = VBOFusionPattern(
+            sequence=["Method1", "Method2"],
+            fused_action="Template",
+        )
+        assert pattern.sequence == ["Method1", "Method2"]
+        assert pattern.fused_action == "Template"
+        assert pattern.vestigial_stages == []
+
+    def test_with_vestigial_stages(self) -> None:
+        """VBOFusionPattern can specify which stages are vestigial."""
+        pattern = VBOFusionPattern(
+            sequence=["Create Instance", "Open Workbook"],
+            fused_action="Excel.LaunchExcel.LaunchAndOpenUnderExistingProcess",
+            vestigial_stages=["Create Instance"],
+        )
+        assert "Create Instance" in pattern.vestigial_stages
+        assert "Open Workbook" not in pattern.vestigial_stages
+
+    def test_sequence_order_matters(self) -> None:
+        """VBOFusionPattern preserves method sequence order."""
+        pattern = VBOFusionPattern(
+            sequence=["First", "Second", "Third"],
+            fused_action="Template",
+        )
+        assert pattern.sequence == ["First", "Second", "Third"]
+        # Different order is not equal
+        other = VBOFusionPattern(
+            sequence=["Third", "First", "Second"],
+            fused_action="Template",
+        )
+        assert pattern.sequence != other.sequence
 
 
 # ── MappingConfig model tests ──────────────────────────────────────────────

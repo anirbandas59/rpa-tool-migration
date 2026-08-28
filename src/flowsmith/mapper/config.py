@@ -54,6 +54,25 @@ class StageRule(BaseModel):
         return v
 
 
+class VBOFusionPattern(BaseModel):
+    """A fusion pattern that collapses multiple adjacent BP stages into one PAD action.
+
+    Used for BP idioms like "acquire a resource, then use it" (e.g., MS Excel's
+    `Create Instance` + `Open Workbook` collapsing into one PAD call).
+
+    Fields correspond directly to fusion_patterns entries in vbo_catalogue.yaml.
+    """
+
+    sequence: list[str] = Field(
+        description="Ordered BP method names that must appear consecutively."
+    )
+    fused_action: str = Field(description="Literal PAD action template for the fused sequence.")
+    vestigial_stages: list[str] = Field(
+        default_factory=list,
+        description="Method names in the sequence that produce no PAD output of their own.",
+    )
+
+
 class VBOEntry(BaseModel):
     """A mapping entry for a single Blue Prism VBO (Virtual Business Object).
 
@@ -61,6 +80,7 @@ class VBOEntry(BaseModel):
     confidence_base is validated to be in [0.0, 1.0].
     review_severity, if present, must be "error" or "warn".
     method_actions maps exact BP method names to PAD action templates.
+    fusion_patterns defines multi-stage sequences that collapse into one PAD action.
     """
 
     vbo_name: str
@@ -71,6 +91,7 @@ class VBOEntry(BaseModel):
     notes: str = ""
     review_severity: str | None = None
     method_actions: dict[str, str] = Field(default_factory=dict)
+    fusion_patterns: list[VBOFusionPattern] = Field(default_factory=list)
 
     @field_validator("confidence_base")
     @classmethod

@@ -587,3 +587,175 @@ class TestMethodActionsPrecedence:
         decision = router.route("Template VBO", "Get Data")
         assert decision.resolved_action_template == "DataModule.GetData"
         assert decision.is_known is True
+
+
+# ── Fusion pattern resolution tests ────────────────────────────────────────
+
+
+class TestFusionPatternResolution:
+    """Test fusion pattern detection and resolution."""
+
+    def test_resolve_fusion_pattern_no_entry(self, router: VBORouter) -> None:
+        """resolve_fusion_pattern returns (None, []) for unknown VBO."""
+        pattern, vestigial = router.resolve_fusion_pattern("Unknown VBO", ["Method1", "Method2"])
+        assert pattern is None
+        assert vestigial == []
+
+    def test_resolve_fusion_pattern_no_patterns(self, config: MappingConfig) -> None:
+        """resolve_fusion_pattern returns (None, []) when VBO has no fusion patterns."""
+        entry = VBOEntry(
+            vbo_name="VBO Without Patterns",
+            pa_module="TestModule",
+            runtime=Runtime.DESKTOP,
+            confidence_base=0.75,
+        )
+        config.vbo_catalogue.append(entry)
+        router = VBORouter(config)
+
+        pattern, vestigial = router.resolve_fusion_pattern(
+            "VBO Without Patterns", ["Method1", "Method2"]
+        )
+        assert pattern is None
+        assert vestigial == []
+
+    def test_resolve_fusion_pattern_exact_match(self, config: MappingConfig) -> None:
+        """resolve_fusion_pattern returns matching pattern and vestigial stages."""
+        from flowsmith.mapper.config import VBOFusionPattern
+
+        fusion = VBOFusionPattern(
+            sequence=["Create Instance", "Open Workbook"],
+            fused_action="Excel.LaunchExcel.LaunchAndOpenUnderExistingProcess",
+            vestigial_stages=["Create Instance"],
+        )
+        entry = VBOEntry(
+            vbo_name="Test Excel Fusion VBO",
+            pa_module="Excel",
+            runtime=Runtime.DESKTOP,
+            confidence_base=0.80,
+            fusion_patterns=[fusion],
+        )
+        config.vbo_catalogue.append(entry)
+        router = VBORouter(config)
+
+        pattern, vestigial = router.resolve_fusion_pattern(
+            "Test Excel Fusion VBO",
+            ["Create Instance", "Open Workbook"],
+        )
+        assert pattern is not None
+        assert pattern.fused_action == "Excel.LaunchExcel.LaunchAndOpenUnderExistingProcess"
+        assert vestigial == ["Create Instance"]
+
+    def test_resolve_fusion_pattern_sequence_order_matters(self, config: MappingConfig) -> None:
+        """resolve_fusion_pattern requires exact sequence order."""
+        from flowsmith.mapper.config import VBOFusionPattern
+
+        fusion = VBOFusionPattern(
+            sequence=["First", "Second"],
+            fused_action="Template",
+            vestigial_stages=["First"],
+        )
+        entry = VBOEntry(
+            vbo_name="Order Test VBO",
+            pa_module="Test",
+            runtime=Runtime.DESKTOP,
+            confidence_base=0.75,
+            fusion_patterns=[fusion],
+        )
+        config.vbo_catalogue.append(entry)
+        router = VBORouter(config)
+
+        # Correct order should match
+        pattern, _ = router.resolve_fusion_pattern("Order Test VBO", ["First", "Second"])
+        assert pattern is not None
+
+        # Wrong order should not match
+        pattern2, _ = router.resolve_fusion_pattern("Order Test VBO", ["Second", "First"])
+        assert pattern2 is None
+
+    def test_resolve_fusion_pattern_multiple_patterns_first_match(
+        self, config: MappingConfig
+    ) -> None:
+        """resolve_fusion_pattern returns first matching pattern."""
+        from flowsmith.mapper.config import VBOFusionPattern
+
+        pattern1 = VBOFusionPattern(
+            sequence=["Create", "Open"],
+            fused_action="Template1",
+            vestigial_stages=["Create"],
+        )
+        pattern2 = VBOFusionPattern(
+            sequence=["Close", "Dispose"],
+            fused_action="Template2",
+            vestigial_stages=["Close"],
+        )
+        entry = VBOEntry(
+            vbo_name="Multi Pattern VBO",
+            pa_module="Test",
+            runtime=Runtime.DESKTOP,
+            confidence_base=0.75,
+            fusion_patterns=[pattern1, pattern2],
+        )
+        config.vbo_catalogue.append(entry)
+        router = VBORouter(config)
+
+        # First pattern
+        p, v = router.resolve_fusion_pattern("Multi Pattern VBO", ["Create", "Open"])
+        assert p is not None
+        assert p.fused_action == "Template1"
+        assert v == ["Create"]
+
+        # Second pattern
+        p2, v2 = router.resolve_fusion_pattern("Multi Pattern VBO", ["Close", "Dispose"])
+        assert p2 is not None
+        assert p2.fused_action == "Template2"
+        assert v2 == ["Close"]
+
+    def test_resolve_fusion_pattern_no_vestigial_stages(self, config: MappingConfig) -> None:
+        """resolve_fusion_pattern handles patterns with no vestigial stages."""
+        from flowsmith.mapper.config import VBOFusionPattern
+
+        fusion = VBOFusionPattern(
+            sequence=["Step1", "Step2"],
+            fused_action="Template",
+            # No vestigial_stages specified — defaults to []
+        )
+        entry = VBOEntry(
+            vbo_name="No Vestigial VBO",
+            pa_module="Test",
+            runtime=Runtime.DESKTOP,
+            confidence_base=0.75,
+            fusion_patterns=[fusion],
+        )
+        config.vbo_catalogue.append(entry)
+        router = VBORouter(config)
+
+        pattern, vestigial = router.resolve_fusion_pattern("No Vestigial VBO", ["Step1", "Step2"])
+        assert pattern is not None
+        assert vestigial == []
+
+    def test_resolve_fusion_pattern_fuzzy_vbo_lookup(self, config: MappingConfig) -> None:
+        """resolve_fusion_pattern uses fuzzy VBO lookup."""
+        from flowsmith.mapper.config import VBOFusionPattern
+
+        fusion = VBOFusionPattern(
+            sequence=["Method1", "Method2"],
+            fused_action="Template",
+            vestigial_stages=["Method1"],
+        )
+        entry = VBOEntry(
+            vbo_name="Fuzzy Lookup VBO",
+            pa_module="Test",
+            runtime=Runtime.DESKTOP,
+            confidence_base=0.75,
+            fusion_patterns=[fusion],
+        )
+        config.vbo_catalogue.append(entry)
+        router = VBORouter(config)
+
+        # Fuzzy lookup with different case should still find the pattern
+        pattern, vestigial = router.resolve_fusion_pattern(
+            "fuzzy lookup vbo",  # lowercase
+            ["Method1", "Method2"],
+        )
+        assert pattern is not None
+        assert pattern.fused_action == "Template"

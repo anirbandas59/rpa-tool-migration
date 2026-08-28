@@ -10,7 +10,7 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field
 
 from flowsmith.ast.models import ReviewFlag, Runtime, StageType
-from flowsmith.mapper.config import MappingConfig
+from flowsmith.mapper.config import MappingConfig, VBOFusionPattern
 
 # ── RoutingDecision model ──────────────────────────────────────────────────
 
@@ -172,6 +172,51 @@ class VBORouter:
             notes=entry.notes,
             resolved_action_template=resolved_template,
         )
+
+    def resolve_fusion_pattern(
+        self,
+        vbo_name: str,
+        method_sequence: list[str],
+    ) -> tuple[VBOFusionPattern | None, list[str]]:
+        """Resolve a sequence of BP method names against fusion patterns.
+
+        Checks whether the given sequence of method names (in order) matches any
+        fusion pattern defined for the VBO in the catalogue. This is called when
+        adjacent stages have been detected as a fusion candidate (by Task 1b's
+        structural detection in ast/builder.py), and the router's job is to
+        resolve that candidate against curated patterns.
+
+        Args:
+            vbo_name: The VBO name (should match all stages in the sequence).
+            method_sequence: List of BP method names in order, e.g.
+                ["Create Instance", "Open Workbook"].
+
+        Returns:
+            A tuple (pattern, vestigial_methods) where:
+            - pattern: The matching VBOFusionPattern if found, None otherwise.
+            - vestigial_methods: List of method names from the sequence that are
+              marked as vestigial in the pattern (empty if no match or no vestigial
+              stages). These stages produce no independent PAD output.
+
+            Never raises. Unknown VBOs return (None, []).
+        """
+        # Look up the VBO entry
+        entry = self._config.get_vbo_entry(vbo_name)
+        if entry is None:
+            entry = self._config.get_vbo_entry_fuzzy(vbo_name)
+
+        # Unknown VBO or no fusion patterns
+        if entry is None or not entry.fusion_patterns:
+            return None, []
+
+        # Search for a matching fusion pattern
+        for pattern in entry.fusion_patterns:
+            if pattern.sequence == method_sequence:
+                # Exact match found
+                return pattern, pattern.vestigial_stages
+
+        # No matching pattern
+        return None, []
 
     def route_stage(self, stage) -> RoutingDecision | None:
         """Convenience method — route directly from a BPStage.
