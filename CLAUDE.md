@@ -9,6 +9,44 @@ to Power Automate Cloud Flows + Desktop (PAD) flows.
 
 Pipeline: .bprelease → XML parser → Canonical AST → Transformation engine → Code generator → .zip solution
 
+## Current initiative: BP → PAD consolidated-architecture migration (PID_171)
+
+The codebase currently generates one `.robin` file / one `<Workflow>` XML element **per BP page**.
+That is the wrong target shape. The real Power Automate solution for a process like this one is
+**2 Desktop Flows (Loader, Performer) + 2 Cloud Flows (orchestrator, config-read child flow)**,
+with each BP page becoming a `FUNCTION '<page name>' ... END FUNCTION` block *inside* the
+appropriate Desktop Flow's single body — not a separate workflow of its own. This was established
+by decoding the actual deployed reference package
+(`samples/pad/Shell_PP_PID_US_171_US_PreludeLIMS_V12_1_0_0_11_managed/`), not by inference.
+
+**Read in this order before touching `src/flowsmith`, `mapping/`, or generator/parser code:**
+1. `docs/bp-to-pad-architecture-PID171.md` — ground truth: the real 4-flow architecture, the
+   BP-stage-type → PAD-construct mapping rules, VBO/action mapping, naming/error/stop/
+   consecutive-exception conventions. This is *what*/*why*.
+2. `docs/bp-to-pad-implementation-strategy-PID171.md` — a file-by-file audit of every
+   `src/flowsmith` module (Needed / Needs Update / Not Useful, each with evidence), what
+   `mapping/*.yaml` needs to carry, and the task sequencing. This is *how*.
+3. `docs/pad-generation-task-prompts.md` — the actual per-task work orders implementation work
+   is scoped against. Nothing gets built outside a named task from this file.
+4. `docs/pad-reference/` — extracted ground-truth PAD source
+   (`DF_PID_171_US_Loader.robin.txt`, `DF_PID_171_US_LIMS_Prelude_Main.robin.txt`) plus
+   `vbo-action-mapping.md`, the canonical BP-VBO-method → PAD-action table.
+
+**Method:** a coordinator/implementer/reviewer subagent workflow, invoked via slash commands —
+`/pad-task <task-id>` (spawns the `pad-implementer` subagent to do the work, then `pad-reviewer`
+to grade it) or `/pad-review <task-id>` (review only, no re-implementation). Subagent definitions:
+`.claude/agents/pad-implementer.md` (Haiku), `.claude/agents/pad-reviewer.md`. The
+coordinator/implementer/reviewer discipline (scope limits, mandatory doc citations, never
+silently drop an untranslatable stage) is also captured in `.claude/rules/pad-pipeline-workflow.md`
+so it's loaded automatically every session, not just when a task is worked via the slash commands.
+
+**Code-change approach:** one small, scoped task at a time — never a whole module in one pass.
+Every change traces to a cited section of the docs above (no invented PAD syntax). Run the task's
+own test file before declaring it done. Never silently drop a BP construct that can't be
+translated (usually: needs a UI selector) — leave a `# TODO` comment naming what it was.
+Generated output goes to `outputs/generated/PID_0171/`. Review reports go to `docs/reviews/`, one
+dated file per review, never overwritten.
+
 ## Project layout
 
 src/flowsmith/
