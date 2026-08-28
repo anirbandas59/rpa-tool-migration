@@ -538,6 +538,77 @@ App` — not inlined as one giant flattened block. Building a new VBO-method `FU
 follow that same one-`FUNCTION`-per-method pattern even when its body is mostly `# TODO` stubs
 because every action inside happens to be UI-selector-bound.
 
+### B_FUSION. VBO call-fusion patterns — not every BP stage maps 1:1 to a PAD action
+
+Some BP VBO idioms span **two or more adjacent stages that must collapse into a single PAD
+action**, not be translated stage-by-stage. Treating every `ACTION` stage as an independent
+1:1 lookup (one BP method name → one PAD template) gets these wrong — it emits two PAD lines
+where one is correct, and the intermediate BP-side variable often doesn't survive into PAD at
+all.
+
+**Worked example, confirmed against the real ground truth** (`docs/pad-reference/
+DF_PID_171_US_LIMS_Prelude_Main.robin.txt` L249, and the `Read Excel As Collection` BP page,
+subsheetid `eeeb6765-9d9f-4374-b7cd-d5ca8f3dfa61`):
+
+```xml
+<stage type="Action" name="Create Instance">
+  <outputs><output type="number" name="handle" stage="handle" /></outputs>
+  <resource object="MS Excel VBO" action="Create Instance" />
+</stage>
+<stage type="Action" name="Open Excel">
+  <inputs><input type="number" name="handle" expr="[handle]" />
+          <input type="text" name="File name" expr="[fileName]" /></inputs>
+  <outputs><output type="text" name="Workbook Name" stage="Workbook Name" /></outputs>
+  <resource object="MS Excel VBO" action="Open Workbook" />
+</stage>
+```
+
+translates to **one** PAD line, not two:
+
+```
+Excel.LaunchExcel.LaunchAndOpenUnderExistingProcess Path: in_txt_InputFilePath Visible: False ReadOnly: False UseMachineLocale: False Instance=> ins_ExcelInstance
+```
+
+Note `handle` never appears in the PAD output at all — BP's "acquire a handle, then use it"
+two-stage idiom is fully absorbed into `LaunchAndOpenUnderExistingProcess`'s single `Instance`
+output. The mirror pattern exists on the close side: BP's `Close Workbook` + `Close Instance`
+(same VBO, same handle-chaining shape) collapse into one `Excel.CloseExcel.Close Instance:
+<ins>` call (confirmed at L253/L980 — `docs/pad-reference/vbo-action-mapping.md`'s Excel table
+already records both fused pairs as single rows, not two).
+
+**The general structural signal, independent of which VBO it is:** a numeric-typed output on
+one `ACTION` stage feeding a same-named/same-typed numeric input on the very next `ACTION`
+stage (no branching, no other stage in between) is BP's own convention for a resource-handle
+handoff — "acquire a resource, then use it." This is detectable **without understanding what
+either stage does** — it's a shape in the BP XML (`<output type="number" name="handle"
+stage="handle">` on stage N, `<input type="number" name="handle" expr="[handle]">` on stage
+N+1), not a semantic judgment. Any two adjacent same-VBO `ACTION` stages matching this shape
+are a **fusion candidate**, whether or not a specific fusion template for that exact VBO pair
+has been curated yet.
+
+**How this must be represented and used (binding on Task 1's schema design and the AST
+builder):**
+1. A fusion candidate detected by the structural signal, but with **no matching entry** in
+   `mapping/vbo_catalogue.yaml`'s fusion-pattern data, is **not** auto-fused — it gets a
+   `ReviewFlag` naming both stages and the detected handoff, for curation (§B_FUSION is a
+   detection mechanism, not a rule that invents new PAD syntax on its own — every fused
+   template still needs the same real-call citation discipline as everything else in this
+   document).
+2. A fusion candidate that **does** match a curated pattern (like the two Excel pairs above)
+   fuses per that pattern's literal template — the intermediate stage(s) it names as vestigial
+   produce no PAD output of their own.
+3. This is the same kind of bracket-pairing problem `ast/builder.py` already solves for
+   `WaitStart`/`WaitEnd` and `LoopStart`/`LoopEnd` (§B12) — implement it as a comparable pass,
+   not a special case bolted onto the generator.
+
+**Known fused pairs so far** (from this document's ground-truth analysis; add more as they're
+found during curation — see `mapping/vbo_catalogue.yaml`'s fusion-pattern rows for the current
+complete list, this document doesn't duplicate that data):
+- `MS Excel VBO :: Create Instance` + `:: Open Workbook` → `Excel.LaunchExcel.
+  LaunchAndOpenUnderExistingProcess` (`Create Instance` vestigial)
+- `MS Excel VBO :: Close Workbook` + `:: Close Instance` → `Excel.CloseExcel.Close`
+  (`Close Workbook` vestigial)
+
 ### B10. Methodology
 
 For each BP page: start at its `Start` stage → follow `onsuccess`/`ontrue`/`onfalse` links,

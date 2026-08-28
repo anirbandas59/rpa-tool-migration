@@ -59,7 +59,7 @@ touch the architectural gap.
 | `generator/packager.py` | 399 | **Needs Update** | Escaping filters, manifest JSON writing, env-var-definition emission code path are all correctly wired — but the env-var loop never executes on real input because the parser never populates `environment_variables` (see `parser/process.py` row). Still assembles one `<Workflow>` per page. `templates/report/solution.xml.j2` is dead code — only `solution_with_guids.xml.j2` is ever rendered (confirmed via grep, nothing references the former). |
 | `generator/__init__.py` | 7 | Needed | Re-exports. |
 | `exceptions.py` | 41 | Needed | Complete, simple typed-exception hierarchy, correctly used everywhere else. |
-| `reporter/` | 0 (empty) | **Not Useful (as-is)** | Never started. `engine/scorer.py`/`engine/flag_index.py` already produce everything a reporter would need — this is genuinely just missing, not broken. Out of scope for the PID_171 transformation goal; flag as a later nice-to-have, not a blocker. |
+| `reporter/` | 0 (empty) | **Needed — reclassified, see below** | Never started, but `engine/scorer.py`/`engine/flag_index.py` already produce everything a reporter would need — presentation/wiring, not new logic. **Originally scoped as "later nice-to-have"**; reclassified after the ~200-automation/9-month rollout context made clear that a developer-facing AUTO/SPOT-CHECK/MANUAL breakdown is required infrastructure, not optional — without it, a developer has no fast way to know what to trust per automation, which defeats the tool's whole value proposition. Now Task 8. |
 | `cli/app.py` | 149 | **Needs Update** | `convert` is fully wired and runs the real pipeline end-to-end. `report` and `deploy` are explicit `"Not yet implemented"` stubs. No flags yet for the things a redesign needs (multi-artefact input, page-pruning, Loader/Performer role assignment). |
 | `templates/report/solution.xml.j2` | — | **Not Useful (dead code)** | Confirmed unreferenced anywhere in `src/` via grep; superseded by `solution_with_guids.xml.j2`. Candidate for deletion during implementation. |
 | `templates/pad/actions/work_queues.robin.j2` | — | **Needs Update** | Its `{% elif target_type == ... %}` branches check for names ("Create Queue", "Add Queue Item", "Get Queue Item", "Remove Queue Item", "Update Queue Item", "Get Queue Items") that **do not match** any real BP method name or any name in `vbo_catalogue.yaml`'s `method_patterns` for `clsWorkQueuesActions` — root cause of every WorkQueues call falling through to the `# TODO` else-branch, independently reproduced (§2.1). |
@@ -217,8 +217,18 @@ Respects the pipeline's real dependency order (parser → AST → mapper → eng
 packager — the same ordering `docs/bp-to-pad-pipeline-plan.md`'s already-executed 8-sub-task plan
 used), scoped specifically to the consolidated-architecture gaps identified in §1:
 
-1. `mapper/config.py` schema extension (§2.1) — prerequisite for step 2.
-2. `mapping/vbo_catalogue.yaml` + `mapping/stage_rules.yaml` content fixes (§2.2-2.3).
+1. `mapper/config.py` schema extension (§2.1) — per-method actions **and** multi-stage
+   fusion-pattern support (architecture doc §B_FUSION — a BP idiom like `MS Excel VBO`'s
+   `Create Instance`+`Open Workbook` collapses into one PAD call, which a flat 1:1 method→action
+   table can't express; found via a worked example during this planning session, not from the
+   original codebase audit). Prerequisite for step 1b and step 2.
+1b. `ast/builder.py`: VBO call-fusion detection pass (architecture doc §B_FUSION) — a generic
+   structural pre-filter (numeric-handle-output-feeds-numeric-handle-input, independent of which
+   VBO) flags fusion candidates; those matching a curated `fusion_patterns` entry (step 1's schema)
+   resolve to the fused action, everything else gets a `ReviewFlag` rather than a wrong per-stage
+   guess. Same shape as the existing `WaitStart`/`WaitEnd` bracket-pairing pass.
+2. `mapping/vbo_catalogue.yaml` + `mapping/stage_rules.yaml` content fixes (§2.2-2.3), now also
+   populating `fusion_patterns` for the known Excel pairs (and any others found during this task).
 3. `parser/process.py`: multi-artefact (release-level) parsing + `<environment-variable>`
    extraction.
 4. `ast/builder.py`: call-graph/reachability model (drop orphan pages, confirmed real ones exist —
@@ -226,12 +236,19 @@ used), scoped specifically to the consolidated-architecture gaps identified in �
    boundary at BP stage `85fbb578`).
 5. `generator/pad.py`: consolidate pages into `FUNCTION`s inside one Desktop Flow body (per role —
    Loader vs. Performer) + replace hardcoded action-renderer placeholders with real BP-expression
-   translation.
+   translation (consuming step 1b's fusion annotations where present).
 6. `generator/cloudflow.py` / `workflow_builder.py` / `packager.py`: consolidate to the real 4-flow
    shape (2 CF + 2 DF per architecture doc §A2), fix the orchestrator-registration gap (§8.2 of
    `SUBTASK8_VALIDATION_REPORT.md`).
 7. End-to-end run against `samples/blueprism/PID_0171.bprelease`, output to
    `outputs/generated/PID_0171/`.
+8. `reporter/`: developer-facing AUTO/SPOT-CHECK/MANUAL coverage report (§1.1's reclassified
+   `reporter/` row) — required infrastructure for the ~200-automation rollout (§5), not a
+   PID_171-specific nicety.
+9. Calibration checkpoint: run the finished pipeline against `samples/blueprism/PID_0127.bprelease`
+   (already in this repo — the original source `mapping/*.yaml` was generated from) and measure
+   whether AUTO-band coverage holds on a second, different automation before treating the tool as
+   ready for team-wide rollout. See §5.
 
 Each numbered step becomes one or more Haiku subagent tasks, sized to a single file or a tightly
 related pair of files. Each task's required reading is the architecture doc section(s) and/or the
@@ -276,7 +293,11 @@ design input, once the coding phase produces output.
      comment coverage for the untranslatable rest counts as a pass, not a penalty) rather than
      marking the whole page "incomplete" for content that's legitimately out of scope.
   3. **VBO/action fidelity** — for a sample of `CALL`/module-action lines, do they match the real
-     syntax templates in architecture doc §B12/§B13 rather than placeholders.
+     syntax templates in architecture doc §B12/§B13 rather than placeholders. Includes checking
+     that §B_FUSION's known multi-stage patterns (e.g. Excel's `Create Instance`+`Open Workbook`)
+     render as one fused action, not two independent per-stage translations — a page containing a
+     fusion pair that was translated stage-by-stage instead of fused is a fidelity defect here,
+     not a structural or naming issue.
   4. **Naming-convention compliance** (§A4).
   5. **Error-handling/stop/consecutive-exception pattern presence** (§A5-A7).
   6. **Well-formedness** — XML/JSON parses, `<Definition>` JSON-decodes, no dangling references —
@@ -289,9 +310,39 @@ design input, once the coding phase produces output.
 
 ---
 
+## 5. Rollout scope: PID_171 is the pilot, not the destination
+
+This tool exists to support a ~200-automation migration program (9 months, ~20/month target
+throughput) — PID_171 is the first, most-deeply-analyzed automation, used to build the tool's
+core capability against real, verified ground truth. It is not a one-off. Two consequences worth
+stating explicitly, since they change what "done" means for this coding phase:
+
+**The economics only work if `flowsmith convert` stays fully offline and deterministic.**
+Developers converting the other ~199 automations must never need to prompt a chat AI, review
+logic they didn't write to judge if it's safe, or wait on live model access — their loop is:
+run the CLI, read the report (§1.1/Task 8), build only what's flagged (predominantly UI
+selectors, matching what developers already expect to hand-build). Every design decision in this
+document (agent-assisted curation happening *before* or *alongside* the coding phase, never
+inside `convert` itself; the fusion-pattern catalogue in §B_FUSION being a static, checked-in
+data source rather than a runtime lookup to an LLM) exists to protect that property. Any future
+change to this pipeline that would make a real conversion run depend on live agent/LLM access
+should be treated as a regression against this rule, not a feature, unless explicitly re-decided.
+
+**Curated coverage transfers unevenly, and that's expected, not a flaw.** Shared/common BP VBOs
+(`MS Excel VBO`, `MS Outlook Email VBO`, `clsWorkQueuesActions`, the `Utility - *` family) are
+present across most real BP estates — curation done for PID_171 pays off on every future
+automation that uses them, which is most of them. Process-specific custom VBOs (PID_171's
+`PID_0003_Object_US_SampleManager`/`PID_0005_Object_US_SampleResultsEntry`) will **never**
+generalize — every automation will have some irreducible bespoke-UI surface no catalogue can
+close, and that surface is exactly where developers already expect to spend their time. Task 9's
+calibration checkpoint exists to measure the actual split between these two categories on a
+second, different automation before anyone commits to a coverage number for the other ~198.
+
+---
+
 ## Next step
 
 This document, once reviewed, gates the coding phase described in §3 — Haiku-subagent
-implementation orchestrated by the controller, `mapping/*.yaml` edits, `src/flowsmith` changes, and
-the run against `PID_0171.bprelease` into `outputs/generated/PID_0171/` — none of which has started
-yet.
+implementation orchestrated by the controller, `mapping/*.yaml` edits, `src/flowsmith` changes, the
+run against `PID_0171.bprelease` into `outputs/generated/PID_0171/`, the developer-facing report
+(Task 8), and the PID_0127 calibration checkpoint (Task 9, §5) — none of which has started yet.

@@ -24,6 +24,13 @@ If you're touching this code outside a task that's explicitly about the consolid
 back to the old per-page shape, and don't build new per-page-file logic as if it were still
 correct.
 
+**Fusion-marked stages** (architecture doc §B_FUSION, `ast/builder.py`'s fusion-detection pass —
+Task 1b): a stage the AST marks as vestigial (part of a fused multi-stage sequence, like Excel's
+`Create Instance` inside a `Create Instance`+`Open Workbook` pair) must render **nothing** of its
+own — the fused action renders once, at the sequence's attachment point. Don't emit a `# TODO` or
+a partial line for a vestigial stage; that's not the same as "untranslatable," it's "already
+covered by the stage next to it."
+
 Also apply, on top of the above: `CLAUDE.md`'s existing rules for this layer still hold (Jinja2
 templates only, never inline string concatenation for generated code; typed exceptions, never
 return `None` on failure).

@@ -25,39 +25,109 @@ task whose "Depends on" isn't already done.
 
 ---
 
-## Task 1 — `mapper/config.py`: add per-method action field to `VBOEntry`
+## Task 1 — `mapper/config.py`: add per-method action field + fusion-pattern schema to `VBOEntry`
 
 **Depends on:** none
 **Files in scope:** `src/flowsmith/mapper/config.py`, `src/flowsmith/mapper/vbo_router.py`,
 `tests/mapper/test_config.py`, `tests/mapper/test_vbo_router.py`
 **Required reading:** `docs/bp-to-pad-implementation-strategy-PID171.md` §2.1 and the
-`mapper/config.py` row of §1.1.
+`mapper/config.py` row of §1.1; `docs/bp-to-pad-architecture-PID171.md` §B_FUSION (the fusion
+concept this schema must be able to express — read this before designing the schema, not after).
 
 **Do:**
 1. Open `src/flowsmith/mapper/config.py` and find the `VBOEntry` model. It currently has
    `method_patterns: list[str]` (BP-side method name substrings) and a single `pa_module: str` per
-   VBO — there is no way to record "method X on this VBO maps to concrete PAD call Y, method Z
-   maps to a different concrete PAD call W."
+   VBO — there is no way to record either (a) "method X on this VBO maps to concrete PAD call Y,
+   method Z maps to a different concrete PAD call W" or (b) "methods X and Y, in sequence, fuse
+   into one PAD call Z" (§B_FUSION — e.g. `MS Excel VBO`'s `Create Instance` + `Open Workbook`).
+   This task's schema must support both, not just the first.
 2. Add a new optional field, e.g. `method_actions: dict[str, str] = Field(default_factory=dict)`,
    mapping an **exact** BP method name (as it appears in `<resource action="...">`) to a literal
-   PAD action-call template string. Keep `method_patterns` for fuzzy fallback matching — don't
-   remove it.
-3. Update YAML-loading validation so `method_actions` is optional (defaults to `{}`) and validated
-   as `dict[str, str]`.
-4. In `mapper/vbo_router.py`, update the routing logic: when resolving a stage's BP method name
-   against a `VBOEntry`, first check `method_actions` for an **exact** key match — if found, that
-   literal template is the resolved action (high confidence, e.g. `confidence_base` from the entry
-   unmodified). Only fall back to the existing `method_patterns` fuzzy match (lower confidence) if
-   no exact match exists. Fall back to the existing unknown-stub behavior if neither matches.
-5. Update `test_config.py` (schema accepts `method_actions`, defaults to `{}` when absent) and
-   `test_vbo_router.py` (an exact `method_actions` match takes precedence over and yields higher
-   confidence than a `method_patterns` fuzzy match on the same VBO; a `VBOEntry` with no
-   `method_actions` at all behaves exactly as before — no regression).
+   PAD action-call template string, for the ordinary 1:1 case. Keep `method_patterns` for fuzzy
+   fallback matching — don't remove it.
+3. Add a second new optional field for the fusion case, e.g. `fusion_patterns:
+   list[VBOFusionPattern] = Field(default_factory=list)`, where `VBOFusionPattern` is a small
+   model with at least: `sequence: list[str]` (the ordered BP method names that must appear
+   consecutively, e.g. `["Create Instance", "Open Workbook"]`), `fused_action: str` (the literal
+   PAD template for the whole sequence), and `vestigial_stages: list[str]` (which method names in
+   the sequence produce no PAD output of their own — e.g. `["Create Instance"]`).
+4. Update YAML-loading validation so both new fields are optional (default to `{}`/`[]`) and
+   validated per their types.
+5. In `mapper/vbo_router.py`, update the routing logic in two parts:
+   - **Per-stage resolution** (unchanged in spirit): when resolving a single stage's BP method
+     name against a `VBOEntry`, first check `method_actions` for an exact key match (high
+     confidence), then fall back to `method_patterns` fuzzy match (lower confidence), then the
+     existing unknown-stub behavior.
+   - **New: fusion-candidate check**, which must run *before* per-stage resolution for any stage
+     that is the first element of some `VBOEntry.fusion_patterns[i].sequence` **and** the
+     immediately-following stage (same page, `onsuccess`-linked, no branch in between) is a
+     matching `ACTION` call to the *next* method name in that same sequence: resolve the **whole
+     matched sequence** to the pattern's `fused_action` (attached to the *last* stage in the
+     sequence, or wherever the AST fusion pass from Task 1b decides is the right attachment point
+     — coordinate with that task), and mark every stage named in `vestigial_stages` as producing
+     no independent output. Do not implement the *detection* of adjacent stages here — that's
+     Task 1b's job in `ast/builder.py`; this router only needs to resolve a sequence **it's given**
+     against the catalogue's fusion patterns.
+6. Update `test_config.py` (schema accepts `method_actions` and `fusion_patterns`, both default to
+   empty when absent) and `test_vbo_router.py` (exact `method_actions` match takes precedence over
+   `method_patterns` fuzzy match; a `VBOEntry` with neither new field behaves exactly as before —
+   no regression; a `fusion_patterns` entry resolves correctly when the router is given a matching
+   method-name sequence).
 
-**Done when:** `uv run pytest tests/mapper/ -v` passes, including a new test asserting the
-precedence behavior in step 4.
+**Done when:** `uv run pytest tests/mapper/ -v` passes, including new tests for both the per-method
+precedence behavior (step 5's first bullet) and fusion-pattern resolution (step 5's second
+bullet).
 
-**Out of scope:** populating `vbo_catalogue.yaml`'s `method_actions` data (Tasks 2a/2b).
+**Out of scope:** populating `vbo_catalogue.yaml`'s `method_actions`/`fusion_patterns` data
+(Tasks 2a/2b); detecting *which* adjacent stages form a fusion candidate in the first place
+(Task 1b).
+
+---
+
+## Task 1b — `ast/builder.py`: VBO call-fusion detection pass
+
+**Depends on:** Task 1
+**Files in scope:** `src/flowsmith/ast/builder.py`, `src/flowsmith/ast/models.py`,
+`tests/ast/test_builder.py`
+**Required reading:** `docs/bp-to-pad-architecture-PID171.md` §B_FUSION in full (both the
+worked Excel example and the generic structural-signal rule).
+
+**Do:**
+1. Implement the **generic structural pre-filter** from §B_FUSION: for every pair of adjacent
+   `ACTION` stages on the same page (stage N's sole `onsuccess` target is stage N+1, no branching
+   in between), where stage N has a numeric-typed `<output>` and stage N+1 has a same-named,
+   same-typed numeric `<input>` whose `expr` references stage N's output (BP's `[handle]`-style
+   reference) — flag this pair as a **fusion candidate**, regardless of which VBO is involved and
+   regardless of whether a curated pattern exists for it yet. This step needs no VBO-specific
+   knowledge — it's a shape in the XML (see §B_FUSION's exact `<output>`/`<input>` example).
+2. For each fusion candidate, check whether the two stages' VBO/method names match an entry in
+   `mapping/vbo_catalogue.yaml`'s `fusion_patterns` for that VBO (via `mapper/vbo_router.py`'s new
+   lookup from Task 1). If they match: mark the sequence as resolved-by-fusion on the AST (e.g. a
+   `fused_with: list[stage_id]` / `fusion_action: str | None` field on `BPStage` in
+   `ast/models.py`), attached to whichever stage the fused action should render at (the second/last
+   stage in the sequence is the natural choice, matching where the real PAD call actually appears
+   in `docs/pad-reference/DF_PID_171_US_LIMS_Prelude_Main.robin.txt`), and mark the vestigial
+   stage(s) so the generator emits nothing standalone for them.
+3. If a fusion candidate does **not** match any curated pattern: do not fuse it and do not
+   translate the two stages independently as if the candidate signal didn't exist — attach a
+   `ReviewFlag` naming both stage IDs, both method names, and the detected numeric-handoff variable
+   name, so it surfaces as a concrete, curatable gap (per the earlier "rich flag, not a bare stub"
+   discussion) rather than either a wrong guess or a silent miss.
+4. This is structurally the same kind of problem `_assign_wait_loop_pairs`/`_assign_block_pairs`
+   (or whatever this codebase's existing `WaitStart`/`WaitEnd` and `LoopStart`/`LoopEnd` pairing
+   functions are actually named — check `ast/builder.py` directly rather than assuming) already
+   solve — reuse that pass's general shape (a pre-pass over the page's stages before/alongside
+   normalisation) rather than inventing a parallel mechanism.
+
+**Done when:** `uv run pytest tests/ast/ -v` passes, including tests asserting: (a) the two known
+Excel fusion pairs from `PID_0171.bprelease`'s `Read Excel As Collection` page (`Create Instance`+
+`Open Workbook`, and `Close Workbook`+`Close Instance`) are correctly detected and resolved to
+their fused actions; (b) a synthetic numeric-handle-chaining pair with **no** matching
+`fusion_patterns` entry produces a `ReviewFlag` naming both stages, not a silent per-stage
+translation.
+
+**Out of scope:** generating the actual PAD output for a fused sequence (Task 5a/5b consume this
+AST annotation, they don't need to re-detect fusion themselves).
 
 ---
 
@@ -134,10 +204,22 @@ template you add must be copied from here, not invented), `docs/bp-to-pad-archit
 6. Fix `MS Excel VBO`'s `method_patterns` to the real PID_171 method names from
    `vbo-action-mapping.md`'s Excel table (`Create Instance`, `Open Workbook`, `Get Worksheet As
    Collection`, `Close Workbook`, `Close Instance`, `Write to cell`, `Save As` — the current file
-   lists different, non-matching names) and populate `method_actions` with the literal templates
-   from that table.
-7. For every entry you touch in this task, populate `method_actions` with literal PAD call
-   templates copied verbatim from `docs/pad-reference/vbo-action-mapping.md` — never invent one.
+   lists different, non-matching names). For the standalone methods (`Get Worksheet As
+   Collection`, `Write to cell`, `Save As`), populate `method_actions` with their literal
+   templates. For `Create Instance`/`Open Workbook` and `Close Workbook`/`Close Instance` — **do
+   not** add these as two separate `method_actions` entries; per architecture doc §B_FUSION these
+   are fusion pairs. Add two `fusion_patterns` entries instead:
+   - `sequence: ["Create Instance", "Open Workbook"]`, `fused_action:` the
+     `LaunchAndOpenUnderExistingProcess` template from `vbo-action-mapping.md`'s Excel table,
+     `vestigial_stages: ["Create Instance"]`.
+   - `sequence: ["Close Workbook", "Close Instance"]`, `fused_action:` the `Excel.CloseExcel.Close`
+     template, `vestigial_stages: ["Close Workbook"]`.
+7. For every entry you touch in this task, populate `method_actions`/`fusion_patterns` with
+   literal PAD call templates copied verbatim from `docs/pad-reference/vbo-action-mapping.md` —
+   never invent one. If you notice another BP method pair in this task's scope that looks like the
+   same numeric-handle-chaining shape §B_FUSION describes (check any VBO you're adding/fixing, not
+   just Excel), add it as a `fusion_patterns` entry too rather than two independent
+   `method_actions` entries — note it in your summary either way so the reviewer can confirm.
 
 **Done when:** the file still parses as valid YAML; `uv run pytest tests/mapper/ -v` passes; in
 your summary, list every `method_actions` value you added alongside the exact
@@ -524,3 +606,99 @@ full test suite + linter in step 3 are clean.
 
 **Out of scope:** grading similarity to `samples/pad/Shell_PP_PID_US_171_US_PreludeLIMS_V12_1_0_0_11_managed/`
 — that's `pad-reviewer`'s dedicated job, not this task's.
+
+---
+
+## Task 8 — `reporter/`: developer-facing AUTO/SPOT-CHECK/MANUAL coverage report
+
+**Why this task exists (context, not part of the PID_171 output itself):** PID_171 is the pilot
+that builds this tool's core capability, but the tool's actual purpose is a ~200-automation
+migration program where each developer needs a fast, trustworthy answer to "what can I trust,
+what needs a quick check, what do I need to actually build (usually UI selectors)" — without
+reading the whole generated flow. `engine/scorer.py` and `engine/flag_index.py` already compute
+everything this needs; they're just never wired to output. This task closes that gap. Elevated
+from the strategy doc's original "Not Useful (empty) — later nice-to-have" classification once
+the ~200-automation throughput context made it clear a report is required infrastructure, not an
+optional extra.
+
+**Depends on:** Task 7 (needs a real generated output to report on)
+**Files in scope:** `src/flowsmith/reporter/` (currently empty), `src/flowsmith/cli/app.py`
+(wire the `report` command, currently a stub), `templates/report/` (a new report template, not
+to be confused with the existing `customizations.xml`/`solution.xml` packaging templates in the
+same directory — use a subfolder or distinct naming to avoid confusion), `tests/reporter/` (new).
+**Required reading:** `CLAUDE.md`'s confidence-band table, `src/flowsmith/engine/scorer.py` and
+`engine/flag_index.py` (read both fully — this task consumes their existing output, it doesn't
+recompute anything), the "rich `ReviewFlag`, not a bare stub" discussion (this session's
+conversation — no doc citation exists yet for this specific point, use your own judgment on
+format, guided by the goal: a developer or an agent doing later curation should be able to act on
+a flag without re-deriving context).
+
+**Do:**
+1. Build a report generator (`reporter/generate_report()` or similar) that takes an annotated
+   `BPProcess` (post-`engine.annotate_process()`) and produces a per-stage breakdown grouped by
+   confidence band (AUTO / SPOT-CHECK / PARTIAL / MANUAL, per `CLAUDE.md`'s table), with counts and
+   percentages per band, and a list of every `ReviewFlag` with severity.
+2. For each `ReviewFlag`, the report entry must be **hand-off-ready**: the BP stage's page, name,
+   narrative, inputs/outputs (with types), the VBO/method involved if any, and the reason it was
+   flagged (UI-selector-required, no confident mapping, fusion-candidate-with-no-curated-pattern
+   per Task 1b, etc.) — enough that a human or a later curation pass can act on it without opening
+   the BP source themselves.
+3. Emit at least one human-readable format (HTML or Markdown — `CLAUDE.md` says "Rich terminal +
+   HTML report generation" was the original intent for this module, keep that unless you find a
+   reason not to) and wire it to `uv run flowsmith report --input <ast-or-zip> --output <path>` in
+   `cli/app.py`, replacing the current stub.
+4. Do not touch `engine/scorer.py`/`engine/flag_index.py`'s own logic unless you find them
+   genuinely wrong for this purpose — they're already built and tested; this task's job is
+   presentation/wiring, not recomputation.
+
+**Done when:** `uv run pytest tests/reporter/ -v` passes, and running `uv run flowsmith report`
+against `outputs/generated/PID_0171/`'s AST produces a report a developer could act on without
+reading the raw generated `.robin`/JSON files.
+
+**Out of scope:** changing what gets flagged or how confidence is scored (that's `engine/`'s job,
+already done); this task only presents what's already computed.
+
+---
+
+## Task 9 — Calibration checkpoint: validate against a second automation before team rollout
+
+**Why this task exists:** every task above proves the tool works for PID_171 specifically. Before
+committing a team to a 20-automations/month cadence across all ~200, the coverage claim needs to
+be checked against at least one *different* automation — otherwise "60-80% coverage" is an
+assumption carried over from a single pilot, not a measured number. `samples/blueprism/
+PID_0127.bprelease` is already in this repo (it's what `mapping/stage_rules.yaml` and
+`mapping/vbo_catalogue.yaml` were originally generated from, before this session's PID_171-specific
+corrections) — no new sample-gathering is needed to run this checkpoint once.
+
+**Depends on:** Task 8
+**Files in scope:** none required (this is a run + measure + report task, like Task 7) — but
+expect it to *produce* new findings that become follow-up tasks (new `ReviewFlag`s needing
+curation, possibly new fusion patterns per §B_FUSION) rather than being a clean pass on the first
+try. That's the point of running it now rather than discovering the gap mid-rollout.
+**Required reading:** `docs/bp-to-pad-implementation-strategy-PID171.md` §4 (same scoring
+methodology as PID_171's own review), `docs/bp-to-pad-architecture-PID171.md` §B_FUSION.
+
+**Do:**
+1. Run `uv run flowsmith convert --input samples/blueprism/PID_0127.bprelease --output
+   outputs/generated/PID_0127/ --managed`, then `uv run flowsmith report` (Task 8) against it.
+2. Compare the AUTO-band coverage percentage against PID_171's. Note which VBOs/patterns PID_0127
+   shares with PID_171 (where curated coverage should transfer directly) versus which are novel to
+   PID_0127 (where it won't — this is expected, not a failure, per the "custom VBOs never
+   generalize" point from the business-context discussion).
+3. For every new `ReviewFlag` PID_0127 surfaces that represents a **shared/common BP VBO** (not a
+   process-specific custom one), treat it as a real gap in the pilot's coverage claim — file it as
+   a follow-up curation task (extend `vbo_catalogue.yaml`/`stage_rules.yaml`/`fusion_patterns`
+   the same way Tasks 2a-2c did) rather than accepting a lower number for PID_0127 alone.
+4. Write a short comparison note (where — `docs/reviews/` fits, or a dedicated
+   `docs/calibration/PID_0127-<date>.md`, your call, but don't lose it) covering: PID_171's AUTO %
+   vs. PID_0127's, which gaps are shared-VBO (actionable) vs. process-specific (expected, not
+   actionable), and a revised coverage estimate for the general tool now backed by two data points
+   instead of one.
+
+**Done when:** the comparison note exists and states plainly whether the tool is ready for
+team-wide rollout at the claimed coverage level, or what specifically needs curating first — not a
+vague "looks fine."
+
+**Out of scope:** fixing every gap PID_0127 surfaces within this task itself — file them as
+follow-up tasks per step 3, don't silently scope-creep this checkpoint into another full
+implementation pass.
