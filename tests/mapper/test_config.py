@@ -229,6 +229,49 @@ class TestVBOEntry:
         assert entry.pa_module == ""
         assert entry.notes == ""
         assert entry.review_severity is None
+        assert entry.method_actions == {}
+
+    def test_method_actions_field_defaults_to_empty_dict(self) -> None:
+        """method_actions field defaults to empty dict when absent."""
+        minimal = {
+            "vbo_name": "Test VBO",
+            "runtime": "CLOUD",
+            "confidence_base": 0.75,
+        }
+        entry = VBOEntry(**minimal)
+        assert entry.method_actions == {}
+        assert isinstance(entry.method_actions, dict)
+
+    def test_method_actions_field_accepts_dict(self) -> None:
+        """method_actions field accepts dict of string mappings."""
+        entry = VBOEntry(
+            vbo_name="Test VBO",
+            runtime="CLOUD",
+            confidence_base=0.75,
+            method_actions={
+                "Method1": "Template1",
+                "Method2": "Template2",
+            },
+        )
+        assert entry.method_actions == {
+            "Method1": "Template1",
+            "Method2": "Template2",
+        }
+
+    def test_method_actions_field_preserves_exact_keys(self) -> None:
+        """method_actions field preserves exact method name keys."""
+        entry = VBOEntry(
+            vbo_name="Test VBO",
+            runtime="CLOUD",
+            confidence_base=0.75,
+            method_actions={
+                "Get Next Item": "GetNextItem Action",
+                "Update Processing Notes": "UpdateNotes Action",
+            },
+        )
+        assert "Get Next Item" in entry.method_actions
+        assert entry.method_actions["Get Next Item"] == "GetNextItem Action"
+        assert "Update Processing Notes" in entry.method_actions
 
     def test_confidence_validation_valid(self) -> None:
         """confidence_base is accepted in range [0.0, 1.0]."""

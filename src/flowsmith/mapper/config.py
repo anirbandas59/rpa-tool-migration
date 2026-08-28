@@ -60,6 +60,7 @@ class VBOEntry(BaseModel):
     Fields correspond directly to vbo_catalogue.yaml entries.
     confidence_base is validated to be in [0.0, 1.0].
     review_severity, if present, must be "error" or "warn".
+    method_actions maps exact BP method names to PAD action templates.
     """
 
     vbo_name: str
@@ -69,6 +70,7 @@ class VBOEntry(BaseModel):
     confidence_base: float
     notes: str = ""
     review_severity: str | None = None
+    method_actions: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("confidence_base")
     @classmethod

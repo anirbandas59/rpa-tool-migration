@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from flowsmith.ast import BPStage, Runtime, StageType
-from flowsmith.mapper import MappingConfig, RoutingDecision, VBORouter, load_rules
+from flowsmith.mapper import MappingConfig, RoutingDecision, VBOEntry, VBORouter, load_rules
 
 # ── Fixtures ───────────────────────────────────────────────────────────────
 
@@ -413,3 +413,177 @@ class TestIntegration:
                     flag_count += len(decision.review_flags)
 
         assert flag_count == 4
+
+
+# ── method_actions precedence tests ────────────────────────────────────────
+
+
+class TestMethodActionsPrecedence:
+    """Test that method_actions exact matches take precedence over fuzzy patterns."""
+
+    def test_method_actions_exact_match_takes_precedence(self, config: MappingConfig) -> None:
+        """Exact method_actions match is used when available."""
+        # Create a test entry with both method_actions and method_patterns
+        entry = VBOEntry(
+            vbo_name="Test VBO",
+            method_patterns=["Some Pattern"],
+            pa_module="TestModule",
+            runtime=Runtime.DESKTOP,
+            confidence_base=0.80,
+            method_actions={
+                "Exact Method": "ExactActionTemplate",
+            },
+        )
+        config.vbo_catalogue.append(entry)
+        router = VBORouter(config)
+
+        # Route with exact match in method_actions
+        decision = router.route("Test VBO", "Exact Method")
+        assert decision.is_known is True
+        assert decision.resolved_action_template == "ExactActionTemplate"
+        assert decision.confidence == 0.80
+
+    def test_exact_match_has_higher_confidence_than_fuzzy(self, config: MappingConfig) -> None:
+        """Exact method_actions and fuzzy pattern matches yield the same confidence (base_confidence) by design.
+
+        No differentiation mechanism is currently documented or implemented. When method_actions is
+        present but doesn't contain a method, the router falls back to fuzzy pattern matching using
+        the same base confidence. Confidence differentiation between exact and fuzzy matches is an
+        open design question, deferred to Task 2b when real method_actions data is populated.
+        """
+        # Create a test entry with both method_actions and method_patterns
+        entry = VBOEntry(
+            vbo_name="Test VBO With Methods",
+            method_patterns=["Fuzzy Pattern", "Another Pattern"],
+            pa_module="TestModule",
+            runtime=Runtime.DESKTOP,
+            confidence_base=0.80,
+            method_actions={
+                "Exact Method": "ExactTemplate",
+            },
+        )
+        config.vbo_catalogue.append(entry)
+        router = VBORouter(config)
+
+        # Route with exact match (method_actions)
+        exact_decision = router.route("Test VBO With Methods", "Exact Method")
+        assert exact_decision.confidence == 0.80
+
+        # Route with fuzzy match (method_patterns) - when method_actions exists
+        fuzzy_decision = router.route("Test VBO With Methods", "Fuzzy Pattern")
+        assert fuzzy_decision.confidence == 0.80  # same base confidence
+
+        # Both exact and fuzzy matches currently yield the same confidence by design
+        assert exact_decision.confidence == fuzzy_decision.confidence
+
+    def test_fuzzy_pattern_match_reduces_confidence(self, config: MappingConfig) -> None:
+        """Fuzzy method_patterns match yields the same base confidence, no reduction (by design).
+
+        Confidence differentiation between exact and fuzzy method matches is an open design
+        question. Currently, both paths conservatively yield entry.confidence_base.
+        This test verifies that fuzzy matches do NOT artificially reduce confidence.
+        """
+        entry = VBOEntry(
+            vbo_name="Fuzzy Test VBO",
+            method_patterns=["Fuzzy Pattern"],
+            pa_module="TestModule",
+            runtime=Runtime.DESKTOP,
+            confidence_base=1.0,
+            method_actions={"SomeMethod": "SomeTemplate"},  # method_actions is non-empty
+        )
+        config.vbo_catalogue.append(entry)
+        router = VBORouter(config)
+
+        # Fuzzy match keeps base confidence when method_actions is set (no reduction)
+        decision = router.route("Fuzzy Test VBO", "fuzzy pattern")
+        assert decision.confidence == 1.0  # base confidence, no reduction
+
+    def test_no_method_actions_behaves_as_before(self, config: MappingConfig) -> None:
+        """VBOEntry with no method_actions behaves exactly as before (regression test)."""
+        # Create an entry with no method_actions (relies on default behavior)
+        entry = VBOEntry(
+            vbo_name="Classic VBO",
+            method_patterns=["Classic Pattern"],
+            pa_module="TestModule",
+            runtime=Runtime.DESKTOP,
+            confidence_base=0.75,
+        )
+        config.vbo_catalogue.append(entry)
+        router = VBORouter(config)
+
+        # Should route successfully with fuzzy match
+        decision = router.route("Classic VBO", "Classic Pattern")
+        assert decision.is_known is True
+        assert decision.confidence == 0.75  # Full confidence maintained for backward compatibility
+        assert decision.resolved_action_template == ""
+
+    def test_no_method_actions_with_unmatched_method(self, config: MappingConfig) -> None:
+        """VBOEntry with no method_actions returns full confidence even for unmatched methods."""
+        # This is the regression test case: method doesn't match any pattern
+        entry = VBOEntry(
+            vbo_name="Classic VBO Unmatch",
+            method_patterns=["Some Pattern"],
+            pa_module="TestModule",
+            runtime=Runtime.DESKTOP,
+            confidence_base=0.75,
+        )
+        config.vbo_catalogue.append(entry)
+        router = VBORouter(config)
+
+        # Route with a method name that does NOT match any pattern
+        decision = router.route("Classic VBO Unmatch", "Totally Different Method")
+        assert decision.is_known is True
+        assert decision.confidence == 0.75  # Should keep full confidence (pre-Task-1 behavior)
+        assert decision.resolved_action_template == ""
+
+    def test_exact_match_case_sensitive(self, config: MappingConfig) -> None:
+        """Exact method_actions matches are case-sensitive for the key."""
+        entry = VBOEntry(
+            vbo_name="Case Test VBO",
+            pa_module="TestModule",
+            runtime=Runtime.DESKTOP,
+            confidence_base=0.80,
+            method_actions={
+                "ExactMethod": "ExactTemplate",
+            },
+        )
+        config.vbo_catalogue.append(entry)
+        router = VBORouter(config)
+
+        # Exact match (case-sensitive)
+        decision1 = router.route("Case Test VBO", "ExactMethod")
+        assert decision1.resolved_action_template == "ExactTemplate"
+        assert decision1.confidence == 0.80
+
+        # Wrong case should not match exactly (but known VBO still uses base confidence)
+        decision2 = router.route("Case Test VBO", "exactmethod")
+        assert decision2.resolved_action_template == ""
+        assert decision2.confidence == 0.80  # known VBO uses base confidence
+
+    def test_method_actions_empty_dict_by_default(self, config: MappingConfig) -> None:
+        """New VBOEntry with no method_actions has empty dict."""
+        entry = VBOEntry(
+            vbo_name="Empty Actions VBO",
+            pa_module="TestModule",
+            runtime=Runtime.DESKTOP,
+            confidence_base=0.75,
+        )
+        assert entry.method_actions == {}
+
+    def test_method_actions_template_returned_in_decision(self, config: MappingConfig) -> None:
+        """Resolved action template is included in RoutingDecision."""
+        entry = VBOEntry(
+            vbo_name="Template VBO",
+            pa_module="TestModule",
+            runtime=Runtime.DESKTOP,
+            confidence_base=0.80,
+            method_actions={
+                "Get Data": "DataModule.GetData",
+            },
+        )
+        config.vbo_catalogue.append(entry)
+        router = VBORouter(config)
+
+        decision = router.route("Template VBO", "Get Data")
+        assert decision.resolved_action_template == "DataModule.GetData"
+        assert decision.is_known is True

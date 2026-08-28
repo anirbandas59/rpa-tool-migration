@@ -38,6 +38,10 @@ class RoutingDecision(BaseModel):
         default="",
         description="Notes from the catalogue entry, or '' if unknown VBO.",
     )
+    resolved_action_template: str = Field(
+        default="",
+        description="Resolved PAD action template if method_actions had an exact match, empty otherwise.",
+    )
 
 
 # ── VBO Router ─────────────────────────────────────────────────────────────
@@ -110,7 +114,43 @@ class VBORouter:
                 notes="",
             )
 
-        # Known VBO — inject mandatory flags if present
+        # Known VBO — resolve method and apply routing logic
+        confidence = entry.confidence_base
+        resolved_template = ""
+
+        # Check if method_actions is populated (new feature)
+        has_method_actions = bool(entry.method_actions)
+
+        if has_method_actions:
+            # New logic: check method_actions first for exact match
+            if method_name in entry.method_actions:
+                resolved_template = entry.method_actions[method_name]
+                # Exact match uses full confidence
+                confidence = entry.confidence_base
+            else:
+                # method_actions exists but does not have this method
+                # Fall back to method_patterns (fuzzy match) with same base confidence
+                # TODO: Confidence differentiation between exact and fuzzy method matches
+                # is an open design question — currently both yield entry.confidence_base.
+                # This will be addressed during Task 2b when real method_actions data is
+                # populated and a decision is made on whether to apply confidence penalties
+                # for fuzzy matches. For now, both paths conservatively use base confidence.
+                if method_name:
+                    method_lower = method_name.lower()
+                    for pattern in entry.method_patterns:
+                        if method_lower == pattern.lower():
+                            # Fuzzy pattern match found, but uses same confidence
+                            break
+
+                # Whether a fuzzy pattern matched or not, keep base confidence for known VBO
+                confidence = entry.confidence_base
+        else:
+            # Old logic: method_actions is empty (backward compatibility)
+            # Return full confidence unconditionally for known VBO
+            # (pre-Task-1 behavior: no method-level checking)
+            confidence = entry.confidence_base
+
+        # Inject mandatory flags if present
         flags: list[ReviewFlag] = []
         if entry.review_severity is not None:
             flag = ReviewFlag(
@@ -126,10 +166,11 @@ class VBORouter:
             method_name=method_name,
             pa_module=entry.pa_module,
             runtime=entry.runtime,
-            confidence=entry.confidence_base,
+            confidence=confidence,
             is_known=True,
             review_flags=flags,
             notes=entry.notes,
+            resolved_action_template=resolved_template,
         )
 
     def route_stage(self, stage) -> RoutingDecision | None:
