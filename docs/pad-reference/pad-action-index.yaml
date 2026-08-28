@@ -1,0 +1,3123 @@
+# PAD Action Index
+# Purpose: one entry per Power Automate Desktop action, keyed by friendly_name/description
+# for curation-time search. Complements vbo_catalogue.yaml (BP VBO runtime lookup).
+# Distinguishes confirmed (real syntax from PAD source) vs. description-only (PDF name + description,
+# no confirmed call site).
+#
+# Row format: dotted_name (if confirmed), friendly_name, category, description, confidence
+# ("confirmed" | "description-only"), syntax (only if confirmed), syntax_source (file:line, only if confirmed).
+# Never mark "confirmed" without a real syntax_source citation.
+#
+# Sources:
+# - docs/pad-reference/DF_PID_171_US_Loader.robin.txt
+# - docs/pad-reference/DF_PID_171_US_LIMS_Prelude_Main.robin.txt
+# - docs/*.robin files
+# - samples/pad/*.txt files
+
+actions:
+  Activate Cell in Excel Worksheet:
+    friendly_name: Activate Cell in Excel Worksheet
+    category: Excel - Advanced
+    description: Activates a cell in the active worksheet
+    confidence: description-only
+    alignment: unconfirmed
+  Add a key column to a table:
+    friendly_name: Add a key column to a table
+    category: Excel Online (Business)
+    description: Adds a key column to an Excel table
+    confidence: description-only
+  Add a member to a tag:
+    friendly_name: Add a member to a tag
+    category: Microsoft Teams
+    description: Adds a user to a tags
+    confidence: description-only
+  Add a member to a team:
+    friendly_name: Add a member to a team
+    category: Microsoft Teams
+    description: Adds a member to a team
+    confidence: description-only
+  Add a new row to selected environment:
+    friendly_name: Add a new row to selected environment
+    category: Microsoft Dataverse
+    description: Creates a new row in a table in a Power Platform environment
+    confidence: description-only
+  Add a row into a table:
+    friendly_name: Add a row into a table
+    category: Excel Online (Business)
+    description: Adds a new row into the Excel table
+    confidence: description-only
+  Add attachment:
+    friendly_name: Add attachment
+    category: SharePoint
+    description: Adds a new attachment to the specified list item
+    confidence: description-only
+    alignment: unconfirmed
+  Add file tag:
+    friendly_name: Add file tag
+    category: OneDrive
+    description: Adds a tag to a file
+    confidence: description-only
+  Add item to list:
+    friendly_name: Add item to list
+    category: Variables
+    description: Append a new item to a list
+    confidence: description-only
+    alignment: unconfirmed
+  Add multiple work queue items:
+    friendly_name: Add multiple work queue items
+    category: Work queues
+    description: Adds one or more work queue items to a work queue
+    confidence: description-only
+    alignment: unconfirmed
+  Add new worksheet:
+    friendly_name: Add new worksheet
+    category: Excel
+    description: Adds a new worksheet to the document of an Excel instance
+    confidence: description-only
+  Add to datetime:
+    friendly_name: Add to datetime
+    category: Date time
+    description: Adds or subtracts a specific number of seconds, minutes, hours or
+      days to a datetime value
+    confidence: description-only
+    alignment: unconfirmed
+  Add work queue item:
+    friendly_name: Add work queue item
+    category: Work queues
+    description: Adds a work queue item into a work queue
+    confidence: description-only
+    alignment: unconfirmed
+  Analyze entities:
+    friendly_name: Analyze entities
+    category: Google cognitive - Natural language
+    description: Invokes the Google Cloud Natural Language service named 'Analyze
+      Entities'
+    confidence: description-only
+  Analyze image:
+    friendly_name: Analyze image
+    category: Microsoft cognitive - Computer vision
+    description: Invokes the Microsoft Cognitive service named 'Analyze Image'
+    confidence: description-only
+  Analyze sentiment:
+    friendly_name: Analyze sentiment
+    category: Google cognitive - Natural language
+    description: Invokes the Google Cloud Natural Language service named 'Analyze
+      Sentiment'
+    confidence: description-only
+  Analyze syntax:
+    friendly_name: Analyze syntax
+    category: Google cognitive - Natural language
+    description: Invokes the Google Cloud Natural Language service named 'Analyze
+      Syntax'
+    confidence: description-only
+  Analyze tone:
+    friendly_name: Analyze tone
+    category: IBM cognitive - Tone analyzer
+    description: Invokes the IBM service named 'Analyze Tone'
+    confidence: description-only
+  Append cells in Excel worksheet:
+    friendly_name: Append cells in Excel worksheet
+    category: Excel - Advanced
+    description: Appends a range of cells to the active worksheet
+    confidence: description-only
+    alignment: unconfirmed
+  Append line to text:
+    friendly_name: Append line to text
+    category: Text
+    description: Appends a new line of text to a text value
+    confidence: description-only
+    alignment: unconfirmed
+  Attach:
+    friendly_name: Attach
+    category: SAP automation - Advanced
+    description: Attach the running SAP GUI application to an SAP instance
+    confidence: description-only
+  Attach disk:
+    friendly_name: Attach disk
+    category: Azure - Virtual machines - Disks
+    description: Attaches an existing disk to the virtual machine
+    confidence: description-only
+    alignment: unconfirmed
+  Attach to running Excel:
+    friendly_name: Attach to running Excel
+    category: Excel
+    description: Attaches to an Excel document that's already open
+    confidence: description-only
+  Attach to running Word:
+    friendly_name: Attach to running Word
+    category: Word
+    description: Attaches to a Word document that's already open
+    confidence: description-only
+  Attach volume:
+    friendly_name: Attach volume
+    category: AWS - EC2 - Volumes
+    description: Attaches an EBS volume to an EC2 instance
+    confidence: description-only
+  Auto fill cells in Excel worksheet:
+    friendly_name: Auto fill cells in Excel worksheet
+    category: Excel - Advanced
+    description: Auto fills a range with data based on the data of another range
+    confidence: description-only
+    alignment: unconfirmed
+  Block Input:
+    friendly_name: Block Input
+    category: Mouse and keyboard
+    description: Blocks user mouse and keyboard input
+    confidence: description-only
+  Case:
+    friendly_name: Case
+    category: Conditionals
+    description: An expression that, if met, a block of actions associated with that
+      particular case runs
+    confidence: description-only
+  Change text case:
+    friendly_name: Change text case
+    category: Text
+    description: Changes the casing of a text to uppercase, lowercase, title case
+      or sentence case
+    confidence: description-only
+    alignment: unconfirmed
+  Change working directory:
+    friendly_name: Change working directory
+    category: FTP
+    description: Sets the current working directory for an FTP connection
+    confidence: description-only
+  Check in file:
+    friendly_name: Check in file
+    category: SharePoint
+    description: Check in a checked out file in a document library
+    confidence: description-only
+  Check out file:
+    friendly_name: Check out file
+    category: SharePoint
+    description: Check out a file in a document library to prevent others from editing
+    confidence: description-only
+  Classify Image:
+    friendly_name: Classify Image
+    category: IBM cognitive - Visual recognition
+    description: Invokes the IBM service named 'Classify Image'
+    confidence: description-only
+  Clear cells in Excel worksheet:
+    friendly_name: Clear cells in Excel worksheet
+    category: Excel
+    description: Clears a range of cells or a named cell in the active worksheet
+    confidence: description-only
+  Clear clipboard contents:
+    friendly_name: Clear clipboard contents
+    category: Clipboard
+    description: Clears clipboard contents
+    confidence: description-only
+  Clear data table:
+    friendly_name: Clear data table
+    category: Variables - Data table
+    description: Deletes all the rows of the data table, keeping table headers
+    confidence: description-only
+    alignment: unconfirmed
+  Clear filters in Excel worksheet:
+    friendly_name: Clear filters in Excel worksheet
+    category: Excel
+    description: Clears filters on a specified column
+    confidence: description-only
+  Clear list:
+    friendly_name: Clear list
+    category: Variables
+    description: Remove all items from a list
+    confidence: description-only
+    alignment: unconfirmed
+  Click SAP UI element:
+    friendly_name: Click SAP UI element
+    category: SAP automation
+    description: Interacts through click action on any UI element of an SAP window
+    confidence: description-only
+    alignment: unconfirmed
+  Click UI element in window:
+    dotted_name: UIAutomation.Click.Click
+    friendly_name: Click UI element in window
+    category: UI automation
+    description: Clicks on any UI element of a window
+    confidence: confirmed
+    syntax: 'UIAutomation.Click.Click Element: appmask[''Window \''MESSAGE\''''][''Button
+      \''OK\''''] ClickType: UIAutomation.ClickType.LeftClick MousePositionRelativeToElement:
+      UIAutomation.RectangleEdgePoint.MiddleCenter OffsetX: 0 OffsetY: 0'
+    syntax_source: DF_PID_171_US_LIMS_Prelude_Main.robin.txt:483
+    alignment: confirmed
+  Click download link on web page:
+    friendly_name: Click download link on web page
+    category: Browser automation
+    description: Click on a link in a web page that results in downloading a file
+    confidence: description-only
+    alignment: unconfirmed
+  Click link on web page:
+    friendly_name: Click link on web page
+    category: Browser automation
+    description: Click on a link or any other element of a web page
+    confidence: description-only
+    alignment: unconfirmed
+  Close CMD session:
+    friendly_name: Close CMD session
+    category: CMD session
+    description: Closes a previously opened CMD session
+    confidence: description-only
+    alignment: unconfirmed
+  Close Excel:
+    friendly_name: Close Excel
+    category: Excel
+    description: Closes an Excel instance
+    confidence: description-only
+    alignment: unconfirmed
+  Close Outlook:
+    friendly_name: Close Outlook
+    category: Outlook
+    description: Closes a previously launched Outlook instance
+    confidence: description-only
+    alignment: unconfirmed
+  Close SAP connection:
+    friendly_name: Close SAP connection
+    category: SAP automation
+    description: Closes the SAP connection of the selected SAP instance
+    confidence: description-only
+    alignment: unconfirmed
+  Close SQL connection:
+    friendly_name: Close SQL connection
+    category: Database
+    description: Closes an open connection to a database
+    confidence: description-only
+    alignment: unconfirmed
+  Close Word:
+    friendly_name: Close Word
+    category: Word
+    description: Closes a Word instance
+    confidence: description-only
+    alignment: unconfirmed
+  Close connection:
+    friendly_name: Close connection
+    category: Active Directory
+    description: Closes the connection with the Active Directory server
+    confidence: description-only
+    alignment: unconfirmed
+  Close terminal session:
+    friendly_name: Close terminal session
+    category: Terminal emulation
+    description: Closes an open terminal session
+    confidence: description-only
+    alignment: unconfirmed
+  Close web browser:
+    friendly_name: Close web browser
+    category: Browser automation
+    description: Close a web browser window
+    confidence: description-only
+    alignment: unconfirmed
+  Close window:
+    friendly_name: Close window
+    category: UI automation - Windows
+    description: Closes a specific window
+    confidence: description-only
+    alignment: unconfirmed
+  Comment:
+    friendly_name: Comment
+    category: Flow control
+    description: User comment
+    confidence: description-only
+  Connect to Exchange server:
+    friendly_name: Connect to Exchange server
+    category: Exchange Server
+    description: Opens a new connection to an Exchange server
+    confidence: description-only
+  Connect to server:
+    friendly_name: Connect to server
+    category: Active Directory
+    description: Connects to an Active Directory server
+    confidence: description-only
+  Control screen saver:
+    friendly_name: Control screen saver
+    category: Workstation
+    description: Enables, disables, starts or stops the screensaver
+    confidence: description-only
+  Convert Base64 to file:
+    friendly_name: Convert Base64 to file
+    category: File
+    description: Converts a Base64 encoded text to file
+    confidence: description-only
+    alignment: unconfirmed
+  Convert JSON to custom object:
+    friendly_name: Convert JSON to custom object
+    category: Variables
+    description: Convert a JSON string to a custom object
+    confidence: description-only
+    alignment: unconfirmed
+  Convert Word Document to PDF:
+    friendly_name: Convert Word Document to PDF
+    category: Word Online (Business)
+    description: Gets a PDF version of the selected file
+    confidence: description-only
+  Convert binary data to file:
+    friendly_name: Convert binary data to file
+    category: File
+    description: Converts binary data to file
+    confidence: description-only
+    alignment: unconfirmed
+  Convert custom object to JSON:
+    friendly_name: Convert custom object to JSON
+    category: Variables
+    description: Convert a custom object to a JSON string
+    confidence: description-only
+    alignment: unconfirmed
+  Convert data table to text:
+    friendly_name: Convert data table to text
+    category: Variables - Data table
+    description: Converts a data table to a CSV text
+    confidence: description-only
+    alignment: unconfirmed
+  Convert datetime to text:
+    friendly_name: Convert datetime to text
+    category: Text
+    description: Converts a datetime value to text using a specified custom format
+    confidence: description-only
+    alignment: unconfirmed
+  Convert document:
+    friendly_name: Convert document
+    category: IBM cognitive - Document conversion
+    description: Invokes the IBM service named 'Convert Document'
+    confidence: description-only
+  Convert file:
+    friendly_name: Convert file
+    category: OneDrive
+    description: Converts a file to another format
+    confidence: description-only
+  Convert file to Base64:
+    friendly_name: Convert file to Base64
+    category: File
+    description: Converts a file to Base64 encoded text
+    confidence: description-only
+    alignment: unconfirmed
+  Convert file to binary data:
+    friendly_name: Convert file to binary data
+    category: File
+    description: Converts a file to binary data
+    confidence: description-only
+    alignment: unconfirmed
+  Convert file using path:
+    friendly_name: Convert file using path
+    category: OneDrive
+    description: Converts a file to another format using the path
+    confidence: description-only
+  Convert number to text:
+    friendly_name: Convert number to text
+    category: Text
+    description: Converts a number to text using a specified format
+    confidence: description-only
+    alignment: unconfirmed
+  Convert text to datetime:
+    friendly_name: Convert text to datetime
+    category: Text
+    description: Converts a text representation of a date and/or time value to a datetime
+    confidence: description-only
+    alignment: unconfirmed
+  Convert text to number:
+    friendly_name: Convert text to number
+    category: Text
+    description: Converts a text representation of a number to a numeric value
+    confidence: description-only
+    alignment: unconfirmed
+  Copy Excel worksheet:
+    friendly_name: Copy Excel worksheet
+    category: Excel - Advanced
+    description: Copies a worksheet from an Excel document
+    confidence: description-only
+    alignment: unconfirmed
+  Copy cells from Excel worksheet:
+    friendly_name: Copy cells from Excel worksheet
+    category: Excel - Advanced
+    description: Copies a range of cells from the active worksheet
+    confidence: description-only
+    alignment: unconfirmed
+  Copy file:
+    friendly_name: Copy file
+    category: OneDrive
+    description: Copies a file within OneDrive
+    confidence: description-only
+  Copy file using path:
+    friendly_name: Copy file using path
+    category: OneDrive
+    description: Copies a file within OneDrive by path
+    confidence: description-only
+  Copy file(s):
+    friendly_name: Copy file(s)
+    category: File
+    description: Copies one or more files into a destination folder
+    confidence: description-only
+  Copy folder:
+    friendly_name: Copy folder
+    category: Folder
+    description: Copies a folder into a destination folder
+    confidence: description-only
+  Create EC2 session:
+    friendly_name: Create EC2 session
+    category: AWS - EC2
+    description: Creates an EC2 client to automate EC2 web services
+    confidence: description-only
+    alignment: unconfirmed
+  Create FTP directory:
+    friendly_name: Create FTP directory
+    category: FTP
+    description: Creates a directory on an FTP server
+    confidence: description-only
+    alignment: unconfirmed
+  Create HTML content:
+    friendly_name: Create HTML content
+    category: Text
+    description: Generates rich HTML content and stores it in a variable
+    confidence: description-only
+    alignment: unconfirmed
+  Create a Teams meeting:
+    friendly_name: Create a Teams meeting
+    category: Microsoft Teams
+    description: Creates a meeting with a link at the bottom of the invite
+    confidence: description-only
+  Create a channel:
+    friendly_name: Create a channel
+    category: Microsoft Teams
+    description: Creates a new channel for a specific Team
+    confidence: description-only
+  Create a chat:
+    friendly_name: Create a chat
+    category: Microsoft Teams
+    description: Creates a one on one or group chat
+    confidence: description-only
+  Create a tag for a team:
+    friendly_name: Create a tag for a team
+    category: Microsoft Teams
+    description: Creates a tag
+    confidence: description-only
+  Create a team:
+    friendly_name: Create a team
+    category: Microsoft Teams
+    description: Creates a new team
+    confidence: description-only
+  Create contact (V2):
+    friendly_name: Create contact (V2)
+    category: Office 365 Outlook
+    description: Creates a new contact in a contacts folder
+    confidence: description-only
+  Create event (V4):
+    friendly_name: Create event (V4)
+    category: Office 365 Outlook
+    description: Creates a new event in a calendar
+    confidence: description-only
+  Create file:
+    friendly_name: Create file
+    category: OneDrive
+    description: Creates a file
+    confidence: description-only
+  Create folder:
+    dotted_name: Folder.Create
+    friendly_name: Create folder
+    category: Folder
+    description: Creates a new folder
+    confidence: confirmed
+    syntax: 'Folder.Create FolderPath: txt_RootPath FolderName: $''''''%txt_NewFolder%%obj_Config[''Path_SummaryReport'']%''''''
+      Folder=> txt_NewFolder'
+    syntax_source: PID171_loader.txt:287
+    alignment: confirmed
+  Create group:
+    friendly_name: Create group
+    category: Active Directory - Group
+    description: Creates a group in the Active Directory
+    confidence: description-only
+    alignment: unconfirmed
+  Create item:
+    friendly_name: Create item
+    category: SharePoint
+    description: Creates a new item in a SharePoint list
+    confidence: description-only
+    alignment: unconfirmed
+  Create managed disk:
+    friendly_name: Create managed disk
+    category: Azure - Virtual machines - Disks
+    description: Creates a managed disk with the specified settings
+    confidence: description-only
+    alignment: unconfirmed
+  Create new SAP session:
+    friendly_name: Create new SAP session
+    category: SAP automation
+    description: Creates a new SAP session based on the same SAP instance
+    confidence: description-only
+    alignment: unconfirmed
+  Create new data table:
+    friendly_name: Create new data table
+    category: Variables - Data table
+    description: Creates a new data table variable
+    confidence: description-only
+    alignment: unconfirmed
+  Create new document set:
+    friendly_name: Create new document set
+    category: SharePoint
+    description: Creates a new document list item
+    confidence: description-only
+    alignment: unconfirmed
+  Create new folder:
+    friendly_name: Create new folder
+    category: SharePoint
+    description: Creates a new folder or folder path
+    confidence: description-only
+    alignment: unconfirmed
+  Create new list:
+    friendly_name: Create new list
+    category: Variables
+    description: Create a new empty list
+    confidence: description-only
+    alignment: unconfirmed
+  Create new tab:
+    friendly_name: Create new tab
+    category: Browser automation
+    description: Create a new tab and navigate to the given URL
+    confidence: description-only
+    alignment: unconfirmed
+  Create object:
+    friendly_name: Create object
+    category: Active Directory - Object
+    description: Creates an object in the Active Directory
+    confidence: description-only
+  Create random text:
+    friendly_name: Create random text
+    category: Text
+    description: Generates a text of specified length consisting of random characters
+    confidence: description-only
+    alignment: unconfirmed
+  Create resource group:
+    friendly_name: Create resource group
+    category: Azure - Resource groups
+    description: Creates a new resource group
+    confidence: description-only
+    alignment: unconfirmed
+  Create session:
+    friendly_name: Create session
+    category: Azure
+    description: Creates an Azure session
+    confidence: description-only
+    alignment: unconfirmed
+  Create share link:
+    friendly_name: Create share link
+    category: OneDrive
+    description: Creates a share link for a file
+    confidence: description-only
+  Create share link by path:
+    friendly_name: Create share link by path
+    category: OneDrive
+    description: Creates a share link for a file using the path
+    confidence: description-only
+  Create sharing link for a file or folder:
+    friendly_name: Create sharing link for a file or folder
+    category: SharePoint
+    description: Creates sharing link for a file or folder
+    confidence: description-only
+  Create snapshot:
+    friendly_name: Create snapshot
+    category: AWS - EC2 - Snapshots
+    description: Creates a snapshot of an EBS volume and stores it in Amazon S3
+    confidence: description-only
+    alignment: unconfirmed
+  Create table:
+    friendly_name: Create table
+    category: Excel Online (Business)
+    description: Creates a new table in the Excel workbook
+    confidence: description-only
+    alignment: unconfirmed
+  Create text with GPT:
+    friendly_name: Create text with GPT
+    category: AI Builder
+    description: Gets a response generated by GPT
+    confidence: description-only
+  Create user:
+    friendly_name: Create user
+    category: Active Directory - User
+    description: Creates a user in the Active Directory
+    confidence: description-only
+    alignment: unconfirmed
+  Create volume:
+    friendly_name: Create volume
+    category: AWS - EC2 - Volumes
+    description: Creates an EBS volume
+    confidence: description-only
+    alignment: unconfirmed
+  Create worksheet:
+    friendly_name: Create worksheet
+    category: Excel Online (Business)
+    description: Creates a new worksheet in the Excel workbook
+    confidence: description-only
+  Crop text:
+    friendly_name: Crop text
+    category: Text
+    description: Retrieves a text value that occurs before, after or between the specified
+      text flags
+    confidence: description-only
+    alignment: unconfirmed
+  Decrease variable:
+    friendly_name: Decrease variable
+    category: Variables
+    description: Decrease the value of a variable by a specific amount
+    confidence: description-only
+    alignment: unconfirmed
+  Decrypt text with AES:
+    friendly_name: Decrypt text with AES
+    category: Cryptography
+    description: Decrypts text using AES decryption
+    confidence: description-only
+    alignment: unconfirmed
+  Decrypt to file with AES:
+    friendly_name: Decrypt to file with AES
+    category: Cryptography
+    description: Decrypts a string to a file with AES
+    confidence: description-only
+    alignment: unconfirmed
+  Default case:
+    friendly_name: Default case
+    category: Conditionals
+    description: A block of actions that is run, if no case expression has been met
+    confidence: description-only
+  Delete Excel worksheet:
+    friendly_name: Delete Excel worksheet
+    category: Excel - Advanced
+    description: Deletes a specific worksheet from an Excel instance
+    confidence: description-only
+    alignment: unconfirmed
+  Delete FTP directory:
+    friendly_name: Delete FTP directory
+    category: FTP
+    description: Deletes a directory from an FTP server
+    confidence: description-only
+  Delete FTP file:
+    friendly_name: Delete FTP file
+    category: FTP
+    description: Deletes one or more files from an FTP server
+    confidence: description-only
+  Delete Windows environment variable:
+    friendly_name: Delete Windows environment variable
+    category: System
+    description: Deletes an environment variable from a given scope
+    confidence: description-only
+    alignment: unconfirmed
+  Delete a member from a tag:
+    friendly_name: Delete a member from a tag
+    category: Microsoft Teams
+    description: Deletes a member from a tag
+    confidence: description-only
+  Delete a row:
+    friendly_name: Delete a row
+    category: Excel Online (Business)
+    description: Deletes a row using a key column
+    confidence: description-only
+  Delete a row from selected environment:
+    friendly_name: Delete a row from selected environment
+    category: Microsoft Dataverse
+    description: Deletes a row from a table in a Power Platform environment
+    confidence: description-only
+  Delete a tag:
+    friendly_name: Delete a tag
+    category: Microsoft Teams
+    description: Deletes a tag
+    confidence: description-only
+  Delete attachment:
+    friendly_name: Delete attachment
+    category: SharePoint
+    description: Deletes the specified attachment
+    confidence: description-only
+    alignment: unconfirmed
+  Delete column from Excel worksheet:
+    friendly_name: Delete column from Excel worksheet
+    category: Excel - Advanced
+    description: Deletes a selected column from an Excel instance
+    confidence: description-only
+    alignment: unconfirmed
+  Delete column from data table:
+    friendly_name: Delete column from data table
+    category: Variables - Data table
+    description: Deletes a data table column at the specified index
+    confidence: description-only
+    alignment: unconfirmed
+  Delete contact (V2):
+    friendly_name: Delete contact (V2)
+    category: Office 365 Outlook
+    description: Deletes a contact from a contacts folder
+    confidence: description-only
+  Delete disk:
+    friendly_name: Delete disk
+    category: Azure - Virtual machines - Disks
+    description: Deletes the managed disk with the specified name
+    confidence: description-only
+    alignment: unconfirmed
+  Delete duplicate rows from data table:
+    friendly_name: Delete duplicate rows from data table
+    category: Variables - Data table
+    description: Deletes all the rows that are duplicate from the data table
+    confidence: description-only
+    alignment: unconfirmed
+  Delete empty rows from data table:
+    friendly_name: Delete empty rows from data table
+    category: Variables - Data table
+    description: Deletes the rows of the data table that have all cells empty
+    confidence: description-only
+    alignment: unconfirmed
+  Delete event (V2):
+    friendly_name: Delete event (V2)
+    category: Office 365 Outlook
+    description: Deletes an event in a calendar
+    confidence: description-only
+  Delete file:
+    friendly_name: Delete file
+    category: OneDrive
+    description: Deletes a file
+    confidence: description-only
+  Delete file(s):
+    friendly_name: Delete file(s)
+    category: File
+    description: Deletes one or more files
+    confidence: description-only
+  Delete folder:
+    friendly_name: Delete folder
+    category: Folder
+    description: Deletes an existing folder and its contents
+    confidence: description-only
+    alignment: unconfirmed
+  Delete from Excel worksheet:
+    friendly_name: Delete from Excel worksheet
+    category: Excel - Advanced
+    description: Deletes a cell or a range of cells from the active worksheet
+    confidence: description-only
+    alignment: unconfirmed
+  Delete item:
+    friendly_name: Delete item
+    category: SharePoint
+    description: Deletes an item from a SharePoint list
+    confidence: description-only
+    alignment: unconfirmed
+  Delete object:
+    friendly_name: Delete object
+    category: Active Directory - Object
+    description: Deletes an object in the Active Directory
+    confidence: description-only
+  Delete resource group:
+    friendly_name: Delete resource group
+    category: Azure - Resource groups
+    description: Deletes the specified resource group and all the contained resources
+    confidence: description-only
+    alignment: unconfirmed
+  Delete row from Excel worksheet:
+    friendly_name: Delete row from Excel worksheet
+    category: Excel - Advanced
+    description: Deletes a selected row from an Excel instance
+    confidence: description-only
+    alignment: unconfirmed
+  Delete row from data table:
+    friendly_name: Delete row from data table
+    category: Variables - Data table
+    description: Deletes a data table row item
+    confidence: description-only
+    alignment: unconfirmed
+  Delete snapshot:
+    friendly_name: Delete snapshot
+    category: AWS - EC2 - Snapshots
+    description: Deletes the specified snapshot
+    confidence: description-only
+  Delete volume:
+    friendly_name: Delete volume
+    category: AWS - EC2 - Volumes
+    description: Deletes the specified EBS volume
+    confidence: description-only
+  Describe image:
+    friendly_name: Describe image
+    category: Microsoft cognitive - Computer vision
+    description: Invokes the Microsoft Cognitive service named 'Describe Image'
+    confidence: description-only
+  Describe instances:
+    friendly_name: Describe instances
+    category: AWS - EC2 - Instances
+    description: Returns all the information for the specified EC2 instance(s)
+    confidence: description-only
+  Describe snapshots:
+    friendly_name: Describe snapshots
+    category: AWS - EC2 - Snapshots
+    description: Describes the specified EBS snapshots available
+    confidence: description-only
+  Describe virtual machine:
+    friendly_name: Describe virtual machine
+    category: Azure - Virtual machines
+    description: Gets all the information for the virtual machine(s)
+    confidence: description-only
+  Describe volumes:
+    friendly_name: Describe volumes
+    category: AWS - EC2 - Volumes
+    description: Describes the specified EBS volumes
+    confidence: description-only
+  Detach disk:
+    friendly_name: Detach disk
+    category: Azure - Virtual machines - Disks
+    description: Detaches the disk from the virtual machine
+    confidence: description-only
+  Detach volume:
+    friendly_name: Detach volume
+    category: AWS - EC2 - Volumes
+    description: Detaches an EBS volume from an EC2 instance
+    confidence: description-only
+  Detect language:
+    friendly_name: Detect language
+    category: Microsoft cognitive - Text Analytics
+    description: Invokes the Microsoft Cognitive service named 'Text Analytics - Detect
+      Language'
+    confidence: description-only
+  Discard check out:
+    friendly_name: Discard check out
+    category: SharePoint
+    description: Discard the checkout of a file rather than saving it
+    confidence: description-only
+  Download a file or an image from selected environment:
+    friendly_name: Download a file or an image from selected environment
+    category: Microsoft Dataverse
+    description: Retrieves file or image data from a row
+    confidence: description-only
+  Download file(s) from FTP:
+    friendly_name: Download file(s) from FTP
+    category: FTP
+    description: Downloads one or more files from an FTP server
+    confidence: description-only
+  Download folder(s) from FTP:
+    friendly_name: Download folder(s) from FTP
+    category: FTP
+    description: Downloads one or more folders from an FTP server
+    confidence: description-only
+  Download from web:
+    friendly_name: Download from web
+    category: HTTP
+    description: Downloads text or a file from the web and stores it
+    confidence: description-only
+  Drag and drop UI element in window:
+    friendly_name: Drag and drop UI element in window
+    category: UI automation
+    description: Drags and drops a UI element of a window
+    confidence: description-only
+  Else:
+    friendly_name: Else
+    category: Conditionals
+    description: Marks the beginning of a block of actions that ran if the condition
+      specified in the preceding If statements aren't met
+    confidence: description-only
+  Else if:
+    friendly_name: Else if
+    category: Conditionals
+    description: Marks the beginning of a block of actions that ran if conditions
+      in preceding If statements aren't met
+    confidence: description-only
+  Empty folder:
+    friendly_name: Empty folder
+    category: Folder
+    description: Deletes all the contents of a folder without deleting the folder
+    confidence: description-only
+    alignment: unconfirmed
+  Empty recycle bin:
+    friendly_name: Empty recycle bin
+    category: Workstation
+    description: Deletes all files from the windows recycle bin
+    confidence: description-only
+  Encrypt from file with AES:
+    friendly_name: Encrypt from file with AES
+    category: Cryptography
+    description: Encrypts the contents of a file with AES
+    confidence: description-only
+    alignment: unconfirmed
+  Encrypt text with AES:
+    friendly_name: Encrypt text with AES
+    category: Cryptography
+    description: Encrypts text using AES encryption
+    confidence: description-only
+    alignment: unconfirmed
+  End:
+    friendly_name: End
+    category: Flow control
+    description: Set rules and manage the course of the flow
+    confidence: description-only
+  End EC2 session:
+    friendly_name: End EC2 session
+    category: AWS - EC2
+    description: Disposes an open EC2 client
+    confidence: description-only
+  End SAP transaction:
+    friendly_name: End SAP transaction
+    category: SAP automation
+    description: Closes the SAP transaction in a specific SAP instance
+    confidence: description-only
+  End region:
+    friendly_name: End region
+    category: Flow control
+    description: Marks the end of a group of actions
+    confidence: description-only
+  End session:
+    friendly_name: End session
+    category: Azure
+    description: Ends an Azure session
+    confidence: description-only
+  Escape text for regular expression:
+    friendly_name: Escape text for regular expression
+    category: Text
+    description: Escapes a minimal set of characters by replacing them with their
+      escape codes
+    confidence: description-only
+  Execute SQL statement:
+    friendly_name: Execute SQL statement
+    category: Database
+    description: Connects to a database and executes a SQL statement
+    confidence: description-only
+  Execute XPath expression:
+    friendly_name: Execute XPath expression
+    category: XML
+    description: Extracts values from an XML document based on the XPath query
+    confidence: description-only
+    alignment: unconfirmed
+  Exit loop:
+    friendly_name: Exit loop
+    category: Loops
+    description: Terminates the loop and the flow resumes at the next action
+    confidence: description-only
+  Exit subflow:
+    friendly_name: Exit subflow
+    category: Flow control
+    description: Exits current subflow and returns to the point it was called
+    confidence: description-only
+  Expand/collapse tree node in window:
+    friendly_name: Expand/collapse tree node in window
+    category: UI automation
+    description: Expands or collapses a node of a tree view residing in a window
+    confidence: description-only
+  Export email (V2):
+    friendly_name: Export email (V2)
+    category: Office 365 Outlook
+    description: Exports the content of the email in the EML file format
+    confidence: description-only
+  Extract PDF file pages to new PDF file:
+    friendly_name: Extract PDF file pages to new PDF file
+    category: PDF
+    description: Extracts pages from a PDF file to a new PDF file
+    confidence: description-only
+  Extract archive to folder:
+    friendly_name: Extract archive to folder
+    category: OneDrive
+    description: Extracts an archive file into a folder
+    confidence: description-only
+  Extract data from table:
+    friendly_name: Extract data from table
+    category: UI automation - Data Extraction
+    description: Extracts data from a table in the form of a datatable
+    confidence: description-only
+  Extract data from web page:
+    friendly_name: Extract data from web page
+    category: Browser automation - Web data extraction
+    description: Extract data from specific parts of a web page in the form of single
+      values, lists, rows or tables
+    confidence: description-only
+  Extract data from window:
+    friendly_name: Extract data from window
+    category: UI automation - Data Extraction
+    description: Extracts data from specific parts of a window in the form of single
+      values, lists, or tables
+    confidence: description-only
+  Extract folder:
+    friendly_name: Extract folder
+    category: SharePoint
+    description: Extracts an archive file into a SharePoint folder
+    confidence: description-only
+  Extract images from PDF:
+    friendly_name: Extract images from PDF
+    category: PDF
+    description: Extracts images from a PDF file
+    confidence: description-only
+  Extract tables from PDF:
+    friendly_name: Extract tables from PDF
+    category: PDF
+    description: Extracts tables from a PDF file
+    confidence: description-only
+  Extract text from PDF:
+    friendly_name: Extract text from PDF
+    category: PDF
+    description: Extracts text from a PDF file
+    confidence: description-only
+  Extract text with OCR:
+    friendly_name: Extract text with OCR
+    category: OCR
+    description: Extracts text from a given source using the given OCR engine
+    confidence: description-only
+  Filter cells in Excel worksheet:
+    friendly_name: Filter cells in Excel worksheet
+    category: Excel
+    description: Applies filters on a specified column
+    confidence: description-only
+  Filter data table:
+    friendly_name: Filter data table
+    category: Variables - Data table
+    description: Filters the data table rows based on the applied rules
+    confidence: description-only
+    alignment: unconfirmed
+  Find and replace cells in Excel worksheet:
+    friendly_name: Find and replace cells in Excel worksheet
+    category: Excel - Advanced
+    description: Finds text and replaces it with another in the active worksheet
+    confidence: description-only
+  Find and replace words in Word document:
+    friendly_name: Find and replace words in Word document
+    category: Word
+    description: Finds text and replaces it with another in the active worksheet
+    confidence: description-only
+  Find common list items:
+    friendly_name: Find common list items
+    category: Variables
+    description: Compare two lists and create a new list with the items that are common
+      to both
+    confidence: description-only
+  Find files in folder:
+    friendly_name: Find files in folder
+    category: OneDrive
+    description: Finds files within a folder using search or name pattern match
+    confidence: description-only
+  Find files in folder by path:
+    friendly_name: Find files in folder by path
+    category: OneDrive
+    description: Finds files within a folder by path using search or name pattern
+      match
+    confidence: description-only
+  Find meeting times (V2):
+    friendly_name: Find meeting times (V2)
+    category: Office 365 Outlook
+    description: Finds meeting time suggestions based on organizer and attendee availability
+    confidence: description-only
+  Find or replace in data table:
+    friendly_name: Find or replace in data table
+    category: Variables - Data table
+    description: Finds and/or replaces data table values
+    confidence: description-only
+    alignment: unconfirmed
+  Flag email (V2):
+    friendly_name: Flag email (V2)
+    category: Office 365 Outlook
+    description: Updates an email flag
+    confidence: description-only
+  Focus text field in window:
+    dotted_name: UIAutomation.FocusWindow.Focus
+    friendly_name: Focus text field in window
+    category: UI automation - Form filling
+    description: Sets the focus on a text box of a window
+    confidence: confirmed
+    syntax: 'UIAutomation.FocusWindow.Focus Window: appmask[''Window \''SampleManager
+      LIMS - Explorer\''''][''Window \''Result Entry\'''']'
+    syntax_source: PID171_performer.txt:482
+    alignment: confirmed
+  Focus text field on web page:
+    friendly_name: Focus text field on web page
+    category: Browser automation - Web form filling
+    description: Set the focus on an input element of a web page
+    confidence: description-only
+    alignment: unconfirmed
+  Focus window:
+    dotted_name: UIAutomation.FocusWindow.Focus
+    friendly_name: Focus window
+    category: UI automation - Windows
+    description: Activates and brings to the foreground a specific window
+    confidence: confirmed
+    syntax: 'UIAutomation.FocusWindow.Focus Window: appmask[''Window \''SampleManager
+      LIMS - Explorer\''''][''Window \''Result Entry Analysis\'''']'
+    syntax_source: PID171_performer.txt:615
+    alignment: confirmed
+  For each:
+    friendly_name: For each
+    category: Loops
+    description: Iterates over items in a list, data table or data row
+    confidence: description-only
+  Forward an email (V2):
+    friendly_name: Forward an email (V2)
+    category: Office 365 Outlook
+    description: Forwards an email
+    confidence: description-only
+  Generate document using Microsoft Syntex:
+    friendly_name: Generate document using Microsoft Syntex
+    category: SharePoint
+    description: Creates documents based on modern templates from Microsoft Syntex
+    confidence: description-only
+  Generate random number:
+    friendly_name: Generate random number
+    category: Variables
+    description: Generate a random number or a list of random numbers that fall between
+      a minimum and maximum value
+    confidence: description-only
+  Get Attachment (V2):
+    friendly_name: Get Attachment (V2)
+    category: Office 365 Outlook
+    description: Gets an email attachment by id
+    confidence: description-only
+  Get Windows environment variable:
+    friendly_name: Get Windows environment variable
+    category: System
+    description: Retrieves the value of an environment variable
+    confidence: description-only
+    alignment: unconfirmed
+  Get XML element attribute:
+    friendly_name: Get XML element attribute
+    category: XML
+    description: Gets the value of an attribute of an XML element
+    confidence: description-only
+  Get XML element value:
+    friendly_name: Get XML element value
+    category: XML
+    description: Gets the value of an XML element
+    confidence: description-only
+  Get a row:
+    friendly_name: Get a row
+    category: Excel Online (Business)
+    description: Gets a row using a key column
+    confidence: description-only
+  Get a row by ID from selected environment:
+    friendly_name: Get a row by ID from selected environment
+    category: Microsoft Dataverse
+    description: Gets a row from a table in a Power Platform environment
+    confidence: description-only
+  Get a team:
+    friendly_name: Get a team
+    category: Microsoft Teams
+    description: Returns details for a team using the team's unique ID
+    confidence: description-only
+  Get active Excel worksheet:
+    friendly_name: Get active Excel worksheet
+    category: Excel - Advanced
+    description: Retrieves an Excel document's active worksheet
+    confidence: description-only
+    alignment: unconfirmed
+  Get active cell on Excel worksheet:
+    friendly_name: Get active cell on Excel worksheet
+    category: Excel
+    description: Gets the active cell in the active worksheet
+    confidence: description-only
+    alignment: unconfirmed
+  Get all Excel worksheets:
+    friendly_name: Get all Excel worksheets
+    category: Excel - Advanced
+    description: Retrieves all worksheet names of an Excel document
+    confidence: description-only
+    alignment: unconfirmed
+  Get all lists and libraries:
+    friendly_name: Get all lists and libraries
+    category: SharePoint
+    description: Gets all lists and libraries
+    confidence: description-only
+  Get an mention token for a tag:
+    friendly_name: Get an mention token for a tag
+    category: Microsoft Teams
+    description: Creates a token that can be inserted into a message
+    confidence: description-only
+  Get an mention token for a user:
+    friendly_name: Get an mention token for a user
+    category: Microsoft Teams
+    description: Creates a token for @mentioning a user
+    confidence: description-only
+  Get attachment content:
+    friendly_name: Get attachment content
+    category: SharePoint
+    description: Returns file contents using the file identifier
+    confidence: description-only
+  Get attachments:
+    friendly_name: Get attachments
+    category: SharePoint
+    description: Returns the list of attachments for the specified list item
+    confidence: description-only
+  Get available EC2 instances:
+    friendly_name: Get available EC2 instances
+    category: AWS - EC2 - Instances
+    description: Gets information for the relevant EC2 instances
+    confidence: description-only
+  Get calendar view of events (V3):
+    friendly_name: Get calendar view of events (V3)
+    category: Office 365 Outlook
+    description: Gets all events in a calendar using Graph API
+    confidence: description-only
+  Get calendars (V2):
+    friendly_name: Get calendars (V2)
+    category: Office 365 Outlook
+    description: Lists available calendars
+    confidence: description-only
+  Get changes for an item or a file:
+    friendly_name: Get changes for an item or a file
+    category: SharePoint
+    description: Returns information about columns that have changed
+    confidence: description-only
+  Get clipboard text:
+    friendly_name: Get clipboard text
+    category: Clipboard
+    description: Gets clipboard text
+    confidence: description-only
+  Get column name on Excel worksheet:
+    friendly_name: Get column name on Excel worksheet
+    category: Excel
+    description: Gets the name of the column
+    confidence: description-only
+  Get contact (V2):
+    friendly_name: Get contact (V2)
+    category: Office 365 Outlook
+    description: Gets a specific contact from a contacts folder
+    confidence: description-only
+  Get contacts (V2):
+    friendly_name: Get contacts (V2)
+    category: Office 365 Outlook
+    description: Gets contacts from a contacts folder
+    confidence: description-only
+  Get credential:
+    friendly_name: Get credential
+    category: Power Automate secret variables
+    description: Retrieves the values of a credential created through Power Automate's
+      portal page
+    confidence: description-only
+  Get current date and time:
+    friendly_name: Get current date and time
+    category: Date time
+    description: Retrieves the current date or the current date and time
+    confidence: description-only
+  Get default printer:
+    friendly_name: Get default printer
+    category: Workstation
+    description: Gets the name of the default printer
+    confidence: description-only
+  Get details of SAP UI element:
+    friendly_name: Get details of SAP UI element
+    category: SAP automation
+    description: Gets the value of an SAP UI element's attribute in an SAP window
+    confidence: description-only
+  Get details of a UI element in window:
+    friendly_name: Get details of a UI element in window
+    category: UI automation - Data Extraction
+    description: Gets the value of a UI element's attribute in a window
+    confidence: description-only
+  Get details of element on web page:
+    friendly_name: Get details of element on web page
+    category: Browser automation - Web data extraction
+    description: Get the value of an element's attribute on a web page
+    confidence: description-only
+  Get details of web page:
+    friendly_name: Get details of web page
+    category: Browser automation - Web data extraction
+    description: Get a property of a web page, such as its title or its source text
+    confidence: description-only
+  Get details of window:
+    friendly_name: Get details of window
+    category: UI automation - Data Extraction
+    description: Gets a property of a window such as its title or its source text
+    confidence: description-only
+    alignment: unconfirmed
+  Get disks:
+    friendly_name: Get disks
+    category: Azure - Virtual machines - Disks
+    description: Gets the disks based on the specified criteria
+    confidence: description-only
+  Get email (V2):
+    friendly_name: Get email (V2)
+    category: Office 365 Outlook
+    description: Gets an email by id
+    confidence: description-only
+  Get emails (V3):
+    friendly_name: Get emails (V3)
+    category: Office 365 Outlook
+    description: Gets emails from a folder via graph apis
+    confidence: description-only
+  Get empty cell:
+    friendly_name: Get empty cell
+    category: Excel
+    description: Gets an empty cell
+    confidence: description-only
+  Get event (V3):
+    friendly_name: Get event (V3)
+    category: Office 365 Outlook
+    description: Gets a specific event from a calendar using Graph API
+    confidence: description-only
+  Get events (V4):
+    friendly_name: Get events (V4)
+    category: Office 365 Outlook
+    description: Gets events from a calendar using Graph API
+    confidence: description-only
+  Get file content:
+    friendly_name: Get file content
+    category: OneDrive
+    description: Gets the content of a file
+    confidence: description-only
+  Get file content using path:
+    friendly_name: Get file content using path
+    category: OneDrive
+    description: Gets the content of a file using the path
+    confidence: description-only
+  Get file metadata:
+    friendly_name: Get file metadata
+    category: OneDrive
+    description: Gets the metadata for a file
+    confidence: description-only
+  Get file metadata using path:
+    friendly_name: Get file metadata using path
+    category: OneDrive
+    description: Gets the metadata of a file using the path
+    confidence: description-only
+  Get file path part:
+    friendly_name: Get file path part
+    category: File
+    description: Retrieves one or more parts from a text that represents a file path
+    confidence: description-only
+    alignment: unconfirmed
+  Get file properties:
+    friendly_name: Get file properties
+    category: SharePoint
+    description: Gets the properties saved in the columns in the library
+    confidence: description-only
+  Get file tags:
+    friendly_name: Get file tags
+    category: OneDrive
+    description: Gets the tags of a file
+    confidence: description-only
+  Get file thumbnail:
+    friendly_name: Get file thumbnail
+    category: OneDrive
+    description: Gets the thumbnail of a file
+    confidence: description-only
+  Get files (properties only):
+    friendly_name: Get files (properties only)
+    category: SharePoint
+    description: Gets the properties saved in the columns in the library for all files
+    confidence: description-only
+  Get files in folder:
+    friendly_name: Get files in folder
+    category: Folder
+    description: Retrieve the list of files in a folder
+    confidence: description-only
+    alignment: unconfirmed
+  Get first free column/row from Excel worksheet:
+    friendly_name: Get first free column/row from Excel worksheet
+    category: Excel
+    description: Retrieves the first free column and/or row of the active worksheet
+    confidence: description-only
+    alignment: unconfirmed
+  Get first free row on column from Excel worksheet:
+    friendly_name: Get first free row on column from Excel worksheet
+    category: Excel - Advanced
+    description: Retrieves the first free row given the column
+    confidence: description-only
+    alignment: unconfirmed
+  Get folder metadata:
+    friendly_name: Get folder metadata
+    category: SharePoint
+    description: Gets information about the folder
+    confidence: description-only
+  Get folder metadata using path:
+    friendly_name: Get folder metadata using path
+    category: SharePoint
+    description: Gets information about the folder using path
+    confidence: description-only
+  Get group info:
+    friendly_name: Get group info
+    category: Active Directory - Group
+    description: Gets information about a group from the Active Directory server
+    confidence: description-only
+  Get group members:
+    friendly_name: Get group members
+    category: Active Directory - Group
+    description: Gets the members of a group in the Active Directory
+    confidence: description-only
+  Get item:
+    friendly_name: Get item
+    category: SharePoint
+    description: Gets a single item by its id from a SharePoint list
+    confidence: description-only
+  Get items:
+    friendly_name: Get items
+    category: SharePoint
+    description: Gets items from a SharePoint list
+    confidence: description-only
+  Get keyboard identifier:
+    friendly_name: Get keyboard identifier
+    category: Mouse and keyboard
+    description: Retrieves the active keyboard identifier from the machine's registry
+    confidence: description-only
+  Get last error:
+    friendly_name: Get last error
+    category: Flow control
+    description: Retrieves the last error that occurred in the flow
+    confidence: description-only
+  Get list views:
+    friendly_name: Get list views
+    category: SharePoint
+    description: Gets views from a SharePoint list
+    confidence: description-only
+  Get lists:
+    friendly_name: Get lists
+    category: SharePoint
+    description: Gets SharePoint lists from a site
+    confidence: description-only
+  Get message details:
+    friendly_name: Get message details
+    category: Microsoft Teams
+    description: Gets details of a message in a chat or channel
+    confidence: description-only
+  Get messages:
+    friendly_name: Get messages
+    category: Microsoft Teams
+    description: Gets messages from a channel in a specific Team
+    confidence: description-only
+  Get mouse position:
+    friendly_name: Get mouse position
+    category: Mouse and keyboard
+    description: Retrieves the current position of the mouse cursor on the screen
+    confidence: description-only
+  Get password from CyberArk:
+    friendly_name: Get password from CyberArk
+    category: CyberArk
+    description: Retrieves a password for a specific application from CyberArk
+    confidence: description-only
+  Get resource groups:
+    friendly_name: Get resource groups
+    category: Azure - Resource groups
+    description: Gets the resource groups based on the specified criteria
+    confidence: description-only
+  Get response details:
+    friendly_name: Get response details
+    category: Microsoft Forms
+    description: Retrieves a form response
+    confidence: description-only
+  Get room lists (V2):
+    friendly_name: Get room lists (V2)
+    category: Office 365 Outlook
+    description: Gets all the room lists defined in the user's tenant
+    confidence: description-only
+  Get rooms (V2):
+    friendly_name: Get rooms (V2)
+    category: Office 365 Outlook
+    description: Gets all the meeting rooms defined in the user's tenant
+    confidence: description-only
+  Get rooms in room list (V2):
+    friendly_name: Get rooms in room list (V2)
+    category: Office 365 Outlook
+    description: Gets the meeting rooms in a specific room list
+    confidence: description-only
+  Get screen resolution:
+    friendly_name: Get screen resolution
+    category: Workstation
+    description: Gets the width, height, bit count and frequency of a selected monitor
+    confidence: description-only
+    alignment: unconfirmed
+  Get selected cell range from Excel worksheet:
+    friendly_name: Get selected cell range from Excel worksheet
+    category: Excel - Advanced
+    description: Retrieves the selected range of cells in a structure
+    confidence: description-only
+    alignment: unconfirmed
+  Get selected checkboxes in window:
+    friendly_name: Get selected checkboxes in window
+    category: UI automation - Data Extraction
+    description: Retrieves the names of the selected checkboxes in a checkbox group
+    confidence: description-only
+  Get selected radio button in window:
+    friendly_name: Get selected radio button in window
+    category: UI automation - Data Extraction
+    description: Retrieves the names of the selected radio button in a radio button
+      group
+    confidence: description-only
+  Get snapshots:
+    friendly_name: Get snapshots
+    category: Azure - Virtual machines - Snapshots
+    description: Gets the snapshots based on the specified criteria
+    confidence: description-only
+  Get special folder:
+    friendly_name: Get special folder
+    category: Folder
+    description: Retrieves the path of a Windows special folder
+    confidence: description-only
+  Get subfolders in folder:
+    friendly_name: Get subfolders in folder
+    category: Folder
+    description: Retrieve the list of subfolders in a folder
+    confidence: description-only
+  Get subscriptions:
+    friendly_name: Get subscriptions
+    category: Azure
+    description: Gets subscriptions that the current account can access
+    confidence: description-only
+  Get subtext:
+    friendly_name: Get subtext
+    category: Text
+    description: Retrieves a subtext from a text value
+    confidence: description-only
+  Get table range from Excel worksheet:
+    friendly_name: Get table range from Excel worksheet
+    category: Excel - Advanced
+    description: Retrieves the range of a table in the active worksheet
+    confidence: description-only
+    alignment: unconfirmed
+  Get tables:
+    friendly_name: Get tables
+    category: Excel Online (Business)
+    description: Gets a list of tables in the Excel workbook
+    confidence: description-only
+  Get temporary file:
+    friendly_name: Get temporary file
+    category: File
+    description: Creates a uniquely named, empty temporary file on disk
+    confidence: description-only
+    alignment: unconfirmed
+  Get text from terminal session:
+    friendly_name: Get text from terminal session
+    category: Terminal emulation
+    description: Gets text from a terminal session
+    confidence: description-only
+  Get user info:
+    friendly_name: Get user info
+    category: Active Directory - User
+    description: Gets a user's information in the Active Directory
+    confidence: description-only
+  Get virtual machines:
+    friendly_name: Get virtual machines
+    category: Azure - Virtual machines
+    description: Gets the basic information for the virtual machines
+    confidence: description-only
+  Get window:
+    friendly_name: Get window
+    category: UI automation - Windows
+    description: Gets a running window, for automating desktop applications
+    confidence: description-only
+    alignment: unconfirmed
+  Get work queue items by filter:
+    friendly_name: Get work queue items by filter
+    category: Work queues
+    description: Retrieves one or more work queue items based on FetchXML filtering
+    confidence: description-only
+    alignment: unconfirmed
+  Get worksheets:
+    friendly_name: Get worksheets
+    category: Excel Online (Business)
+    description: Gets a list of worksheets in the Excel workbook
+    confidence: description-only
+    alignment: unconfirmed
+  Go to:
+    friendly_name: Go to
+    category: Flow control
+    description: Transfers the flow of execution to another point
+    confidence: description-only
+  Go to web page:
+    friendly_name: Go to web page
+    category: Browser automation
+    description: Navigate the web browser to a new page
+    confidence: description-only
+  Grant access to an item or a folder:
+    friendly_name: Grant access to an item or a folder
+    category: SharePoint
+    description: Grant access to an item or a folder in SharePoint to specific people
+    confidence: description-only
+  Hash from file:
+    friendly_name: Hash from file
+    category: Cryptography
+    description: Hashs the contents of a file using a specified algorithm
+    confidence: description-only
+  Hash from file with key:
+    friendly_name: Hash from file with key
+    category: Cryptography
+    description: Hashs the contents of a file with a key
+    confidence: description-only
+  Hash text:
+    friendly_name: Hash text
+    category: Cryptography
+    description: Hashs a string using a specified algorithm
+    confidence: description-only
+  Hash text with key:
+    friendly_name: Hash text with key
+    category: Cryptography
+    description: Hashs a string with a key using a specified algorithm
+    confidence: description-only
+    alignment: unconfirmed
+  Hover mouse over UI element in window:
+    friendly_name: Hover mouse over UI element in window
+    category: UI automation
+    description: Hover the mouse over any UI element on window
+    confidence: description-only
+  Hover mouse over element on web page:
+    friendly_name: Hover mouse over element on web page
+    category: Browser automation
+    description: Hover the mouse over an element of a web page
+    confidence: description-only
+  Identify language:
+    friendly_name: Identify language
+    category: IBM cognitive - Language translator
+    description: Invokes the IBM service named 'Identify Language'
+    confidence: description-only
+  If:
+    friendly_name: If
+    category: Conditionals
+    description: Marks the beginning of a block of actions that is run if the condition
+      is met
+    confidence: description-only
+  If file exists:
+    friendly_name: If file exists
+    category: File
+    description: Marks the beginning of a conditional block depending on whether a
+      file exists
+    confidence: description-only
+  If folder exists:
+    friendly_name: If folder exists
+    category: Folder
+    description: Mark the beginning of a conditional block of actions depending on
+      whether a folder exists
+    confidence: description-only
+  If image:
+    friendly_name: If image
+    category: UI automation
+    description: Mark the beginning of a conditional block depending on whether a
+      selected image is found on the screen or not
+    confidence: description-only
+  If process:
+    friendly_name: If process
+    category: System
+    description: Marks the beginning of a conditional block depending on whether a
+      process is running
+    confidence: description-only
+  If service:
+    friendly_name: If service
+    category: Windows services
+    description: Marks the beginning of a conditional block depending on whether a
+      service is running
+    confidence: description-only
+  If text on screen (OCR):
+    friendly_name: If text on screen (OCR)
+    category: OCR
+    description: Marks the beginning of a conditional block depending on whether a
+      given text appears on the screen
+    confidence: description-only
+  If web page contains:
+    friendly_name: If web page contains
+    category: Browser automation
+    description: Mark the beginning of a conditional block of actions depending on
+      whether a specific piece of text or element exists in a web page
+    confidence: description-only
+  If window:
+    friendly_name: If window
+    category: UI automation
+    description: Mark the beginning of a conditional block depending on whether a
+      window is open or focused
+    confidence: description-only
+    alignment: unconfirmed
+  If window contains:
+    friendly_name: If window contains
+    category: UI automation
+    description: Mark the beginning of a conditional block of actions depending on
+      whether a specific piece of text or UI element exists in a window
+    confidence: description-only
+    alignment: unconfirmed
+  Image properties detection:
+    friendly_name: Image properties detection
+    category: Google cognitive - Vision
+    description: Invokes the Google Cloud Vision service named 'Image Properties Detection'
+    confidence: description-only
+  Increase variable:
+    friendly_name: Increase variable
+    category: Variables
+    description: Increase the value of a variable by a specific amount
+    confidence: description-only
+    alignment: unconfirmed
+  Insert XML element:
+    friendly_name: Insert XML element
+    category: XML
+    description: Inserts a new XML element into an XML document
+    confidence: description-only
+  Insert column into data table:
+    friendly_name: Insert column into data table
+    category: Variables - Data table
+    description: Inserts a column at the end or before a specific index
+    confidence: description-only
+    alignment: unconfirmed
+  Insert column to Excel worksheet:
+    friendly_name: Insert column to Excel worksheet
+    category: Excel - Advanced
+    description: Inserts a column to the left of a selected column
+    confidence: description-only
+    alignment: unconfirmed
+  Insert image in Word document:
+    friendly_name: Insert image in Word document
+    category: Word
+    description: Inserts an image to a Word file
+    confidence: description-only
+  Insert row into data table:
+    friendly_name: Insert row into data table
+    category: Variables - Data table
+    description: Inserts a row at the end or before a specific index value
+    confidence: description-only
+    alignment: unconfirmed
+  Insert row to Excel worksheet:
+    friendly_name: Insert row to Excel worksheet
+    category: Excel - Advanced
+    description: Inserts a row above a selected row
+    confidence: description-only
+    alignment: unconfirmed
+  Invoke FTP command:
+    friendly_name: Invoke FTP command
+    category: FTP
+    description: Invokes the given literal FTP command on the server
+    confidence: description-only
+  Invoke SOAP web service:
+    friendly_name: Invoke SOAP web service
+    category: HTTP
+    description: Invokes a method from a SOAP web service
+    confidence: description-only
+  Invoke web service:
+    friendly_name: Invoke web service
+    category: HTTP
+    description: Invokes a web service by sending data and retrieves the response
+    confidence: description-only
+  Join data tables:
+    friendly_name: Join data tables
+    category: Variables - Data table
+    description: Joins two data tables based on the specified join rule
+    confidence: description-only
+    alignment: unconfirmed
+  Join text:
+    friendly_name: Join text
+    category: Text
+    description: Converts a list into a text value by separating its items with a
+      delimiter
+    confidence: description-only
+    alignment: unconfirmed
+  Key phrases:
+    friendly_name: Key phrases
+    category: Microsoft cognitive - Text Analytics
+    description: Invokes the Microsoft Cognitive service named 'Text Analytics - Key
+      Phrases'
+    confidence: description-only
+  Label:
+    friendly_name: Label
+    category: Flow control
+    description: Acts as the destination of a go to statement
+    confidence: description-only
+  Label detection:
+    friendly_name: Label detection
+    category: Google cognitive - Vision
+    description: Invokes the Google Cloud Vision service named 'Label Detection'
+    confidence: description-only
+  Landmark detection:
+    friendly_name: Landmark detection
+    category: Google cognitive - Vision
+    description: Invokes the Google Cloud Vision service named 'Landmark Detection'
+    confidence: description-only
+  Launch Excel:
+    friendly_name: Launch Excel
+    category: Excel
+    description: Launches a new Excel instance or opens an Excel document
+    confidence: description-only
+    alignment: unconfirmed
+  Launch Outlook:
+    friendly_name: Launch Outlook
+    category: Outlook
+    description: Launches Outlook and creates a new Outlook instance
+    confidence: description-only
+  Launch SAP:
+    friendly_name: Launch SAP
+    category: SAP automation
+    description: Opens the SAP GUI application and connect to an SAP system
+    confidence: description-only
+  Launch Word:
+    friendly_name: Launch Word
+    category: Word
+    description: Opens a new Word instance or opens a Word document
+    confidence: description-only
+  Launch new Chrome:
+    friendly_name: Launch new Chrome
+    category: Browser automation
+    description: Launch a new instance or attach to a running instance of Chrome
+    confidence: description-only
+  Launch new Edge:
+    friendly_name: Launch new Edge
+    category: Browser automation
+    description: Launch a new instance or attach to a running instance of Edge
+    confidence: description-only
+  Launch new Firefox:
+    friendly_name: Launch new Firefox
+    category: Browser automation
+    description: Launch a new instance or attach to a running instance of Firefox
+    confidence: description-only
+  Launch new Internet Explorer:
+    friendly_name: Launch new Internet Explorer
+    category: Browser automation
+    description: Launch a new instance or attach to a running instance of Internet
+      Explorer
+    confidence: description-only
+  List all RSS feed items:
+    friendly_name: List all RSS feed items
+    category: RSS
+    description: Retrieves all items from an RSS feed
+    confidence: description-only
+  List all tags for a team:
+    friendly_name: List all tags for a team
+    category: Microsoft Teams
+    description: Retrieves a list of tags
+    confidence: description-only
+  List channels:
+    friendly_name: List channels
+    category: Microsoft Teams
+    description: Retrieves a list of all the channels for a specific Team
+    confidence: description-only
+  List chats:
+    friendly_name: List chats
+    category: Microsoft Teams
+    description: Retrieves a list of recent chats
+    confidence: description-only
+  List files in folder:
+    friendly_name: List files in folder
+    category: OneDrive
+    description: Gets the list of files and subfolders in a folder
+    confidence: description-only
+  List files in root folder:
+    friendly_name: List files in root folder
+    category: OneDrive
+    description: Gets the list of files and subfolders in the root folder
+    confidence: description-only
+  List folder:
+    friendly_name: List folder
+    category: SharePoint
+    description: Returns files contained in a SharePoint folder
+    confidence: description-only
+  List members:
+    friendly_name: List members
+    category: Microsoft Teams
+    description: Lists members based on a threadtype
+    confidence: description-only
+  List root folder:
+    friendly_name: List root folder
+    category: SharePoint
+    description: Returns files in the root SharePoint folder
+    confidence: description-only
+  List rows from selected environment:
+    friendly_name: List rows from selected environment
+    category: Microsoft Dataverse
+    description: Lists rows from a table in a Power Platform environment
+    confidence: description-only
+  List rows present in a table:
+    friendly_name: List rows present in a table
+    category: Excel Online (Business)
+    description: Lists rows present in a table
+    confidence: description-only
+  List teams:
+    friendly_name: List teams
+    category: Microsoft Teams
+    description: Retrieves a list of all the Teams
+    confidence: description-only
+  List the members for a tag:
+    friendly_name: List the members for a tag
+    category: Microsoft Teams
+    description: Lists the members for a tag
+    confidence: description-only
+  Lock workstation:
+    friendly_name: Lock workstation
+    category: Workstation
+    description: Locks the workstation's display to protect it from unauthorized use
+    confidence: description-only
+  Log Message:
+    friendly_name: Log Message
+    category: Logging
+    description: Adds a custom text message to the flow run action details
+    confidence: description-only
+  Log off user:
+    friendly_name: Log off user
+    category: Workstation
+    description: Logs off the current user
+    confidence: description-only
+  Logo detection:
+    friendly_name: Logo detection
+    category: Google cognitive - Vision
+    description: Invokes the Google Cloud Vision service named 'Logo Detection'
+    confidence: description-only
+  Lookup range in Excel worksheet:
+    friendly_name: Lookup range in Excel worksheet
+    category: Excel - Advanced
+    description: Finds and returns the result of Excel's LOOKUP function
+    confidence: description-only
+    alignment: unconfirmed
+  Loop:
+    friendly_name: Loop
+    category: Loops
+    description: Iterates a block of actions for a specified number of times
+    confidence: description-only
+  Loop condition:
+    friendly_name: Loop condition
+    category: Loops
+    description: Iterates a block of actions as long as a specified condition proves
+      to be true
+    confidence: description-only
+  Mark as read or unread (V3):
+    friendly_name: Mark as read or unread (V3)
+    category: Office 365 Outlook
+    description: Marks an email as read/unread
+    confidence: description-only
+  Merge PDF files:
+    friendly_name: Merge PDF files
+    category: PDF
+    description: Merges multiple PDF files into a new one
+    confidence: description-only
+  Merge data tables:
+    friendly_name: Merge data tables
+    category: Variables - Data table
+    description: Merges two data tables together
+    confidence: description-only
+    alignment: unconfirmed
+  Merge lists:
+    friendly_name: Merge lists
+    category: Variables
+    description: Merge two lists into one
+    confidence: description-only
+    alignment: unconfirmed
+  Modify group:
+    friendly_name: Modify group
+    category: Active Directory - Group
+    description: Modifies a group in the Active Directory
+    confidence: description-only
+  Modify user:
+    friendly_name: Modify user
+    category: Active Directory - User
+    description: Modifies a user in the Active Directory
+    confidence: description-only
+  Move cursor on terminal session:
+    friendly_name: Move cursor on terminal session
+    category: Terminal emulation
+    description: Moves the terminal's cursor on the specified position
+    confidence: description-only
+  Move email (V2):
+    friendly_name: Move email (V2)
+    category: Office 365 Outlook
+    description: Moves an email to the specified folder
+    confidence: description-only
+  Move file:
+    friendly_name: Move file
+    category: SharePoint
+    description: Moves a file in a similar way to the Move to command
+    confidence: description-only
+  Move file(s):
+    friendly_name: Move file(s)
+    category: File
+    description: Moves one or more files into a destination folder
+    confidence: description-only
+  Move folder:
+    friendly_name: Move folder
+    category: Folder
+    description: Moves an existing folder into a destination folder
+    confidence: description-only
+    alignment: unconfirmed
+  Move mouse:
+    friendly_name: Move mouse
+    category: Mouse and keyboard
+    description: Moves the mouse to a specific position
+    confidence: description-only
+  Move mouse to image:
+    friendly_name: Move mouse to image
+    category: Mouse and keyboard
+    description: Moves the mouse over an image found on screen
+    confidence: description-only
+  Move mouse to text on screen (OCR):
+    friendly_name: Move mouse to text on screen (OCR)
+    category: Mouse and keyboard
+    description: Moves the mouse over a text found on the screen using OCR
+    confidence: description-only
+  Move object:
+    friendly_name: Move object
+    category: Active Directory - Object
+    description: Moves an object in the Active Directory
+    confidence: description-only
+  Move or rename a file:
+    friendly_name: Move or rename a file
+    category: OneDrive
+    description: Moves or renames a file
+    confidence: description-only
+  Move or rename a file using path:
+    friendly_name: Move or rename a file using path
+    category: OneDrive
+    description: Moves or renames a file using the path
+    confidence: description-only
+  Move window:
+    friendly_name: Move window
+    category: UI automation - Windows
+    description: Sets the position of a specific window
+    confidence: description-only
+    alignment: unconfirmed
+  Next loop:
+    friendly_name: Next loop
+    category: Loops
+    description: Forces the next iteration of the block to take place
+    confidence: description-only
+  OCR:
+    friendly_name: OCR
+    category: Microsoft cognitive - Computer vision
+    description: Invokes the Microsoft Cognitive service named 'OCR'
+    confidence: description-only
+  On block error:
+    friendly_name: On block error
+    category: Flow control
+    description: Marks the beginning of a block to handle actions errors
+    confidence: description-only
+  Open CMD session:
+    friendly_name: Open CMD session
+    category: CMD session
+    description: Opens a new CMD session
+    confidence: description-only
+  Open FTP connection:
+    friendly_name: Open FTP connection
+    category: FTP
+    description: Establishes a specific connection to a remote FTP server
+    confidence: description-only
+  Open SQL connection:
+    friendly_name: Open SQL connection
+    category: Database
+    description: Opens a new connection to a database
+    confidence: description-only
+    alignment: unconfirmed
+  Open secure FTP connection:
+    friendly_name: Open secure FTP connection
+    category: FTP
+    description: Establishes a specific secure connection to a remote FTP server
+    confidence: description-only
+  Open terminal session:
+    friendly_name: Open terminal session
+    category: Terminal emulation
+    description: Opens a new terminal session
+    confidence: description-only
+  Pad text:
+    friendly_name: Pad text
+    category: Text
+    description: Creates a fixed length text by adding characters to the left or right
+    confidence: description-only
+    alignment: unconfirmed
+  Parse text:
+    friendly_name: Parse text
+    category: Text
+    description: Parses a text to find the first or all occurrences of a specified
+      subtext
+    confidence: description-only
+    alignment: unconfirmed
+  Paste cells to Excel worksheet:
+    friendly_name: Paste cells to Excel worksheet
+    category: Excel - Advanced
+    description: Pastes a range of cells to the active worksheet
+    confidence: description-only
+    alignment: unconfirmed
+  Pause service:
+    friendly_name: Pause service
+    category: Windows services
+    description: Pauses a running Windows service
+    confidence: description-only
+  Perform a bound action in selected environment:
+    friendly_name: Perform a bound action in selected environment
+    category: Microsoft Dataverse
+    description: Runs a Dataverse action bound to a table
+    confidence: description-only
+  Perform an unbound action in selected environment:
+    friendly_name: Perform an unbound action in selected environment
+    category: Microsoft Dataverse
+    description: Runs a global Dataverse action in a Power Platform environment
+    confidence: description-only
+  Ping:
+    friendly_name: Ping
+    category: System
+    description: Sends a message to determine whether a remote computer is accessible
+    confidence: description-only
+  Play sound:
+    friendly_name: Play sound
+    category: Workstation
+    description: Plays a system sound or a wav file
+    confidence: description-only
+  Populate SAP text field in element:
+    friendly_name: Populate SAP text field in element
+    category: SAP automation
+    description: Fills a text box in an SAP window with the specified text
+    confidence: description-only
+  Populate a Microsoft Word template:
+    friendly_name: Populate a Microsoft Word template
+    category: Word Online (Business)
+    description: Reads a Microsoft Word template to then fill the template fields
+    confidence: description-only
+  Populate text field in window:
+    friendly_name: Populate text field in window
+    category: UI automation - Form filling
+    description: Fills a text box in a window with the specified text
+    confidence: description-only
+    alignment: unconfirmed
+  Populate text field on web page:
+    friendly_name: Populate text field on web page
+    category: Browser automation - Web form filling
+    description: Fill a text field in a web page with the specified text
+    confidence: description-only
+  Post a feed notification:
+    friendly_name: Post a feed notification
+    category: Microsoft Teams
+    description: Posts a feed notification
+    confidence: description-only
+  Post card in a chat or channel:
+    friendly_name: Post card in a chat or channel
+    category: Microsoft Teams
+    description: Posts a card to a chat or a channel
+    confidence: description-only
+  Post message in a chat or channel:
+    friendly_name: Post message in a chat or channel
+    category: Microsoft Teams
+    description: Posts a message to a chat or a channel
+    confidence: description-only
+  Press button in window:
+    friendly_name: Press button in window
+    category: UI automation - Form filling
+    description: Presses a window button
+    confidence: description-only
+    alignment: unconfirmed
+  Press button on web page:
+    friendly_name: Press button on web page
+    category: Browser automation - Web form filling
+    description: Press a web page button
+    confidence: description-only
+  Press/release key:
+    friendly_name: Press/release key
+    category: Mouse and keyboard
+    description: Presses or releases one or more modifier keys
+    confidence: description-only
+  Print document:
+    friendly_name: Print document
+    category: Workstation
+    description: Prints a document on the default printer
+    confidence: description-only
+  Process Exchange email messages:
+    friendly_name: Process Exchange email messages
+    category: Exchange Server
+    description: Moves, deletes or marks as unread an email message
+    confidence: description-only
+  Process email messages:
+    friendly_name: Process email messages
+    category: Email
+    description: Moves, deletes or marks as unread an email
+    confidence: description-only
+  Process email messages in Outlook:
+    friendly_name: Process email messages in Outlook
+    category: Outlook
+    description: Moves or deletes an email retrieved by a Retrieve emails action
+    confidence: description-only
+  Process work queue items:
+    friendly_name: Process work queue items
+    category: Work queues
+    description: Indicates to the orchestrator that the machine is ready to process
+      work queue items
+    confidence: description-only
+    alignment: unconfirmed
+  Read XML from file:
+    friendly_name: Read XML from file
+    category: XML
+    description: Reads the contents of an XML file into a variable
+    confidence: description-only
+  Read formula from Excel:
+    friendly_name: Read formula from Excel
+    category: Excel - Advanced
+    description: Reads the formula inside a cell in Excel
+    confidence: description-only
+    alignment: unconfirmed
+  Read from CMD session:
+    friendly_name: Read from CMD session
+    category: CMD session
+    description: Reads the output of a CMD session
+    confidence: description-only
+  Read from CSV file:
+    friendly_name: Read from CSV file
+    category: File
+    description: Reads a CSV file into a data table
+    confidence: description-only
+  Read from CSV text variable:
+    friendly_name: Read from CSV text variable
+    category: Variables - Data table
+    description: Generates a data table from a CSV text
+    confidence: description-only
+    alignment: unconfirmed
+  Read from Excel worksheet:
+    friendly_name: Read from Excel worksheet
+    category: Excel
+    description: Reads the value of a cell or a range of cells from the active worksheet
+    confidence: description-only
+    alignment: unconfirmed
+  Read from Word document:
+    friendly_name: Read from Word document
+    category: Word
+    description: Reads the text content from a document of a Word instance
+    confidence: description-only
+  Read text from file:
+    friendly_name: Read text from file
+    category: File
+    description: Reads the contents of a text file
+    confidence: description-only
+  Reboot EC2 instance:
+    friendly_name: Reboot EC2 instance
+    category: AWS - EC2 - Instances
+    description: Reboots EC2 instance(s)
+    confidence: description-only
+  Recognize entities in text:
+    friendly_name: Recognize entities in text
+    category: Text
+    description: Recognizes entities in text, such as numbers, units, data/time and
+      others
+    confidence: description-only
+    alignment: unconfirmed
+  Region:
+    friendly_name: Region
+    category: Flow control
+    description: Marks the beginning of a group of actions
+    confidence: description-only
+  Relate rows in selected environment:
+    friendly_name: Relate rows in selected environment
+    category: Microsoft Dataverse
+    description: Associates individual rows in tables that have a one-to-many relationship
+    confidence: description-only
+  Remove XML element:
+    friendly_name: Remove XML element
+    category: XML
+    description: Removes one or more XML elements from an XML document
+    confidence: description-only
+  Remove XML element attribute:
+    friendly_name: Remove XML element attribute
+    category: XML
+    description: Removes an attribute from an XML element
+    confidence: description-only
+  Remove duplicate items from list:
+    friendly_name: Remove duplicate items from list
+    category: Variables
+    description: Remove the multiple occurrences of items in a list
+    confidence: description-only
+    alignment: unconfirmed
+  Remove file tag:
+    friendly_name: Remove file tag
+    category: OneDrive
+    description: Removes a tag from a file
+    confidence: description-only
+  Remove item from list:
+    friendly_name: Remove item from list
+    category: Variables
+    description: Remove one or multiple items from a list
+    confidence: description-only
+    alignment: unconfirmed
+  Remove the association between individual rows:
+    friendly_name: Remove the association between individual rows
+    category: Microsoft Dataverse
+    description: Removes the association between individual rows
+    confidence: description-only
+  Rename Excel worksheet:
+    friendly_name: Rename Excel worksheet
+    category: Excel - Advanced
+    description: Renames a specific worksheet of an Excel instance
+    confidence: description-only
+    alignment: unconfirmed
+  Rename FTP File:
+    friendly_name: Rename FTP File
+    category: FTP
+    description: Renames a file that resides on an FTP server
+    confidence: description-only
+  Rename file(s):
+    friendly_name: Rename file(s)
+    category: File
+    description: Changes the name of one or more files
+    confidence: description-only
+  Rename folder:
+    friendly_name: Rename folder
+    category: Folder
+    description: Changes the name of a folder
+    confidence: description-only
+    alignment: unconfirmed
+  Rename object:
+    friendly_name: Rename object
+    category: Active Directory - Object
+    description: Renames an object in the Active Directory
+    confidence: description-only
+  Replace text:
+    dotted_name: Text.Replace.ReplaceText
+    friendly_name: Replace text
+    category: Text
+    description: Replaces all occurrences of a specified subtext with another text
+    confidence: confirmed
+    syntax: 'Text.Replace.ReplaceText Text: obj_Config[''Path_ProjectFolder''] TextToFind:
+      $''''''<<processname>>'''''' IgnoreCase: False ReplaceWith: txt_ProcessName
+      ActivateEscapeSequences: False ComparisonType: Text.TextComparisonType.CultureSensitive
+      Result=> txt_ProjectFolder'
+    syntax_source: DF_PID_171_US_LIMS_Prelude_Main.robin.txt:177
+    alignment: confirmed
+  Reply to email (V3):
+    friendly_name: Reply to email (V3)
+    category: Office 365 Outlook
+    description: Replies to an email
+    confidence: description-only
+  Reply with a message in a channel:
+    friendly_name: Reply with a message in a channel
+    category: Microsoft Teams
+    description: Replies with a message in a channel
+    confidence: description-only
+  Reply with adaptive card in a channel:
+    friendly_name: Reply with adaptive card in a channel
+    category: Microsoft Teams
+    description: Replies with an adaptive card to a channel
+    confidence: description-only
+  Requeue item with delay:
+    friendly_name: Requeue item with delay
+    category: Work queues
+    description: Requeues a work queue item and delays it until a specified date and
+      time
+    confidence: description-only
+    alignment: unconfirmed
+  Resize columns/rows in Excel worksheet:
+    friendly_name: Resize columns/rows in Excel worksheet
+    category: Excel - Advanced
+    description: Resizes a selection of columns or rows in the active worksheet
+    confidence: description-only
+    alignment: unconfirmed
+  Resize window:
+    friendly_name: Resize window
+    category: UI automation - Windows
+    description: Sets the size of a specific window
+    confidence: description-only
+    alignment: unconfirmed
+  Respond to Outlook mail message:
+    friendly_name: Respond to Outlook mail message
+    category: Outlook
+    description: Responds to an Outlook message by replying or forwarding
+    confidence: description-only
+  Respond to an event invite (V2):
+    friendly_name: Respond to an event invite (V2)
+    category: Office 365 Outlook
+    description: Responds to an event invite
+    confidence: description-only
+  Restart virtual machine:
+    friendly_name: Restart virtual machine
+    category: Azure - Virtual machines
+    description: Restarts a virtual machine
+    confidence: description-only
+  Resume service:
+    friendly_name: Resume service
+    category: Windows services
+    description: Resumes a paused Windows service
+    confidence: description-only
+  Retrieve Exchange email messages:
+    friendly_name: Retrieve Exchange email messages
+    category: Exchange Server
+    description: Retrieves email messages from the specified Exchange server
+    confidence: description-only
+  Retrieve data table column into list:
+    friendly_name: Retrieve data table column into list
+    category: Variables
+    description: Convert the contents of a data table column into a list
+    confidence: description-only
+    alignment: unconfirmed
+  Retrieve email messages:
+    friendly_name: Retrieve email messages
+    category: Exchange Server
+    description: Retrieves email messages from the specified Exchange server
+    confidence: description-only
+  Retrieve email messages from Outlook:
+    friendly_name: Retrieve email messages from Outlook
+    category: Outlook
+    description: Retrieves email messages from an Outlook account
+    confidence: description-only
+  Reverse list:
+    friendly_name: Reverse list
+    category: Variables
+    description: Reverse the order of the items of a list
+    confidence: description-only
+    alignment: unconfirmed
+  Reverse text:
+    friendly_name: Reverse text
+    category: Text
+    description: Reverses the order of letters in a text string
+    confidence: description-only
+    alignment: unconfirmed
+  Run .NET script:
+    friendly_name: Run .NET script
+    category: Scripting
+    description: Executes a user provided .NET script and stores its output
+    confidence: description-only
+    alignment: unconfirmed
+  Run DOS command:
+    friendly_name: Run DOS command
+    category: Scripting
+    description: Executes a DOS command or console application and retrieves its output
+    confidence: description-only
+    alignment: unconfirmed
+  Run Excel Macro:
+    friendly_name: Run Excel Macro
+    category: Excel - Advanced
+    description: Runs a specified macro on the document of an Excel instance
+    confidence: description-only
+    alignment: unconfirmed
+  Run JavaScript:
+    friendly_name: Run JavaScript
+    category: Scripting
+    description: Executes some custom JavaScript code and retrieves its output
+    confidence: description-only
+    alignment: unconfirmed
+  Run JavaScript function on web page:
+    friendly_name: Run JavaScript function on web page
+    category: Browser automation
+    description: Run a JavaScript function on the web page and get the returned result
+    confidence: description-only
+  Run PowerShell script:
+    friendly_name: Run PowerShell script
+    category: Scripting
+    description: Executes some custom PowerShell script and retrieves its output
+    confidence: description-only
+    alignment: unconfirmed
+  Run Python script:
+    friendly_name: Run Python script
+    category: Scripting
+    description: Executes Python 2 script code and retrieves its output
+    confidence: description-only
+    alignment: unconfirmed
+  Run VBScript:
+    friendly_name: Run VBScript
+    category: Scripting
+    description: Executes some custom VBScript code and retrieves its output
+    confidence: description-only
+    alignment: unconfirmed
+  Run application:
+    friendly_name: Run application
+    category: System
+    description: Executes an application or opens a document
+    confidence: description-only
+    alignment: unconfirmed
+  Run flow:
+    friendly_name: Run flow
+    category: Flow control
+    description: Runs desktop flow which can receive input variables
+    confidence: description-only
+  Run script:
+    friendly_name: Run script
+    category: Excel Online (Business)
+    description: Runs an Office Script against an Excel workbook
+    confidence: description-only
+  Run script from SharePoint library:
+    friendly_name: Run script from SharePoint library
+    category: Excel Online (Business)
+    description: Runs an Office Script from SharePoint library
+    confidence: description-only
+  Run subflow:
+    friendly_name: Run subflow
+    category: Flow control
+    description: Runs a subflow specifying any required arguments
+    confidence: description-only
+  Safe search detection:
+    friendly_name: Safe search detection
+    category: Google cognitive - Vision
+    description: Invokes the Google Cloud Vision service named 'Safe Search Detection'
+    confidence: description-only
+  Save Excel:
+    friendly_name: Save Excel
+    category: Excel
+    description: Saves a previously launched Excel instance
+    confidence: description-only
+    alignment: unconfirmed
+  Save Outlook email messages:
+    friendly_name: Save Outlook email messages
+    category: Outlook
+    description: Saves Outlook email messages given an account
+    confidence: description-only
+  Save Word:
+    friendly_name: Save Word
+    category: Word
+    description: Saves a previously launched Word instance
+    confidence: description-only
+  Search for text on terminal session:
+    friendly_name: Search for text on terminal session
+    category: Terminal emulation
+    description: Searches for all occurrences of a specific text on a terminal session
+    confidence: description-only
+  Select SAP menu item:
+    friendly_name: Select SAP menu item
+    category: SAP automation
+    description: Selects an SAP menu item in the window tool bar
+    confidence: description-only
+  Select cells in Excel worksheet:
+    friendly_name: Select cells in Excel worksheet
+    category: Excel - Advanced
+    description: Selects a range of cells in the active worksheet
+    confidence: description-only
+    alignment: unconfirmed
+  Select menu option in window:
+    friendly_name: Select menu option in window
+    category: UI automation
+    description: Selects an option in a menu of a window
+    confidence: description-only
+  Select radio button in window:
+    friendly_name: Select radio button in window
+    category: UI automation - Form filling
+    description: Selects a radio button on a window
+    confidence: description-only
+  Select radio button on web page:
+    friendly_name: Select radio button on web page
+    category: Browser automation - Web form filling
+    description: Select a radio button on the web page
+    confidence: description-only
+  Select tab in window:
+    friendly_name: Select tab in window
+    category: UI automation
+    description: Selects a tab from a group of tabs
+    confidence: description-only
+    alignment: unconfirmed
+  Send Exchange email message:
+    friendly_name: Send Exchange email message
+    category: Exchange Server
+    description: Creates and sends a new email message
+    confidence: description-only
+  Send a Microsoft Graph HTTP request:
+    friendly_name: Send a Microsoft Graph HTTP request
+    category: Microsoft Teams
+    description: Constructs a Microsoft Graph REST API request
+    confidence: description-only
+  Send an HTTP request:
+    friendly_name: Send an HTTP request
+    category: Office 365 Outlook
+    description: Constructs a Microsoft Graph REST API request
+    confidence: description-only
+  Send an HTTP request to SharePoint:
+    friendly_name: Send an HTTP request to SharePoint
+    category: SharePoint
+    description: Construct a SharePoint REST API to invoke
+    confidence: description-only
+  Send an email (V2):
+    friendly_name: Send an email (V2)
+    category: Office 365 Outlook
+    description: Sends an email message
+    confidence: description-only
+  Send an email from a shared mailbox (V2):
+    friendly_name: Send an email from a shared mailbox (V2)
+    category: Office 365 Outlook
+    description: Sends an email from a shared mailbox
+    confidence: description-only
+  Send email:
+    friendly_name: Send email
+    category: Email
+    description: Creates and sends a new email message
+    confidence: description-only
+  Send email through Outlook:
+    friendly_name: Send email through Outlook
+    category: Outlook
+    description: Creates and sends a new email message through Outlook
+    confidence: description-only
+  Send key to terminal session:
+    friendly_name: Send key to terminal session
+    category: Terminal emulation
+    description: Sends a control key to a terminal session
+    confidence: description-only
+  Send keys:
+    friendly_name: Send keys
+    category: Mouse and keyboard
+    description: Sends keys to the application that is currently active
+    confidence: description-only
+  Send mouse click:
+    friendly_name: Send mouse click
+    category: Mouse and keyboard
+    description: Sends a mouse click event
+    confidence: description-only
+    alignment: unconfirmed
+  Sentiment:
+    friendly_name: Sentiment
+    category: Microsoft cognitive - Text Analytics
+    description: Invokes the Microsoft Cognitive service named 'Text Analytics - Sentiment'
+    confidence: description-only
+  Set Windows environment variable:
+    friendly_name: Set Windows environment variable
+    category: System
+    description: Sets an environment variable to a given value
+    confidence: description-only
+    alignment: unconfirmed
+  Set XML element attribute:
+    friendly_name: Set XML element attribute
+    category: XML
+    description: Sets the value of an attribute of an XML element
+    confidence: description-only
+  Set XML element value:
+    friendly_name: Set XML element value
+    category: XML
+    description: Sets the value of an XML element
+    confidence: description-only
+  Set active Excel worksheet:
+    friendly_name: Set active Excel worksheet
+    category: Excel
+    description: Activates a specific worksheet of an Excel instance
+    confidence: description-only
+    alignment: unconfirmed
+  Set check box state on web page:
+    friendly_name: Set check box state on web page
+    category: Browser automation - Web form filling
+    description: Check or uncheck a check box in a web form
+    confidence: description-only
+  Set checkbox state in window:
+    friendly_name: Set checkbox state in window
+    category: UI automation - Form filling
+    description: Checks or unchecks a checkbox in a window form
+    confidence: description-only
+  Set clipboard Text:
+    friendly_name: Set clipboard Text
+    category: Clipboard
+    description: Sets clipboard text
+    confidence: description-only
+  Set color of cells in Excel worksheet:
+    friendly_name: Set color of cells in Excel worksheet
+    category: Excel - Advanced
+    description: Fills the background of the selected cells with the specified color
+    confidence: description-only
+  Set content approval status:
+    friendly_name: Set content approval status
+    category: SharePoint
+    description: Sets the content approval status for an item in a list or library
+    confidence: description-only
+  Set default printer:
+    friendly_name: Set default printer
+    category: Workstation
+    description: Sets a printer as the default printer
+    confidence: description-only
+  Set drop-down list value in window:
+    friendly_name: Set drop-down list value in window
+    category: UI automation - Form filling
+    description: Sets or clears the selected option(s) for a drop-down list in a window
+      form
+    confidence: description-only
+  Set drop-down list value on web page:
+    friendly_name: Set drop-down list value on web page
+    category: Browser automation - Web form filling
+    description: Set or clear the selected option for a drop-down list in a web form
+    confidence: description-only
+  Set key state:
+    friendly_name: Set key state
+    category: Mouse and keyboard
+    description: Sets the state for the keys Caps Lock, Num Lock or Scroll Lock
+    confidence: description-only
+  Set screen resolution:
+    friendly_name: Set screen resolution
+    category: Workstation
+    description: Sets the width, height, bit count and frequency of a selected monitor
+    confidence: description-only
+    alignment: unconfirmed
+  Set text on terminal session:
+    friendly_name: Set text on terminal session
+    category: Terminal emulation
+    description: Sets text on a terminal session
+    confidence: description-only
+  Set up automatic replies (V2):
+    friendly_name: Set up automatic replies (V2)
+    category: Office 365 Outlook
+    description: Sets the automatic replies setting for mailbox
+    confidence: description-only
+  Set variable:
+    friendly_name: Set variable
+    category: Variables
+    description: Set the value of a new or existing variable
+    confidence: description-only
+    alignment: unconfirmed
+  Set window state:
+    friendly_name: Set window state
+    category: UI automation - Windows
+    description: Restores, maximizes or minimizes a specific window
+    confidence: description-only
+    alignment: unconfirmed
+  Set window visibility:
+    friendly_name: Set window visibility
+    category: UI automation - Windows
+    description: Shows a hidden window or hides a visible window
+    confidence: description-only
+    alignment: unconfirmed
+  Show desktop:
+    friendly_name: Show desktop
+    category: Workstation
+    description: Shows the desktop
+    confidence: description-only
+  Shuffle list:
+    friendly_name: Shuffle list
+    category: Variables
+    description: Create a random permutation of a list
+    confidence: description-only
+    alignment: unconfirmed
+  Shut down virtual machine:
+    friendly_name: Shut down virtual machine
+    category: Azure - Virtual machines
+    description: Shuts down the operating system of a virtual machine
+    confidence: description-only
+  Shutdown computer:
+    friendly_name: Shutdown computer
+    category: Workstation
+    description: Instructs the computer to shut down
+    confidence: description-only
+  Sort cells based on one or more columns:
+    friendly_name: Sort cells based on one or more columns
+    category: Excel
+    description: Sorts cells based on one or more columns in an Excel worksheet
+    confidence: description-only
+  Sort cells in Excel worksheet:
+    friendly_name: Sort cells in Excel worksheet
+    category: Excel
+    description: Sorts cells in Excel worksheet
+    confidence: description-only
+  Sort data table:
+    friendly_name: Sort data table
+    category: Variables - Data table
+    description: Sorts the data table rows in ascending or descending order
+    confidence: description-only
+    alignment: unconfirmed
+  Sort list:
+    friendly_name: Sort list
+    category: Variables
+    description: Sort the items of a list. Use items of the same type
+    confidence: description-only
+    alignment: unconfirmed
+  Spell check:
+    friendly_name: Spell check
+    category: Microsoft cognitive - Bing spell check
+    description: Invokes the Microsoft Cognitive service named 'Bing Spell Check'
+    confidence: description-only
+  Split text:
+    dotted_name: Text.SplitText.Split
+    friendly_name: Split text
+    category: Text
+    description: Creates a list containing the substrings of a text separated by a
+      delimiter
+    confidence: confirmed
+    syntax: 'Text.SplitText.Split Text: txt_ClipboardText StandardDelimiter: Text.StandardDelimiter.NewLine
+      DelimiterTimes: 1 Result=> lst_TextList'
+    syntax_source: PID171_performer.txt:625
+    alignment: confirmed
+  Start EC2 instance:
+    friendly_name: Start EC2 instance
+    category: AWS - EC2 - Instances
+    description: Starts EC2 instance(s)
+    confidence: description-only
+  Start SAP transaction:
+    friendly_name: Start SAP transaction
+    category: SAP automation
+    description: Opens a specific transaction code in existing session
+    confidence: description-only
+    alignment: unconfirmed
+  Start service:
+    friendly_name: Start service
+    category: Windows services
+    description: Starts a stopped Windows service
+    confidence: description-only
+  Start virtual machine:
+    friendly_name: Start virtual machine
+    category: Azure - Virtual machines
+    description: Starts the virtual machine
+    confidence: description-only
+  Stop EC2 instance:
+    friendly_name: Stop EC2 instance
+    category: AWS - EC2 - Instances
+    description: Stops EC2 instance(s)
+    confidence: description-only
+  Stop flow:
+    friendly_name: Stop flow
+    category: Flow control
+    description: Terminates the flow
+    confidence: description-only
+  Stop service:
+    friendly_name: Stop service
+    category: Windows services
+    description: Stops a running Windows service
+    confidence: description-only
+  Stop sharing an item or a file:
+    friendly_name: Stop sharing an item or a file
+    category: SharePoint
+    description: Delete all links giving access to an item or a file
+    confidence: description-only
+  Stop virtual machine:
+    friendly_name: Stop virtual machine
+    category: Azure - Virtual machines
+    description: Stops the virtual machine and deallocates the related hardware
+    confidence: description-only
+  Subtract dates:
+    friendly_name: Subtract dates
+    category: Date time
+    description: Finds the time difference between two given dates in days, hours,
+      minutes, or seconds
+    confidence: description-only
+  Subtract lists:
+    friendly_name: Subtract lists
+    category: Variables
+    description: Compare two lists and create a new list with the items that are in
+      the first but not in the second
+    confidence: description-only
+    alignment: unconfirmed
+  Switch:
+    friendly_name: Switch
+    category: Conditionals
+    description: Dispatches execution to different parts of the switch body based
+      on the value of the expression
+    confidence: description-only
+  Synchronize directories:
+    friendly_name: Synchronize directories
+    category: FTP
+    description: Synchronizes the files and subdirectories of a given Folder with
+      remote FTP
+    confidence: description-only
+  Tag image:
+    friendly_name: Tag image
+    category: Microsoft cognitive - Computer vision
+    description: Invokes the Microsoft Cognitive service named 'Tag Image'
+    confidence: description-only
+  Take screenshot:
+    friendly_name: Take screenshot
+    category: Workstation
+    description: Takes a screenshot of the foreground window or specified screen
+    confidence: description-only
+    alignment: unconfirmed
+  Take screenshot of UI element:
+    friendly_name: Take screenshot of UI element
+    category: UI automation - Data Extraction
+    description: Takes a screenshot of a UI element in window
+    confidence: description-only
+  Take screenshot of web page:
+    friendly_name: Take screenshot of web page
+    category: Browser automation - Web data extraction
+    description: Take a screenshot of the web page currently displayed in the browser
+    confidence: description-only
+  Terminate process:
+    friendly_name: Terminate process
+    category: System
+    description: Immediately stops a running process
+    confidence: description-only
+    alignment: unconfirmed
+  Text Detection:
+    friendly_name: Text Detection
+    category: Google cognitive - Vision
+    description: Invokes the Google Cloud Vision service named 'Text Detection'
+    confidence: description-only
+  Translate:
+    friendly_name: Translate
+    category: IBM cognitive - Language translator
+    description: Invokes the IBM service named 'Translate'
+    confidence: description-only
+  Trim text:
+    dotted_name: Text.Trim
+    friendly_name: Trim text
+    category: Text
+    description: Removes all occurrences of white space characters from the beginning
+      and/or end
+    confidence: confirmed
+    syntax: 'Text.Trim Text: LoggedIn_UserName TrimOption: Text.TrimOption.Both TrimmedText=>
+      LoggedIn_UserName'
+    syntax_source: robin_Shell_PP_DesktopFlow_Template_Loader_Performer.robin:34
+    alignment: confirmed
+  Truncate number:
+    friendly_name: Truncate number
+    category: Variables
+    description: Get the integral or fractional digits of a numeric value, or round
+      up to specified decimal places
+    confidence: description-only
+    alignment: unconfirmed
+  Unlock user:
+    friendly_name: Unlock user
+    category: Active Directory - User
+    description: Unlocks an Active Directory user
+    confidence: description-only
+  Unzip files:
+    friendly_name: Unzip files
+    category: Compression
+    description: Uncompress one or more files or folders contained in a ZIP archive
+    confidence: description-only
+  Update a row:
+    friendly_name: Update a row
+    category: Excel Online (Business)
+    description: Updates a row using a key column
+    confidence: description-only
+  Update an adaptive card in a chat or channel:
+    friendly_name: Update an adaptive card in a chat or channel
+    category: Microsoft Teams
+    description: Updates an existing adaptive card
+    confidence: description-only
+  Update contact (V2):
+    friendly_name: Update contact (V2)
+    category: Office 365 Outlook
+    description: Updates a contact in a contacts folder
+    confidence: description-only
+  Update data table item:
+    friendly_name: Update data table item
+    category: Variables - Data table
+    description: Updates a data table row item on a defined column
+    confidence: description-only
+    alignment: unconfirmed
+  Update event (V4):
+    friendly_name: Update event (V4)
+    category: Office 365 Outlook
+    description: Updates an event in a calendar using Graph API
+    confidence: description-only
+  Update file:
+    friendly_name: Update file
+    category: OneDrive
+    description: Updates a file
+    confidence: description-only
+  Update file or image content in a row:
+    friendly_name: Update file or image content in a row
+    category: Microsoft Dataverse
+    description: Updates file or image content in a row
+    confidence: description-only
+  Update file properties:
+    friendly_name: Update file properties
+    category: SharePoint
+    description: Updates the properties stored in columns in a library
+    confidence: description-only
+  Update file properties using AI Builder:
+    friendly_name: Update file properties using AI Builder
+    category: SharePoint
+    description: Updates the values stored in library columns for a file analyzed
+      by a model
+    confidence: description-only
+  Update item:
+    friendly_name: Update item
+    category: SharePoint
+    description: Updates an item in a SharePoint list
+    confidence: description-only
+  Update user info:
+    friendly_name: Update user info
+    category: Active Directory - User
+    description: Updates a user's information in the Active Directory
+    confidence: description-only
+  Update work queue item:
+    friendly_name: Update work queue item
+    category: Work queues
+    description: Updates the status and processing result of a specific work queue
+      item
+    confidence: description-only
+    alignment: unconfirmed
+  Update work queue item processing notes:
+    friendly_name: Update work queue item processing notes
+    category: Work queues
+    description: Updates the processing notes of a specific work queue item
+    confidence: description-only
+    alignment: unconfirmed
+  Upload File(s) to FTP:
+    friendly_name: Upload File(s) to FTP
+    category: FTP
+    description: Uploads one or more files to an FTP server
+    confidence: description-only
+  Upload a file or an image to selected environment:
+    friendly_name: Upload a file or an image to selected environment
+    category: Microsoft Dataverse
+    description: Uploads a file or an image to selected environment
+    confidence: description-only
+  Upload file from URL:
+    friendly_name: Upload file from URL
+    category: OneDrive
+    description: Uploads a file from a URL to OneDrive
+    confidence: description-only
+  Upload folder(s) to FTP:
+    friendly_name: Upload folder(s) to FTP
+    category: FTP
+    description: Uploads one or more folders to an FTP server
+    confidence: description-only
+  Upsert a row in selected environment:
+    friendly_name: Upsert a row in selected environment
+    category: Microsoft Dataverse
+    description: Updates or adds (upsert) a row in a table
+    confidence: description-only
+  Use desktop:
+    friendly_name: Use desktop
+    category: UI automation
+    description: Performs desktop and taskbar related operations
+    confidence: description-only
+  Wait:
+    friendly_name: Wait
+    category: Flow control
+    description: Suspends the execution of the flow for a specified amount of seconds
+    confidence: description-only
+  Wait for file:
+    friendly_name: Wait for file
+    category: File
+    description: Suspends execution until a file is created or deleted
+    confidence: description-only
+  Wait for image:
+    friendly_name: Wait for image
+    category: UI automation
+    description: This action waits until a specific image appears on the screen
+    confidence: description-only
+  Wait for mouse:
+    friendly_name: Wait for mouse
+    category: Mouse and keyboard
+    description: Suspends the execution of the flow until the mouse pointer changes
+    confidence: description-only
+  Wait for process:
+    friendly_name: Wait for process
+    category: System
+    description: Suspends the execution until a process starts or stops
+    confidence: description-only
+  Wait for service:
+    friendly_name: Wait for service
+    category: Windows services
+    description: Suspends execution until a service is running, paused or stopped
+    confidence: description-only
+  Wait for shortcut key:
+    friendly_name: Wait for shortcut key
+    category: Mouse and keyboard
+    description: Pause the flow run until a specific shortcut key is pressed
+    confidence: description-only
+  Wait for text on CMD session:
+    friendly_name: Wait for text on CMD session
+    category: CMD session
+    description: Waits for a specific text on a previously opened CMD session
+    confidence: description-only
+  Wait for text on screen (OCR):
+    friendly_name: Wait for text on screen (OCR)
+    category: OCR
+    description: Waits until a specific text appears/disappears on the screen using
+      OCR
+    confidence: description-only
+  Wait for text on terminal session:
+    friendly_name: Wait for text on terminal session
+    category: Terminal emulation
+    description: Waits for a specific text to appear on a terminal session
+    confidence: description-only
+  Wait for web page content:
+    friendly_name: Wait for web page content
+    category: Browser automation
+    description: Suspend the flow until a specific piece of text or web page element
+      appears or disappears from a web page
+    confidence: description-only
+  Wait for window:
+    friendly_name: Wait for window
+    category: UI automation
+    description: Suspends execution until a specific window opens, closes, or changes
+      focus
+    confidence: description-only
+    alignment: unconfirmed
+  Wait for window content:
+    friendly_name: Wait for window content
+    category: UI automation
+    description: Suspends the execution of the automation until a specific piece of
+      text or UI element appears or disappears from a window
+    confidence: description-only
+    alignment: unconfirmed
+  Write XML to file:
+    friendly_name: Write XML to file
+    category: XML
+    description: Writes the contents of an XML node variable into a file
+    confidence: description-only
+  Write text to file:
+    friendly_name: Write text to file
+    category: File
+    description: Writes or appends text to a file
+    confidence: description-only
+  Write to CMD session:
+    friendly_name: Write to CMD session
+    category: CMD session
+    description: Executes a command on an open CMD session
+    confidence: description-only
+  Write to CSV file:
+    friendly_name: Write to CSV file
+    category: File
+    description: Writes a data table, data row or list to a CSV file
+    confidence: description-only
+  Write to Excel worksheet:
+    friendly_name: Write to Excel worksheet
+    category: Excel
+    description: Writes a value into a cell or a range of cells
+    confidence: description-only
+    alignment: unconfirmed
+  Write to Word document:
+    friendly_name: Write to Word document
+    category: Word
+    description: Writes or appends text to a Word file
+    confidence: description-only
+  ZIP files:
+    friendly_name: ZIP files
+    category: Compression
+    description: Compress one or more files or folders into a ZIP archive
+    confidence: description-only
