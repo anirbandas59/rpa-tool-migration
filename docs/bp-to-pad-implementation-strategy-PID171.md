@@ -228,6 +228,11 @@ used), scoped specifically to the consolidated-architecture gaps identified in �
    `Create Instance`+`Open Workbook` collapses into one PAD call, which a flat 1:1 method→action
    table can't express; found via a worked example during this planning session, not from the
    original codebase audit). Prerequisite for step 1b and step 2.
+1a. `parser/process.py`: capture `ACTION`-stage `<outputs>`/`<inputs>` into `data_items` and
+   `onsuccess`/`ontrue`/`onfalse` edges onto `RawStage`/`BPStage` — found missing by Task 1b's
+   first review (`docs/reviews/1b-2026-08-29.md`, 30%, blocked): the fusion pre-filter below
+   cannot see real fusion pairs without this data, and neither can Task 4a's reachability model,
+   which had incorrectly assumed this edge capture already existed.
 1b. `ast/builder.py`: VBO call-fusion detection pass (architecture doc §B_FUSION) — a generic
    structural pre-filter (numeric-handle-output-feeds-numeric-handle-input, independent of which
    VBO) flags fusion candidates; those matching a curated `fusion_patterns` entry (step 1's schema)

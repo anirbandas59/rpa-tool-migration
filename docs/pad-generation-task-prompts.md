@@ -154,22 +154,89 @@ bullet).
 
 ---
 
+## Task 1a — `parser/process.py`: capture ACTION output/input types and flow edges
+
+**Why this task exists:** found by `pad-reviewer`'s Task 1b review (`docs/reviews/1b-2026-08-29.md`,
+30%, "blocked pending a design decision"). Task 1b's fusion-detection logic is correct but cannot
+see the real `PID_0171.bprelease` fusion pairs at all — confirmed by the reviewer independently
+running the real `Read Excel As Collection` page — because two things it needs were never
+extracted at the parser layer: (1) `parser/process.py` never parses `<outputs>` on `ACTION` stages
+(confirmed by grep — no `<output` handling anywhere in the file), and `<input>` elements route
+into `params_map`, not `data_items`, so the numeric-handle output→input signal §B_FUSION describes
+never reaches `BPStage`; (2) neither `RawStage` nor `BPStage` carries `onsuccess`/`ontrue`/
+`onfalse` edge targets anywhere (also confirmed by grep), so Task 1b's "sole `onsuccess` target is
+the next stage" adjacency check was approximated by raw list position instead — works by
+coincidence on the two Excel pairs (which happen to be document-adjacent), not a faithful
+implementation, and could misfire wherever document order and execution order diverge.
+
+**Depends on:** none
+**Files in scope:** `src/flowsmith/parser/process.py` (primary — the actual XML extraction),
+`src/flowsmith/ast/builder.py` and `src/flowsmith/ast/models.py` (only to carry the newly-parsed
+fields through `RawStage`→`BPStage` mapping — do **not** touch `_detect_vbo_call_fusions` or any
+other fusion-detection logic here, that's Task 1b's job in its redo pass), `tests/parser/
+test_process.py`, `tests/ast/test_builder.py`, `tests/ast/test_models.py`.
+**Required reading:** `docs/reviews/1b-2026-08-29.md` in full (the exact evidence — grep results,
+raw XML dump confirming the real `Create Instance`/`Open Excel` stages do carry the
+`<outputs><output type="number" name="handle" stage="handle"/></outputs>` /
+`<input type="number" name="handle" expr="[handle]"/>` shape §B_FUSION's worked example
+describes), `docs/bp-to-pad-architecture-PID171.md` §B_FUSION, `CLAUDE.md`'s "Parser critical
+rules" section (rules 4-5 on `onsuccess`/implicit Block→Recover edges — this task's edge capture
+is the general-purpose version of what those rules already assume exists).
+
+**Do:**
+1. Add `<outputs>` parsing for `ACTION` stages in `parser/process.py`, populating `RawStage`
+   (and, via the existing mapping logic, `BPStage.data_items`) with each output's `name`, `type`,
+   and target (`stage` attribute) — the same shape `<inputs>` parsing already handles for other
+   stage types, just currently missing for `ACTION`.
+2. Additionally route `ACTION` `<input>` elements into `data_items` (not instead of
+   `params_map` — VBO-call parameter substitution for Task 1/2b's `method_actions`/
+   `fusion_patterns` templates still needs `params_map`; this is an additional exposure of the
+   same input data in the shape structural/type-based scanning — like Task 1b's fusion
+   pre-filter — needs to read).
+3. Add `onsuccess`/`ontrue`/`onfalse` target-stage-ID capture on `RawStage`, populated from the
+   BP XML's own `<onsuccess>`/`<ontrue>`/`<onfalse>` elements, and carry it through to `BPStage`
+   in `ast/builder.py`. This is deliberately just the plain edge target(s) — not a full graph
+   traversal, not the `WaitStart`/`WaitEnd`/`LoopStart`/`LoopEnd` bracket-pairing (that's a
+   separate, already-existing mechanism via `<groupid>`/`<subsheetid>`, per `CLAUDE.md`, and is
+   not in scope here) and not the implicit Block→Recover edge construction (`CLAUDE.md` rule 4 —
+   also not in scope here, needed later but not by Task 1b).
+4. Update `tests/parser/test_process.py` and `tests/ast/test_builder.py`/`test_models.py` to
+   assert the new fields are populated correctly against real stages, not just synthetic fixtures
+   — use the module-scoped `pid_0171_process`-style fixture already present in `tests/ast/
+   test_builder.py` (the review noted this fixture already exists and is already used by 3 other
+   tests, but wasn't used for the fusion tests) rather than adding a new one.
+
+**Done when:** `uv run pytest tests/parser/ tests/ast/ -v` passes, including a new test asserting
+that parsing `samples/blueprism/PID_0171.bprelease`'s `Read Excel As Collection` page produces a
+`Create Instance` stage with a numeric `handle` output in `data_items` and an `Open Excel` (`Open
+Workbook`) stage with a matching numeric `handle` input in `data_items` and an `onsuccess` edge
+from `Create Instance` to `Open Excel`.
+
+**Out of scope:** re-running or fixing Task 1b's `_detect_vbo_call_fusions` logic itself (a
+follow-up implementation pass on Task 1b, after this task lands — Task 1b's own file scope and
+detection logic don't need to change, only the data it now has available to read).
+
+---
+
 ## Task 1b — `ast/builder.py`: VBO call-fusion detection pass
 
-**Depends on:** Task 1
+**Depends on:** Task 1, Task 1a
 **Files in scope:** `src/flowsmith/ast/builder.py`, `src/flowsmith/ast/models.py`,
 `tests/ast/test_builder.py`
 **Required reading:** `docs/bp-to-pad-architecture-PID171.md` §B_FUSION in full (both the
-worked Excel example and the generic structural-signal rule).
+worked Excel example and the generic structural-signal rule); `docs/reviews/1b-2026-08-29.md`
+(the prior review — this is a re-implementation pass, know what was found wrong before starting).
 
 **Do:**
-1. Implement the **generic structural pre-filter** from §B_FUSION: for every pair of adjacent
-   `ACTION` stages on the same page (stage N's sole `onsuccess` target is stage N+1, no branching
-   in between), where stage N has a numeric-typed `<output>` and stage N+1 has a same-named,
+1. Implement the **generic structural pre-filter** from §B_FUSION: for every pair of stages on the
+   same page where stage N's `onsuccess` edge (now available on `BPStage`, per Task 1a — use it,
+   not document/list order) targets stage N+1 with no other stage sharing that edge (i.e. a sole,
+   unbranched target), and stage N has a numeric-typed `<output>` and stage N+1 has a same-named,
    same-typed numeric `<input>` whose `expr` references stage N's output (BP's `[handle]`-style
-   reference) — flag this pair as a **fusion candidate**, regardless of which VBO is involved and
-   regardless of whether a curated pattern exists for it yet. This step needs no VBO-specific
-   knowledge — it's a shape in the XML (see §B_FUSION's exact `<output>`/`<input>` example).
+   reference, now available in `data_items` per Task 1a) — flag this pair as a **fusion
+   candidate**, regardless of which VBO is involved and regardless of whether a curated pattern
+   exists for it yet. This step needs no VBO-specific knowledge — it's a shape in the XML (see
+   §B_FUSION's exact `<output>`/`<input>` example).
 2. For each fusion candidate, check whether the two stages' VBO/method names match an entry in
    `mapping/vbo_catalogue.yaml`'s `fusion_patterns` for that VBO (via `mapper/vbo_router.py`'s new
    lookup from Task 1). If they match: mark the sequence as resolved-by-fusion on the AST (e.g. a
@@ -190,11 +257,13 @@ worked Excel example and the generic structural-signal rule).
    normalisation) rather than inventing a parallel mechanism.
 
 **Done when:** `uv run pytest tests/ast/ -v` passes, including tests asserting: (a) the two known
-Excel fusion pairs from `PID_0171.bprelease`'s `Read Excel As Collection` page (`Create Instance`+
-`Open Workbook`, and `Close Workbook`+`Close Instance`) are correctly detected and resolved to
-their fused actions; (b) a synthetic numeric-handle-chaining pair with **no** matching
-`fusion_patterns` entry produces a `ReviewFlag` naming both stages, not a silent per-stage
-translation.
+Excel fusion pairs from `PID_0171.bprelease`'s `Read Excel As Collection` page — parsed via
+`build_ast(parse_process(...))` against the **real sample file**, not hand-built `RawStage`
+fixtures — are correctly detected and resolved to their fused actions; (b) a synthetic
+numeric-handle-chaining pair with **no** matching `fusion_patterns` entry produces a `ReviewFlag`
+naming both stages, not a silent per-stage translation. State explicitly in your summary whether
+(a) was run against the real file or a fixture — do not omit this; the prior implementation pass
+was marked down specifically for using only synthetic fixtures and not disclosing it.
 
 **Out of scope:** generating the actual PAD output for a fused sequence (Task 5a/5b consume this
 AST annotation, they don't need to re-detect fusion themselves).
@@ -432,20 +501,30 @@ note any coupling you find in your summary).
 
 ## Task 4a — `ast/builder.py`: call-graph/reachability model
 
-**Depends on:** Task 3a, Task 3b
+**Depends on:** Task 1a, Task 3a, Task 3b
 **Files in scope:** `src/flowsmith/ast/builder.py`, `src/flowsmith/ast/models.py`,
 `tests/ast/test_builder.py`, `tests/ast/test_models.py`
 **Required reading:** `docs/bp-to-pad-architecture-PID171.md` §B11 (the confirmed orphan-page
 findings — `Mark leftout Items as Exception` and `Send Info to Data Gateways`, both have zero
-callers, confirmed by a `<processid>` search against the BP XML) and §B16 (known-gaps list).
+callers, confirmed by a `<processid>` search against the BP XML) and §B16 (known-gaps list);
+`docs/reviews/1b-2026-08-29.md` (why this task now depends on Task 1a — see below).
+
+**Correction from an earlier draft of this task:** this task's step 1 used to say
+`onsuccess`/`ontrue`/`onfalse` edges are "already resolved by the existing anchor-chain logic —
+see `_build_anchor_map`/`_resolve_edge` if present" in `ast/builder.py`. That was wrong — those
+functions exist in `scripts/bp_parser_v2.py` (a standalone diagnostic tool, not part of
+`src/flowsmith`), and Task 1b's review confirmed by direct grep that `src/flowsmith/parser/
+process.py`/`ast/builder.py` never captured `onsuccess` edges at all before Task 1a. Task 1a adds
+this capture generally (not `SubSheet`/`Process`-type `processid` cross-references specifically —
+that part of step 1 below is still this task's own job).
 
 **Do:**
 1. `ast/builder.py` currently builds one `BPProcess` per artefact with no cross-page edge/call
    graph at all. Add a reachability pass: starting from each page's `Start` stage, follow
-   `onsuccess`/`ontrue`/`onfalse` edges (already resolved by the existing anchor-chain logic — see
-   `_build_anchor_map`/`_resolve_edge` if present, reuse rather than reimplement) plus `SubSheet`/
-   `Process`-type `ACTION` stages' `processid` cross-references to other pages, to determine which
-   pages are actually reachable from the process's `Main Page`/entry point.
+   `onsuccess`/`ontrue`/`onfalse` edges (now available on `BPStage` per Task 1a — use them, do not
+   re-derive edge data from document order) plus `SubSheet`/`Process`-type `ACTION` stages'
+   `processid` cross-references to other pages, to determine which pages are actually reachable
+   from the process's `Main Page`/entry point.
 2. Also reconstruct the **implicit** Block→Recover edge (BP never encodes it in the XML — it's
    the nearest enclosing `Block` in the same page for each `Recover` stage) as part of this same
    graph-building pass, since it affects reachability too (a `Recover`'s continuation matters for
