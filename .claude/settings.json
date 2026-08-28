@@ -1,0 +1,18 @@
+{
+  "hooks": {
+    "SubagentStop": [
+      {
+        "matcher": "pad-implementer",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/post-hooks/prompt_review_after_implementer.py"
+          }
+        ]
+      }
+    ]
+  },
+  "env": {
+    "PATH": "C:\\Program Files\\Graphviz\\bin;C:\\Program Files\\PowerShell\\7;c:\\Users\\AnirbanDas\\Documents\\MyProjects\\rpa-tool-migration\\.venv\\Scripts;C:\\windows\\system32;C:\\windows;C:\\windows\\System32\\Wbem;C:\\windows\\System32\\WindowsPowerShell\\v1.0\\;C:\\windows\\System32\\OpenSSH\\;C:\\Program Files\\dotnet\\;C:\\Program Files (x86)\\Box\\Box Edit\\;C:\\Users\\AnirbanDas\\AppData\\Local\\nvm;C:\\nvm4w\\nodejs;C:\\Program Files\\Microsoft SQL Server\\170\\Tools\\Binn\\;C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\170\\Tools\\Binn\\;C:\\Program Files\\Box\\Box Edit\\;C:\\Program Files\\Microsoft SQL Server\\150\\Tools\\Binn\\;C:\\Program Files\\Git\\cmd;C:\\Program Files\\Rancher Desktop\\resources\\resources\\win32\\bin\\;C:\\Program Files\\Rancher Desktop\\resources\\resources\\win32\\docker-cli-plugins\\;C:\\Program Files\\Rancher Desktop\\resources\\resources\\linux\\bin\\;C:\\Program Files\\Rancher Desktop\\resources\\resources\\linux\\docker-cli-plugins\\;C:\\Program Files\\PowerShell\\7\\;C:\\Program Files\\GitHub CLI\\;C:\\Users\\AnirbanDas\\AppData\\Local\\Microsoft\\WindowsApps;C:\\Users\\AnirbanDas\\AppData\\Local\\nvm;C:\\nvm4w\\nodejs;C:\\Users\\AnirbanDas\\AppData\\Local\\Microsoft\\WinGet\\Packages\\SQLite.SQLite_Microsoft.Winget.Source_8wekyb3d8bbwe;C:\\Users\\AnirbanDas\\AppData\\Local\\GitHubDesktop\\bin;C:\\Users\\AnirbanDas\\AppData\\Local\\Python\\bin;C:\\Users\\AnirbanDas\\AppData\\Local\\Programs\\Microsoft VS Code\\bin;C:\\Users\\AnirbanDas\\.dotnet\\tools;C:\\Users\\AnirbanDas\\.local\\bin;C:\\Users\\AnirbanDas\\AppData\\Local\\Microsoft\\WinGet\\Packages\\astral-sh.uv_Microsoft.Winget.Source_8wekyb3d8bbwe;C:\\Users\\AnirbanDas\\AppData\\Local\\Programs\\IBM Bob\\bin;C:\\Users\\AnirbanDas\\AppData\\Local\\Microsoft\\WinGet\\Packages\\BurntSushi.ripgrep.MSVC_Microsoft.Winget.Source_8wekyb3d8bbwe\\ripgrep-15.1.0-x86_64-pc-windows-msvc;C:\\Users\\AnirbanDas\\AppData\\Local\\Programs\\Ollama;C:\\Users\\AnirbanDas\\AppData\\Local\\PowerToys\\DSCModules\\"
+  }
+}
