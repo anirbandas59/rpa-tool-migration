@@ -48,10 +48,23 @@ def main() -> int:
     if not paths:
         return 0  # empty scope list means nothing declared yet - don't block
 
-    normalized_target = os.path.normpath(target_path).replace("\\", "/")
-    in_scope = any(
-        normalized_target == os.path.normpath(p).replace("\\", "/")
-        or normalized_target.startswith(os.path.normpath(p).replace("\\", "/") + "/")
+    project_dir = os.environ.get("CLAUDE_PROJECT_DIR", ".")
+    abs_target = (
+        target_path if os.path.isabs(target_path) else os.path.join(project_dir, target_path)
+    )
+    try:
+        relative_target = os.path.relpath(abs_target, project_dir)
+    except ValueError:
+        # target_path is on a different drive than project_dir (Windows) - can't be in scope
+        relative_target = target_path
+
+    # Normalize separators and case (Windows paths are case-insensitive) so a scope entry like
+    # "src/flowsmith/mapper/config.py" matches a tool-supplied absolute path on the same file
+    # regardless of slash direction or drive-letter casing.
+    normalized_target = os.path.normpath(relative_target).replace("\\", "/").lower()
+    in_scope = not normalized_target.startswith("..") and any(
+        normalized_target == os.path.normpath(p).replace("\\", "/").lower()
+        or normalized_target.startswith(os.path.normpath(p).replace("\\", "/").lower() + "/")
         for p in paths
     )
 
