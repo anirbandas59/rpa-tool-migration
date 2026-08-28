@@ -127,11 +127,11 @@ class TestKnownVBORouting:
         assert decision.notes != ""
         assert len(decision.notes) > 0
 
-    def test_work_queues_vbo_is_cloud_runtime(self, router: VBORouter) -> None:
-        """Work Queue VBO has CLOUD runtime."""
+    def test_work_queues_vbo_is_desktop_runtime(self, router: VBORouter) -> None:
+        """Work Queue VBO has DESKTOP runtime."""
         decision = router.route("Blueprism.Automate.clsWorkQueuesActions", "Get Next Item")
         assert decision.is_known is True
-        assert decision.runtime == Runtime.CLOUD
+        assert decision.runtime == Runtime.DESKTOP
 
     def test_sharepoint_api_vbo_is_cloud_runtime(self, router: VBORouter) -> None:
         """SharePoint API VBO has CLOUD runtime."""
