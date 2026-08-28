@@ -699,6 +699,16 @@ PAD equivalent found", not an invented plausible-looking action name; (2) the BP
 Manager (`clsCredentialsActions :: Get`/`:: Set`) → PAD Azure Key Vault `GetSecret` rule (§B9)
 applies to any VBO credential fetch, not only the ones already in the table.
 
+**When a BP VBO has no entry here at all** (not PID_171's VBOs — a future automation's), search
+`docs/pad-reference/pad-action-index.yaml` (task-prompts doc Task 0) before concluding no PAD
+equivalent exists. That file indexes PAD's *full* action surface (name + description, from the
+official action-reference PDF) merged with confirmed syntax mined from every real PAD source file
+in this repo — broader than this table, which only covers what PID_171 happens to use. Its
+`confidence: confirmed` rows are usable the same way this table's rows are; its
+`confidence: description-only` rows name a *candidate* action family with no verified syntax —
+never promote one of those into this table without confirming the real call first (in a live PAD
+sample, or PAD Studio itself).
+
 ### B14. Page-by-page crosswalk
 
 All 24 BP pages (Main Page + 23 subsheets). "PAD target" cites the real `_11_managed` `FUNCTION`

@@ -217,6 +217,12 @@ Respects the pipeline's real dependency order (parser → AST → mapper → eng
 packager — the same ordering `docs/bp-to-pad-pipeline-plan.md`'s already-executed 8-sub-task plan
 used), scoped specifically to the consolidated-architecture gaps identified in §1:
 
+0. Build the PAD action index (`docs/pad-reference/pad-action-index.yaml`) — merges the PDF's
+   full action-name/description surface with confirmed syntax mined from every real PAD source
+   file already in the repo, kept honestly separated (`confirmed` vs `description-only`). No
+   dependency on anything else; can run first or in parallel with step 1. Complements, doesn't
+   replace, `vbo-action-mapping.md` — this is a curation-time search index keyed by PAD action,
+   not the runtime lookup keyed by BP VBO.
 1. `mapper/config.py` schema extension (§2.1) — per-method actions **and** multi-stage
    fusion-pattern support (architecture doc §B_FUSION — a BP idiom like `MS Excel VBO`'s
    `Create Instance`+`Open Workbook` collapses into one PAD call, which a flat 1:1 method→action

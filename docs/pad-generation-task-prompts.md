@@ -21,7 +21,77 @@ here so a task read in isolation is still complete):
   task's spec and why, and open questions for the reviewer.
 
 Dependency order matches `docs/bp-to-pad-implementation-strategy-PID171.md` §3.2. Do not start a
-task whose "Depends on" isn't already done.
+task whose "Depends on" isn't already done. **Task 0** has no dependency and touches no
+`src/flowsmith` code — it can run first, in parallel with Task 1, or any time; doing it early
+means Task 2b has a broader reference to pull from.
+
+---
+
+## Task 0 — Build the PAD action index: PDF descriptions + confirmed syntax from real source
+
+**Why this task exists:** `docs/pad-reference/vbo-action-mapping.md` only covers the ~40 actions
+PID_171 happens to use, each hand-confirmed against `docs/pad-reference/*.robin.txt`. The PDF
+cheat sheet covers PAD's full action surface (~40 categories) with a name + one-line description
+per action, but — confirmed earlier this session via `pdftotext -layout` extraction — **no calling
+syntax at all**, only names and descriptions. This task builds one merged, reusable reference that
+keeps those two kinds of information honestly separated, so a later curation pass (resolving
+`ReviewFlag`s for BP VBOs with no existing catalogue entry) can search by *description/intent*
+first, and know immediately whether a match has real, confirmed syntax or only a name — never
+treating the two as equivalent.
+
+**Depends on:** none
+**Files in scope:** new `scripts/build_pad_action_index.py`, new
+`docs/pad-reference/pad-action-index.yaml` (output). No changes to `src/flowsmith`,
+`mapping/*.yaml`, or any existing `docs/pad-reference/` file.
+**Required reading:** `C:\Users\AnirbanDas\Downloads\power-automate-desktop-actions.pdf` (the PDF
+itself — user-local path, not in the repo; read it directly, same `pdftotext -layout` extraction
+approach already proven to work on it this session — Git for Windows bundles `pdftotext.exe`),
+`docs/pad-reference/vbo-action-mapping.md` (existing precedent for row format/citation discipline,
+indexed by BP VBO rather than by PAD action — this task builds the complementary index, it doesn't
+replace that file).
+
+**Do:**
+1. Extract PDF entries into `{friendly_name, category, description}` rows, covering every action
+   listed across all ~40 categories (Variables, UI automation, Excel, Work queues, Office 365
+   Outlook, etc.) — not just the categories PID_171 happens to use.
+2. Extract confirmed syntax by scanning every real PAD source file already in the repo for actual
+   action-call lines (the `<Module>.<SubModule...>.<Method> <params>` shape) — at minimum:
+   `docs/pad-reference/DF_PID_171_US_Loader.robin.txt`,
+   `docs/pad-reference/DF_PID_171_US_LIMS_Prelude_Main.robin.txt`,
+   `docs/robin_Shell_PP_DesktopFlow_Template_Loader_Performer.robin`,
+   `docs/robin_Shell_PP_Reusable_Subflows.robin`,
+   `docs/robin_Shell_PP_SendEmail_Reusable_DesktopFlow.robin`,
+   `samples/pad/fixed/PID171_loader_fixed.txt`, `samples/pad/fixed/PID171_performer_fixed.txt`,
+   `samples/pad/PID171_loader.txt`, `samples/pad/PID171_performer.txt`,
+   `samples/pad/Shell_PP_DesktopFlow_Template_Loader_Performer.txt` — plus glob for any other
+   `.robin`/`.txt` PAD source under `samples/pad/` and `docs/` you find; don't treat this list as
+   exhaustive, note in your summary what you actually scanned. For each call found, capture the
+   dotted action name, full parameter list verbatim, and source file + line number.
+3. Align each confirmed-syntax dotted name (e.g. `Excel.LaunchExcel.
+   LaunchAndOpenUnderExistingProcess`) to its PDF friendly-name row (e.g. "Launch Excel," category
+   "Excel"). **This is not a plain string match** — the PDF uses PAD Studio's UI labels, Robin
+   script uses dotted internal paths. Align via category + keyword heuristics (match the PDF
+   category to the dotted name's leading module, then fuzzy-match the friendly name's key terms
+   against the method name). Any alignment you're not confident in gets marked
+   `alignment: unconfirmed` rather than silently paired wrong.
+4. Emit `docs/pad-reference/pad-action-index.yaml`: one entry per action — `dotted_name` (or
+   absent if PDF-only with no confirmed syntax and no confident alignment), `friendly_name`,
+   `category`, `description`, `confidence` (`confirmed` | `description-only`), `syntax` (only when
+   `confirmed`), `syntax_source` (file + line, only when `confirmed`).
+5. Add a header to the file (same convention as `vbo-action-mapping.md`) stating its purpose,
+   its relationship to `vbo_catalogue.yaml` (this is a curation-time search index keyed by *PAD
+   action*; `vbo_catalogue.yaml` stays the runtime lookup keyed by *BP VBO* — this file doesn't
+   replace it), and the row-format rule for future additions (never mark `confirmed` without a
+   real `syntax_source` citation).
+
+**Done when:** `pad-action-index.yaml` exists and parses as valid YAML; every `confirmed` row's
+`syntax_source` resolves to a real file and line (spot-check a handful); your summary reports the
+total count of `confirmed` vs. `description-only` rows — that ratio is itself a useful number for
+planning how much curation work remains before the tool's action coverage is broad.
+
+**Out of scope:** using this index to resolve any specific `ReviewFlag`, or building the
+curation-agent that would search it (a future task, once this index exists) — this task only
+builds the reference artifact.
 
 ---
 
