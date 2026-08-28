@@ -967,3 +967,251 @@ def test_pid171_wait_loop_start_have_group_id(pid_0171_raw: dict) -> None:
         assert stage["group_id"] is not None, (
             f"Stage {stage['stage_id']} ({stage['stage_type']}) has no group_id"
         )
+
+
+# ── Task 1a: ACTION input/output and edge target parsing ───────────────────
+
+
+@pytest.fixture
+def action_with_inputs_outputs_bprelease(tmp_path: Path) -> Path:
+    """Blue Prism .bprelease with ACTION stage carrying both inputs and outputs.
+
+    This mimics the structure of the Excel fusion stages:
+      - ACTION stage with <inputs> (routed to params_map and data_items)
+      - ACTION stage with <outputs> (routed to data_items)
+      - Edge targets (onsuccess, ontrue, onfalse) captured
+    """
+    xml_content = """\
+<?xml version="1.0" encoding="utf-8"?>
+<process id="proc_io" name="InputOutputTest" version="1.0">
+  <subsheet subsheetid="pg_001" name="InputOutputTest" type="0">
+    <stage stageid="s_001" type="Start" name="Start"/>
+    <stage stageid="s_002" type="Action" name="Create Instance">
+      <inputs>
+        <input name="Enable Events" type="flag" expr=""/>
+      </inputs>
+      <outputs>
+        <output name="handle" type="number" stage="handle"/>
+      </outputs>
+      <onsuccess>s_003</onsuccess>
+      <resource object="MS Excel VBO" action="Create Instance"/>
+    </stage>
+    <stage stageid="s_003" type="Action" name="Open Excel">
+      <inputs>
+        <input name="handle" type="number" expr="[handle]"/>
+        <input name="File name" type="text" expr="[fileName]"/>
+      </inputs>
+      <outputs>
+        <output name="Workbook Name" type="text" stage="Workbook Name"/>
+      </outputs>
+      <onsuccess>s_004</onsuccess>
+      <resource object="MS Excel VBO" action="Open Workbook"/>
+    </stage>
+    <stage stageid="s_004" type="End" name="End"/>
+  </subsheet>
+</process>
+"""
+    filepath = tmp_path / "test_io.bprelease"
+    filepath.write_text(xml_content, encoding="utf-8")
+    return filepath
+
+
+@pytest.fixture
+def decision_with_edges_bprelease(tmp_path: Path) -> Path:
+    """Blue Prism .bprelease with DECISION stage carrying ontrue and onfalse edges."""
+    xml_content = """\
+<?xml version="1.0" encoding="utf-8"?>
+<process id="proc_edges" name="EdgeTest" version="1.0">
+  <subsheet subsheetid="pg_001" name="EdgeTest" type="0">
+    <stage stageid="s_001" type="Start" name="Start"/>
+    <stage stageid="s_002" type="Decision" name="Check Condition">
+      <decision expression="[Flag] = True"/>
+      <ontrue>s_003</ontrue>
+      <onfalse>s_004</onfalse>
+    </stage>
+    <stage stageid="s_003" type="End" name="End (True)"/>
+    <stage stageid="s_004" type="End" name="End (False)"/>
+  </subsheet>
+</process>
+"""
+    filepath = tmp_path / "test_edges.bprelease"
+    filepath.write_text(xml_content, encoding="utf-8")
+    return filepath
+
+
+def test_action_input_in_params_map(action_with_inputs_outputs_bprelease: Path) -> None:
+    """ACTION stage inputs are stored in params_map as before."""
+    result = parse_process(action_with_inputs_outputs_bprelease)
+    create_stage = result["pages"][0]["stages"][1]
+
+    assert create_stage["stage_type"] == "Action"
+    assert "Enable Events" in create_stage["params_map"]
+    assert create_stage["params_map"]["Enable Events"] == ""
+
+
+def test_action_input_in_data_items(action_with_inputs_outputs_bprelease: Path) -> None:
+    """ACTION stage inputs are ALSO added to data_items with is_input=True (Task 1a)."""
+    result = parse_process(action_with_inputs_outputs_bprelease)
+    create_stage = result["pages"][0]["stages"][1]
+
+    # Find the "Enable Events" data item
+    enable_events_di = next(
+        (di for di in create_stage["data_items"] if di["name"] == "Enable Events"), None
+    )
+    assert enable_events_di is not None, "Expected 'Enable Events' in data_items"
+    assert enable_events_di["data_type"] == "flag"
+    assert enable_events_di["is_input"] is True
+    assert enable_events_di["is_output"] is False
+
+
+def test_action_output_in_data_items(action_with_inputs_outputs_bprelease: Path) -> None:
+    """ACTION stage outputs are added to data_items with is_output=True (Task 1a)."""
+    result = parse_process(action_with_inputs_outputs_bprelease)
+    create_stage = result["pages"][0]["stages"][1]
+
+    # Find the "handle" output data item
+    handle_di = next((di for di in create_stage["data_items"] if di["name"] == "handle"), None)
+    assert handle_di is not None, "Expected 'handle' output in data_items"
+    assert handle_di["data_type"] == "number"
+    assert handle_di["is_input"] is False
+    assert handle_di["is_output"] is True
+
+
+def test_onsuccess_target_captured(action_with_inputs_outputs_bprelease: Path) -> None:
+    """<onsuccess> element target stage ID is captured in onsuccess_target (Task 1a)."""
+    result = parse_process(action_with_inputs_outputs_bprelease)
+    create_stage = result["pages"][0]["stages"][1]
+
+    assert create_stage["onsuccess_target"] == "s_003"
+
+
+def test_onsuccess_target_none_when_absent(minimal_bprelease: Path) -> None:
+    """onsuccess_target defaults to None when no <onsuccess> element."""
+    result = parse_process(minimal_bprelease)
+    start_stage = result["pages"][0]["stages"][0]
+
+    assert start_stage["onsuccess_target"] is None
+
+
+def test_ontrue_target_captured(decision_with_edges_bprelease: Path) -> None:
+    """<ontrue> element target stage ID is captured in ontrue_target (Task 1a)."""
+    result = parse_process(decision_with_edges_bprelease)
+    decision_stage = result["pages"][0]["stages"][1]
+
+    assert decision_stage["ontrue_target"] == "s_003"
+
+
+def test_onfalse_target_captured(decision_with_edges_bprelease: Path) -> None:
+    """<onfalse> element target stage ID is captured in onfalse_target (Task 1a)."""
+    result = parse_process(decision_with_edges_bprelease)
+    decision_stage = result["pages"][0]["stages"][1]
+
+    assert decision_stage["onfalse_target"] == "s_004"
+
+
+def test_ontrue_onfalse_none_when_absent(minimal_bprelease: Path) -> None:
+    """ontrue_target and onfalse_target default to None when absent."""
+    result = parse_process(minimal_bprelease)
+    start_stage = result["pages"][0]["stages"][0]
+
+    assert start_stage["ontrue_target"] is None
+    assert start_stage["onfalse_target"] is None
+
+
+def test_pid171_create_instance_has_numeric_handle_output(pid_0171_raw: dict) -> None:
+    """In PID_0171's 'Read Excel As Collection' page, 'Create Instance' stage
+    outputs a numeric 'handle' that should appear in data_items (Task 1a requirement).
+    """
+    # Find the page with subsheetid containing "Read Excel"
+    # The "Create Instance" stage is on page eeeb6765-9d9f-4374-b7cd-d5ca8f3dfa61
+    page = next(
+        (
+            p
+            for p in pid_0171_raw["pages"]
+            if "eeeb6765-9d9f-4374-b7cd-d5ca8f3dfa61" in p["page_id"]
+        ),
+        None,
+    )
+    if page is None:
+        pytest.skip("PID_0171 'Read Excel As Collection' page not found")
+
+    # Find the "Create Instance" stage
+    create_instance = next(
+        (s for s in page["stages"] if s["name"] == "Create Instance"),
+        None,
+    )
+    assert create_instance is not None, "Expected 'Create Instance' stage in page"
+
+    # Verify it has a numeric output named "handle" in data_items
+    handle_outputs = [
+        di for di in create_instance["data_items"] if di["name"] == "handle" and di["is_output"]
+    ]
+    assert handle_outputs, "Expected 'handle' output in 'Create Instance' data_items"
+    handle_di = handle_outputs[0]
+    assert handle_di["data_type"] == "number"
+
+
+def test_pid171_open_excel_has_numeric_handle_input(pid_0171_raw: dict) -> None:
+    """In PID_0171's 'Read Excel As Collection' page, 'Open Excel' stage
+    should have a numeric 'handle' input in data_items (Task 1a requirement).
+    """
+    page = next(
+        (
+            p
+            for p in pid_0171_raw["pages"]
+            if "eeeb6765-9d9f-4374-b7cd-d5ca8f3dfa61" in p["page_id"]
+        ),
+        None,
+    )
+    if page is None:
+        pytest.skip("PID_0171 'Read Excel As Collection' page not found")
+
+    # Find the "Open Excel" stage
+    open_excel = next(
+        (s for s in page["stages"] if s["name"] == "Open Excel"),
+        None,
+    )
+    assert open_excel is not None, "Expected 'Open Excel' stage in page"
+
+    # Verify it has a numeric input named "handle" in data_items
+    handle_inputs = [
+        di for di in open_excel["data_items"] if di["name"] == "handle" and di["is_input"]
+    ]
+    assert handle_inputs, "Expected 'handle' input in 'Open Excel' data_items"
+    handle_di = handle_inputs[0]
+    assert handle_di["data_type"] == "number"
+
+
+def test_pid171_create_instance_has_onsuccess_edge(pid_0171_raw: dict) -> None:
+    """In PID_0171's 'Read Excel As Collection' page, 'Create Instance' stage
+    should have an onsuccess_target pointing to 'Open Excel' stage (Task 1a requirement).
+    """
+    page = next(
+        (
+            p
+            for p in pid_0171_raw["pages"]
+            if "eeeb6765-9d9f-4374-b7cd-d5ca8f3dfa61" in p["page_id"]
+        ),
+        None,
+    )
+    if page is None:
+        pytest.skip("PID_0171 'Read Excel As Collection' page not found")
+
+    create_instance = next(
+        (s for s in page["stages"] if s["name"] == "Create Instance"),
+        None,
+    )
+    assert create_instance is not None
+
+    # Verify onsuccess_target is set and non-empty
+    assert create_instance["onsuccess_target"] is not None, (
+        "Expected onsuccess_target on 'Create Instance'"
+    )
+
+    # Verify it points to the "Open Excel" stage
+    open_excel = next(
+        (s for s in page["stages"] if s["name"] == "Open Excel"),
+        None,
+    )
+    assert open_excel is not None
+    assert create_instance["onsuccess_target"] == open_excel["stage_id"]

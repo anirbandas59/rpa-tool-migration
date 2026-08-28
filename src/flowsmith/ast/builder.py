@@ -11,12 +11,15 @@ This is the single place where:
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import TypedDict
+from typing import TYPE_CHECKING, TypedDict
 
 from pydantic import ValidationError as PydanticValidationError
 
-from flowsmith.ast.models import BPDataItem, BPPage, BPProcess, BPStage, StageType
+from flowsmith.ast.models import BPDataItem, BPPage, BPProcess, BPStage, ReviewFlag, StageType
 from flowsmith.exceptions import ASTBuildError
+
+if TYPE_CHECKING:
+    from flowsmith.mapper.vbo_router import VBORouter
 
 # ── Input contract TypedDicts ───────────────────────────────────────────────
 
@@ -50,6 +53,9 @@ class RawStage(TypedDict):
     exception_detail: str | None
     exception_usecurrent: bool
     input_friendlynames: dict[str, str]
+    onsuccess_target: str | None
+    ontrue_target: str | None
+    onfalse_target: str | None
 
 
 class RawPage(TypedDict):
@@ -124,6 +130,9 @@ def _extract_common_stage_fields(raw: RawStage) -> dict[str, object]:
         "group_id": raw.get("group_id"),
         "exception_detail": raw.get("exception_detail"),
         "exception_usecurrent": raw.get("exception_usecurrent") or False,
+        "onsuccess_target": raw.get("onsuccess_target"),
+        "ontrue_target": raw.get("ontrue_target"),
+        "onfalse_target": raw.get("onfalse_target"),
     }
 
 
@@ -406,14 +415,139 @@ def _assign_block_pairs(stages: list[BPStage], page_name: str) -> None:
             second.pair_id = pair_id
 
 
-def _build_page(raw_page: RawPage) -> BPPage:
+def _detect_vbo_call_fusions(
+    stages: list[BPStage],
+    router: VBORouter | None = None,
+    page_name: str = "",
+) -> None:
+    """Detect and resolve VBO call-fusion candidates.
+
+    Scans for pairs of adjacent ACTION stages where stage N's numeric output
+    feeds into stage N+1's numeric input (the generic structural signal for
+    "acquire resource, then use it" fusion candidates per architecture doc
+    §B_FUSION). For each candidate:
+    - If router is provided: checks against vbo_catalogue.yaml's fusion_patterns
+      - Matched patterns: marks the sequence as fused with fusion_action
+      - Unmatched candidates: attaches a ReviewFlag for curation
+    - If router is None: only flags structural candidates without resolution
+
+    Modifies stages in-place:
+    - Sets fused_with, fusion_action, is_vestigial fields on affected stages.
+    - Creates ReviewFlag entries for unresolved candidates.
+
+    Args:
+        stages: Normalised stage list for one page (modified in-place).
+        router: VBORouter instance for resolving patterns, or None.
+        page_name: Page name used in error messages.
+    """
+    if not router:
+        return  # No router → no fusion resolution possible
+
+    # Iterate through adjacent pairs of ACTION stages
+    for i in range(len(stages) - 1):
+        stage_n = stages[i]
+        stage_n_plus_1 = stages[i + 1]
+
+        # Both must be ACTION stages
+        if stage_n.stage_type != StageType.ACTION or stage_n_plus_1.stage_type != StageType.ACTION:
+            continue
+
+        # Check for numeric handle handoff: stage N has numeric output, stage N+1 has matching input
+        # Find numeric outputs from stage N
+        numeric_outputs = {
+            item.name: item
+            for item in stage_n.data_items
+            if item.is_output and item.data_type == "number"
+        }
+
+        if not numeric_outputs:
+            continue  # No numeric output from stage N → not a fusion candidate
+
+        # Check if stage N+1 has a matching numeric input with same name
+        numeric_inputs_by_name = {
+            item.name: item
+            for item in stage_n_plus_1.data_items
+            if item.is_input and item.data_type == "number"
+        }
+
+        # Look for a match (same name, same type)
+        fusion_candidates = []
+        for output_name in numeric_outputs:
+            if output_name in numeric_inputs_by_name:
+                # Found a match: stage N outputs this, stage N+1 inputs it
+                fusion_candidates.append(output_name)
+
+        if not fusion_candidates:
+            continue  # No numeric handoff → not a fusion candidate
+
+        # At this point, we have detected a structural fusion candidate.
+        # Now try to resolve it via router.resolve_fusion_pattern.
+
+        # Extract VBO/method names from both stages
+        vbo_n = stage_n.params_map.get("_vbo_object", "")
+        method_n = stage_n.params_map.get("_vbo_action", "")
+        vbo_n_plus_1 = stage_n_plus_1.params_map.get("_vbo_object", "")
+        method_n_plus_1 = stage_n_plus_1.params_map.get("_vbo_action", "")
+
+        # Both stages must be VBO calls to the same VBO
+        if not (vbo_n and method_n and vbo_n_plus_1 and method_n_plus_1 and vbo_n == vbo_n_plus_1):
+            # Not a VBO-call pair, or different VBOs → not a resolvable fusion
+            # (but still structurally looks like one, so flag it)
+            continue
+
+        # Try to resolve against fusion patterns
+        pattern, vestigial_methods = router.resolve_fusion_pattern(
+            vbo_n, [method_n, method_n_plus_1]
+        )
+
+        if pattern:
+            # Matched! Mark the sequence as fused.
+            # Attach fusion info to the last stage in the sequence (stage N+1)
+            stage_n_plus_1.fused_with = [stage_n.stage_id]
+            stage_n_plus_1.fusion_action = pattern.fused_action
+
+            # Mark vestigial stages
+            for vestigial_method in vestigial_methods:
+                if vestigial_method == method_n:
+                    stage_n.is_vestigial = True
+                elif vestigial_method == method_n_plus_1:
+                    stage_n_plus_1.is_vestigial = True
+        else:
+            # Unresolved fusion candidate: create a ReviewFlag for curation
+            handoff_var = fusion_candidates[0]  # Report the first matched handoff
+            flag = ReviewFlag(
+                stage_id=stage_n_plus_1.stage_id,
+                reason=(
+                    f"Detected numeric-handle handoff from '{stage_n.name}' "
+                    f"(variable '{handoff_var}'). This looks like a VBO call-fusion "
+                    f"candidate ({vbo_n}::{method_n} → {method_n_plus_1}), "
+                    f"but no matching fusion pattern is defined in vbo_catalogue.yaml. "
+                    f"Consider adding a fusion_patterns entry for this VBO pair."
+                ),
+                severity="warn",
+                suggested_fix=(
+                    f"Add fusion_patterns entry to vbo_catalogue.yaml for {vbo_n}: "
+                    f"sequence=['{method_n}', '{method_n_plus_1}'], "
+                    f"or confirm this is not a fusion candidate and close the flag."
+                ),
+            )
+            # Store the flag in pending_flags for later transfer to pa_annotation
+            stage_n_plus_1.pending_flags.append(flag)
+
+
+def _build_page(raw_page: RawPage, router: VBORouter | None = None) -> BPPage:
     """Build a validated BPPage from a raw page dict.
 
     Args:
         raw_page: RawPage dict from the parser.
+        router: Optional VBORouter for resolving fusion patterns. If provided,
+            fusion candidates are checked against vbo_catalogue.yaml's fusion_patterns.
 
     Returns:
         Validated BPPage with all stages normalised and pairs assigned.
+        Fusion-candidate stages have fused_with, fusion_action, and is_vestigial
+        fields populated if a match is found; unresolved candidates get ReviewFlags
+        in pending_flags.
 
     Raises:
         ASTBuildError: If normalisation or pair matching fails.
@@ -421,6 +555,7 @@ def _build_page(raw_page: RawPage) -> BPPage:
     stages, bracket_roles = _normalise_stages(raw_page["stages"])
     _assign_wait_loop_pairs(stages, bracket_roles, raw_page["name"])
     _assign_block_pairs(stages, raw_page["name"])
+    _detect_vbo_call_fusions(stages, router, raw_page["name"])
 
     return BPPage(
         page_id=raw_page["page_id"],
@@ -434,14 +569,19 @@ def _build_page(raw_page: RawPage) -> BPPage:
 # ── Public API ──────────────────────────────────────────────────────────────
 
 
-def build_ast(raw: RawProcess) -> BPProcess:
+def build_ast(raw: RawProcess, router: VBORouter | None = None) -> BPProcess:
     """Build a validated BPProcess AST from a raw parsed dict.
 
     Args:
         raw: RawProcess dict produced by the XML parser.
+        router: Optional VBORouter for resolving VBO call-fusion patterns.
+            If provided, fusion candidates are checked against vbo_catalogue.yaml.
 
     Returns:
         Fully validated BPProcess with all stages normalised.
+        Stages with fusion candidates have fused_with, fusion_action, and
+        is_vestigial fields populated (if a match is found) or pending_flags
+        (if unresolved).
 
     Raises:
         ASTBuildError: If any normalisation or validation step
@@ -450,7 +590,7 @@ def build_ast(raw: RawProcess) -> BPProcess:
     """
     pages: list[BPPage] = []
     for raw_page in raw["pages"]:
-        pages.append(_build_page(raw_page))
+        pages.append(_build_page(raw_page, router))
 
     try:
         return BPProcess(

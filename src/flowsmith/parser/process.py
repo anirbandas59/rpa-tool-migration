@@ -224,10 +224,8 @@ def _parse_stage(stage_elem: Any) -> RawStage:
         if code_elem is not None and code_elem.text:
             code_text = code_elem.text
 
-        # Parse params_map
+        # Parse params_map and extract inputs into data_items (namespace-aware)
         params_map: dict[str, str] = {}
-
-        # For Action stages: extract inputs (namespace-aware)
         input_friendlynames: dict[str, str] = {}
         inputs_elem = stage_elem.find(_ns("inputs"))
         if inputs_elem is None:
@@ -236,21 +234,81 @@ def _parse_stage(stage_elem: Any) -> RawStage:
             for input_elem in inputs_elem.findall(_ns("input")):
                 input_name = input_elem.get("name", "").strip()
                 input_expr = input_elem.get("expr", "").strip()
+                input_type = input_elem.get("type", "text").strip()
                 if input_name:
                     params_map[input_name] = input_expr
                     friendlyname = input_elem.get("friendlyname", "").strip()
                     if friendlyname:
                         input_friendlynames[input_name] = friendlyname
+                    # Also add to data_items for structural/type-based scanning (Task 1a)
+                    data_items.append(
+                        RawDataItem(
+                            name=input_name,
+                            data_type=input_type,
+                            initial_value=None,
+                            is_input=True,
+                            is_output=False,
+                        )
+                    )
             # Also try without namespace
             if not params_map:
                 for input_elem in inputs_elem.findall("input"):
                     input_name = input_elem.get("name", "").strip()
                     input_expr = input_elem.get("expr", "").strip()
+                    input_type = input_elem.get("type", "text").strip()
                     if input_name:
                         params_map[input_name] = input_expr
                         friendlyname = input_elem.get("friendlyname", "").strip()
                         if friendlyname:
                             input_friendlynames[input_name] = friendlyname
+                        # Also add to data_items for structural/type-based scanning
+                        data_items.append(
+                            RawDataItem(
+                                name=input_name,
+                                data_type=input_type,
+                                initial_value=None,
+                                is_input=True,
+                                is_output=False,
+                            )
+                        )
+
+        # Parse outputs for ACTION stages (namespace-aware) — Task 1a
+        outputs_elem = stage_elem.find(_ns("outputs"))
+        if outputs_elem is None:
+            outputs_elem = stage_elem.find("outputs")
+        if outputs_elem is not None:
+            # Try with namespace first
+            ns_outputs = list(outputs_elem.findall(_ns("output")))
+            if ns_outputs:
+                for output_elem in ns_outputs:
+                    output_name = output_elem.get("name", "").strip()
+                    output_type = output_elem.get("type", "text").strip()
+                    if output_name:
+                        # Add to data_items with is_output=True for fusion detection
+                        data_items.append(
+                            RawDataItem(
+                                name=output_name,
+                                data_type=output_type,
+                                initial_value=None,
+                                is_input=False,
+                                is_output=True,
+                            )
+                        )
+            else:
+                # Try without namespace
+                for output_elem in outputs_elem.findall("output"):
+                    output_name = output_elem.get("name", "").strip()
+                    output_type = output_elem.get("type", "text").strip()
+                    if output_name:
+                        data_items.append(
+                            RawDataItem(
+                                name=output_name,
+                                data_type=output_type,
+                                initial_value=None,
+                                is_input=False,
+                                is_output=True,
+                            )
+                        )
 
         # For Calculation stages: extract calculation expressions (namespace-aware)
         calc_elem = stage_elem.find(_ns("calculation"))
@@ -274,6 +332,29 @@ def _parse_stage(stage_elem: Any) -> RawStage:
             if vbo_action:
                 params_map["_vbo_action"] = vbo_action
 
+        # Parse edge targets (onsuccess/ontrue/onfalse) — Task 1a
+        onsuccess_target: str | None = None
+        ontrue_target: str | None = None
+        onfalse_target: str | None = None
+
+        onsuccess_elem = stage_elem.find(_ns("onsuccess"))
+        if onsuccess_elem is None:
+            onsuccess_elem = stage_elem.find("onsuccess")
+        if onsuccess_elem is not None and onsuccess_elem.text:
+            onsuccess_target = onsuccess_elem.text.strip()
+
+        ontrue_elem = stage_elem.find(_ns("ontrue"))
+        if ontrue_elem is None:
+            ontrue_elem = stage_elem.find("ontrue")
+        if ontrue_elem is not None and ontrue_elem.text:
+            ontrue_target = ontrue_elem.text.strip()
+
+        onfalse_elem = stage_elem.find(_ns("onfalse"))
+        if onfalse_elem is None:
+            onfalse_elem = stage_elem.find("onfalse")
+        if onfalse_elem is not None and onfalse_elem.text:
+            onfalse_target = onfalse_elem.text.strip()
+
         return RawStage(
             stage_id=stage_id,
             stage_type=stage_type,
@@ -291,6 +372,9 @@ def _parse_stage(stage_elem: Any) -> RawStage:
             exception_detail=exception_detail,
             exception_usecurrent=exception_usecurrent,
             input_friendlynames=input_friendlynames,
+            onsuccess_target=onsuccess_target,
+            ontrue_target=ontrue_target,
+            onfalse_target=onfalse_target,
         )
     except (ValueError, AttributeError) as exc:
         raise ParseError(f"Failed to parse stage: {exc}") from exc

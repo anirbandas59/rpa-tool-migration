@@ -22,6 +22,18 @@ def make_raw_stage(
     exception_handler_id: str | None = None,
     exception_type: str | None = None,
     params_map: dict[str, str] | None = None,
+    decision_expression: str | None = None,
+    code_text: str | None = None,
+    narrative: str | None = None,
+    initial_value: str | None = None,
+    timeout_seconds: int | None = None,
+    group_id: str | None = None,
+    exception_detail: str | None = None,
+    exception_usecurrent: bool = False,
+    input_friendlynames: dict[str, str] | None = None,
+    onsuccess_target: str | None = None,
+    ontrue_target: str | None = None,
+    onfalse_target: str | None = None,
 ) -> RawStage:
     """Build a minimal valid RawStage dict."""
     return RawStage(
@@ -32,6 +44,18 @@ def make_raw_stage(
         exception_handler_id=exception_handler_id,
         exception_type=exception_type,
         params_map=params_map or {},
+        decision_expression=decision_expression,
+        code_text=code_text,
+        narrative=narrative,
+        initial_value=initial_value,
+        timeout_seconds=timeout_seconds,
+        group_id=group_id,
+        exception_detail=exception_detail,
+        exception_usecurrent=exception_usecurrent,
+        input_friendlynames=input_friendlynames or {},
+        onsuccess_target=onsuccess_target,
+        ontrue_target=ontrue_target,
+        onfalse_target=onfalse_target,
     )
 
 
@@ -607,3 +631,503 @@ def test_pid171_wait_or_loop_pairs_match_when_group_id_present(pid_0171_process)
             f"Stage {stage.stage_id} ({stage.stage_type}) with group_id "
             f"'{stage.group_id}' has no pair_id"
         )
+
+
+# ── VBO call-fusion detection tests ────────────────────────────────────────
+
+
+def test_fusion_candidate_no_router_passes_silently() -> None:
+    """Adjacent ACTION stages with numeric handoff pass through without fusion resolution if no router."""
+    # Create two adjacent ACTION stages with numeric handle handoff
+    stage1 = make_raw_stage(
+        stage_id="s1",
+        stage_type="Action",
+        name="Create Instance",
+        data_items=[
+            RawDataItem(
+                name="handle",
+                data_type="number",
+                initial_value=None,
+                is_input=False,
+                is_output=True,
+            )
+        ],
+        params_map={"_vbo_object": "MS Excel VBO", "_vbo_action": "Create Instance"},
+    )
+    stage2 = make_raw_stage(
+        stage_id="s2",
+        stage_type="Action",
+        name="Open Workbook",
+        data_items=[
+            RawDataItem(
+                name="handle",
+                data_type="number",
+                initial_value=None,
+                is_input=True,
+                is_output=False,
+            )
+        ],
+        params_map={"_vbo_object": "MS Excel VBO", "_vbo_action": "Open Workbook"},
+    )
+    raw = single_page_process(stage1, stage2)
+
+    # Build without router (fusion resolution disabled)
+    result = build_ast(raw, router=None)
+    assert result.pages[0].stages[0].fused_with == []
+    assert result.pages[0].stages[0].fusion_action is None
+    assert result.pages[0].stages[1].fused_with == []
+    assert result.pages[0].stages[1].fusion_action is None
+
+
+def test_fusion_unmatched_candidate_creates_review_flag() -> None:
+    """A numeric-handoff pair with no matching fusion pattern gets a ReviewFlag."""
+    from flowsmith.ast.models import Runtime
+    from flowsmith.mapper import MappingConfig, VBOEntry, VBORouter
+
+    # Create a minimal config with MS Excel VBO but no fusion patterns
+    config = MappingConfig(
+        stage_rules=[],
+        vbo_catalogue=[
+            VBOEntry(
+                vbo_name="MS Excel VBO",
+                method_patterns=["Create Instance", "Open Workbook"],
+                pa_module="Excel",
+                runtime=Runtime.DESKTOP,
+                confidence_base=0.8,
+                notes="Test VBO",
+                method_actions={},
+                fusion_patterns=[],  # Empty - no fusion patterns defined
+            )
+        ],
+    )
+    router = VBORouter(config)
+
+    # Create two adjacent ACTION stages with numeric handle handoff
+    stage1 = make_raw_stage(
+        stage_id="s1",
+        stage_type="Action",
+        name="Create Instance",
+        data_items=[
+            RawDataItem(
+                name="handle",
+                data_type="number",
+                initial_value=None,
+                is_input=False,
+                is_output=True,
+            )
+        ],
+        params_map={"_vbo_object": "MS Excel VBO", "_vbo_action": "Create Instance"},
+    )
+    stage2 = make_raw_stage(
+        stage_id="s2",
+        stage_type="Action",
+        name="Open Workbook",
+        data_items=[
+            RawDataItem(
+                name="handle",
+                data_type="number",
+                initial_value=None,
+                is_input=True,
+                is_output=False,
+            )
+        ],
+        params_map={"_vbo_object": "MS Excel VBO", "_vbo_action": "Open Workbook"},
+    )
+    raw = single_page_process(stage1, stage2)
+
+    # Build with router (fusion resolution enabled)
+    result = build_ast(raw, router=router)
+
+    # Stage 2 should have a pending ReviewFlag (unresolved fusion candidate)
+    stage2_built = result.pages[0].stages[1]
+    assert stage2_built.pending_flags, "Expected ReviewFlag for unmatched fusion candidate"
+    flag = stage2_built.pending_flags[0]
+    assert flag.severity == "warn"
+    assert "numeric-handle handoff" in flag.reason
+    assert "MS Excel VBO" in flag.reason
+
+
+def test_fusion_matched_candidate_resolves(pid_0171_process) -> None:  # type: ignore[no-untyped-def]
+    """Real-sample test: numeric-handoff pair matching a fusion pattern gets fused_with and fusion_action.
+
+    **FIXTURE DISCLOSURE:** This test uses the real PID_0171 fixture (`pid_0171_process`),
+    which parses `samples/blueprism/PID_0171.bprelease` and builds the AST. It locates the
+    real `Create Instance` (stage ID 28867ad1-ad80-41a9-9749-53ad12327fbc) and `Open Excel`
+    stage named "Open Excel" with vbo_action "Open Workbook" (stage ID d0ac971c-1c82-48d4-837e-8554614eccc7)
+    from the `Read Excel As Collection` page (page ID eeeb6765-9d9f-4374-b7cd-d5ca8f3dfa61),
+    confirming the real stages carry the numeric handle output/input data and onsuccess edge
+    required for fusion detection.
+
+    The VBORouter is synthetic (carrying a fusion_patterns entry for MS Excel VBO's
+    Create Instance + Open Workbook sequence), but the stage data is from the real sample.
+    """
+    from flowsmith.ast.models import Runtime
+    from flowsmith.mapper import MappingConfig, VBOEntry, VBORouter
+    from flowsmith.mapper.config import VBOFusionPattern
+
+    # Find the Read Excel As Collection page in the real sample
+    page = next(
+        (p for p in pid_0171_process.pages if "eeeb6765-9d9f-4374-b7cd-d5ca8f3dfa61" in p.page_id),
+        None,
+    )
+    assert page is not None, (
+        "Expected 'Read Excel As Collection' page (ID eeeb6765-9d9f-4374-b7cd-d5ca8f3dfa61) in PID_0171"
+    )
+
+    # Find the real Create Instance and Open Excel stages
+    create_instance = next(
+        (s for s in page.stages if s.name == "Create Instance"),
+        None,
+    )
+    open_excel = next(
+        (s for s in page.stages if s.name == "Open Excel"),
+        None,
+    )
+    assert create_instance is not None, "Expected 'Create Instance' stage in page"
+    assert open_excel is not None, "Expected 'Open Excel' stage in page"
+    assert create_instance.stage_type == StageType.ACTION
+    assert open_excel.stage_type == StageType.ACTION
+
+    # Verify real data: Create Instance has numeric handle output, Open Excel has matching input
+    create_handle_out = next(
+        (di for di in create_instance.data_items if di.name == "handle" and di.is_output),
+        None,
+    )
+    open_handle_in = next(
+        (di for di in open_excel.data_items if di.name == "handle" and di.is_input),
+        None,
+    )
+    assert create_handle_out is not None, "Real Create Instance should have numeric handle output"
+    assert create_handle_out.data_type == "number"
+    assert open_handle_in is not None, "Real Open Excel should have numeric handle input"
+    assert open_handle_in.data_type == "number"
+
+    # Verify onsuccess edge: Create Instance targets Open Excel
+    assert create_instance.onsuccess_target == open_excel.stage_id, (
+        f"Real Create Instance ({create_instance.stage_id}) should have onsuccess_target pointing to "
+        f"Open Excel ({open_excel.stage_id})"
+    )
+
+    # Now verify the fusion detection with real stages:
+    # The pid_0171_process fixture was built with router=None by default.
+    # To test fusion detection, we need to re-build with a router carrying the fusion pattern.
+    # However, the fixture is read-only; instead, we verify the real stages have the
+    # correct structure and confirm the logic would fuse them.
+    #
+    # Create a config with MS Excel VBO and a fusion pattern for Create Instance + Open Workbook
+    config = MappingConfig(
+        stage_rules=[],
+        vbo_catalogue=[
+            VBOEntry(
+                vbo_name="MS Excel VBO",
+                method_patterns=["Create Instance", "Open Workbook"],
+                pa_module="Excel",
+                runtime=Runtime.DESKTOP,
+                confidence_base=0.8,
+                notes="Test VBO with fusion pattern",
+                method_actions={},
+                fusion_patterns=[
+                    VBOFusionPattern(
+                        sequence=["Create Instance", "Open Workbook"],
+                        fused_action="Excel.LaunchExcel.LaunchAndOpenUnderExistingProcess Path: in_txt_InputFilePath Visible: False ReadOnly: False UseMachineLocale: False Instance=> ins_ExcelInstance",
+                        vestigial_stages=["Create Instance"],
+                    )
+                ],
+            )
+        ],
+    )
+    router = VBORouter(config)
+
+    # Re-parse and build with the router to test fusion detection on real stages
+    from flowsmith.parser import parse_process
+
+    raw = parse_process(PID_0171)
+    result = build_ast(raw, router=router)
+
+    # Find the real stages again in the newly-built AST
+    page_built = next(
+        (p for p in result.pages if "eeeb6765-9d9f-4374-b7cd-d5ca8f3dfa61" in p.page_id),
+        None,
+    )
+    assert page_built is not None
+    create_instance_built = next(
+        (s for s in page_built.stages if s.name == "Create Instance"),
+        None,
+    )
+    open_excel_built = next(
+        (s for s in page_built.stages if s.name == "Open Excel"),
+        None,
+    )
+    assert create_instance_built is not None
+    assert open_excel_built is not None
+
+    # Stage 1 (Create Instance) should be marked as vestigial
+    assert create_instance_built.is_vestigial is True, "Real Create Instance should be vestigial"
+
+    # Stage 2 (Open Excel) should have the fused action
+    assert create_instance_built.stage_id in open_excel_built.fused_with, (
+        f"Real Open Excel should list Create Instance ({create_instance_built.stage_id}) as fused"
+    )
+    assert open_excel_built.fusion_action is not None, "Real Open Excel should have a fusion_action"
+    assert "LaunchAndOpenUnderExistingProcess" in open_excel_built.fusion_action
+
+    # Stage 2 should NOT have a ReviewFlag (successfully resolved)
+    assert open_excel_built.pending_flags == [], "No ReviewFlag for resolved fusion"
+
+
+def test_close_workbook_close_instance_pair_not_detected_as_fusion_candidate(
+    pid_0171_process,  # type: ignore[no-untyped-def]
+) -> None:
+    """Close Workbook and Close Instance pair are NOT a fusion candidate in real data.
+
+    The real PID_0171.bprelease has Close Workbook and Close Instance on the
+    "Read Excel As Collection" page with NO <outputs> element on either stage.
+    Both stages have only numeric INPUTS (handle: is_input=True, is_output=False).
+
+    Since stage N's numeric handle has is_output=False, the structural pre-filter
+    in _detect_vbo_call_fusions (architecture doc §B_FUSION) cannot detect a
+    numeric-output→input signal, so this pair never becomes a fusion *candidate*
+    at all. Therefore:
+    - No fused_with list set on either stage
+    - No fusion_action set on either stage
+    - No ReviewFlag created (ReviewFlag only appears for detected-but-unresolved
+      candidates; this pair never becomes a candidate in the first place)
+
+    This is a documented follow-up gap in Task 1b (per review 1a-2026-08-29.md).
+    The architecture doc's claim about Close Workbook→Close Instance fusion
+    requires extending the structural signal detection, which is out of scope
+    for Task 1b. This test documents actual current behavior.
+    """
+
+    # Find the Close Workbook and Close Instance stages from real PID_0171
+    page = next(
+        (p for p in pid_0171_process.pages if "Read Excel As Collection" in p.name),
+        None,
+    )
+    assert page is not None, "Expected 'Read Excel As Collection' page in PID_0171"
+
+    # Find both stages (they appear in sequence in the real process)
+    close_wb = next((s for s in page.stages if s.name == "Close Workbook"), None)
+    close_inst = next((s for s in page.stages if s.name == "Close Instance"), None)
+
+    # Both must exist and be adjacent ACTION stages
+    assert close_wb is not None, "Expected 'Close Workbook' stage in page"
+    assert close_inst is not None, "Expected 'Close Instance' stage in page"
+    assert close_wb.stage_type == StageType.ACTION
+    assert close_inst.stage_type == StageType.ACTION
+
+    # Verify real data: neither stage has numeric output
+    close_wb_handle = next((di for di in close_wb.data_items if di.name == "handle"), None)
+    close_inst_handle = next((di for di in close_inst.data_items if di.name == "handle"), None)
+    assert close_wb_handle is not None, "Close Workbook should have handle data item"
+    assert close_inst_handle is not None, "Close Instance should have handle data item"
+    assert close_wb_handle.is_output is False, "Real Close Workbook has no numeric output"
+    assert close_inst_handle.is_output is False, "Real Close Instance has no numeric output"
+
+    # When built with or without router, neither stage should have fusion markers
+    # (they were never detected as candidates in the first place)
+    assert close_wb.fused_with == [], "Close Workbook should have no fused_with"
+    assert close_wb.fusion_action is None, "Close Workbook should have no fusion_action"
+    assert close_inst.fused_with == [], "Close Instance should have no fused_with"
+    assert close_inst.fusion_action is None, "Close Instance should have no fusion_action"
+
+    # No ReviewFlag for this pair (because it was never a detected candidate)
+    assert close_wb.pending_flags == [], "Close Workbook should have no pending flags"
+    assert close_inst.pending_flags == [], "Close Instance should have no pending flags"
+
+
+# ── Task 1a: ACTION input/output and edge target threading ─────────────────
+
+
+def test_action_outputs_threaded_to_bpstage() -> None:
+    """ACTION stage outputs parsed by Task 1a are available in BPStage.data_items.
+
+    This is a fundamental requirement for Task 1b's fusion detection to work:
+    the structural signal (numeric output on stage N, numeric input on stage N+1)
+    must be present in the AST's data_items.
+    """
+    stage = make_raw_stage(
+        stage_id="s1",
+        stage_type="Action",
+        name="Create Instance",
+        data_items=[
+            RawDataItem(
+                name="handle",
+                data_type="number",
+                initial_value=None,
+                is_input=False,
+                is_output=True,
+            )
+        ],
+    )
+    raw = single_page_process(stage)
+    result = build_ast(raw, router=None)
+
+    # Verify the output is present in the built BPStage
+    built_stage = result.pages[0].stages[0]
+    assert len(built_stage.data_items) >= 1
+    handle_output = next((di for di in built_stage.data_items if di.name == "handle"), None)
+    assert handle_output is not None
+    assert handle_output.data_type == "number"
+    assert handle_output.is_output is True
+
+
+def test_action_inputs_threaded_to_bpstage() -> None:
+    """ACTION stage inputs parsed by Task 1a are available in BPStage.data_items.
+
+    In addition to being in params_map (for VBO parameter substitution),
+    inputs should also appear in data_items for structural/type-based scanning.
+    """
+    stage = make_raw_stage(
+        stage_id="s1",
+        stage_type="Action",
+        name="Open Excel",
+        data_items=[
+            RawDataItem(
+                name="handle",
+                data_type="number",
+                initial_value=None,
+                is_input=True,
+                is_output=False,
+            ),
+            RawDataItem(
+                name="File name",
+                data_type="text",
+                initial_value=None,
+                is_input=True,
+                is_output=False,
+            ),
+        ],
+    )
+    raw = single_page_process(stage)
+    result = build_ast(raw, router=None)
+
+    # Verify the inputs are present in the built BPStage
+    built_stage = result.pages[0].stages[0]
+    handle_input = next((di for di in built_stage.data_items if di.name == "handle"), None)
+    assert handle_input is not None
+    assert handle_input.data_type == "number"
+    assert handle_input.is_input is True
+
+    file_input = next((di for di in built_stage.data_items if di.name == "File name"), None)
+    assert file_input is not None
+    assert file_input.data_type == "text"
+    assert file_input.is_input is True
+
+
+def test_onsuccess_edge_threaded_to_bpstage() -> None:
+    """onsuccess_target parsed by Task 1a is threaded through to BPStage."""
+    stage = make_raw_stage(
+        stage_id="s1",
+        stage_type="Action",
+        name="Create Instance",
+        onsuccess_target="s2",  # Parsed from <onsuccess>s2</onsuccess>
+    )
+    raw = single_page_process(stage)
+    result = build_ast(raw, router=None)
+
+    built_stage = result.pages[0].stages[0]
+    assert built_stage.onsuccess_target == "s2"
+
+
+def test_ontrue_onfalse_edges_threaded_to_bpstage() -> None:
+    """ontrue_target and onfalse_target parsed by Task 1a are threaded through to BPStage."""
+    stage = make_raw_stage(
+        stage_id="s1",
+        stage_type="Decision",
+        name="Check Condition",
+        decision_expression="[Flag] = True",
+        ontrue_target="s2",  # Parsed from <ontrue>s2</ontrue>
+        onfalse_target="s3",  # Parsed from <onfalse>s3</onfalse>
+    )
+    raw = single_page_process(stage)
+    result = build_ast(raw, router=None)
+
+    built_stage = result.pages[0].stages[0]
+    assert built_stage.ontrue_target == "s2"
+    assert built_stage.onfalse_target == "s3"
+
+
+def test_pid171_create_instance_ast_has_handle_output(pid_0171_process) -> None:  # type: ignore[no-untyped-def]
+    """Real test against PID_0171: Create Instance stage should have numeric handle output.
+
+    This is the core requirement for Task 1a: the parser and builder together
+    must extract and preserve the <output type="number" name="handle"> element
+    so Task 1b's fusion detection can find it.
+    """
+    # Find the 'Read Excel As Collection' page
+    page = next(
+        (p for p in pid_0171_process.pages if "eeeb6765-9d9f-4374-b7cd-d5ca8f3dfa61" in p.page_id),
+        None,
+    )
+    if page is None:
+        pytest.skip("PID_0171 'Read Excel As Collection' page not found")
+
+    # Find the "Create Instance" stage
+    create_instance = next(
+        (s for s in page.stages if s.name == "Create Instance"),
+        None,
+    )
+    assert create_instance is not None
+
+    # Verify the numeric handle output is in data_items
+    handle_outputs = [
+        di for di in create_instance.data_items if di.name == "handle" and di.is_output
+    ]
+    assert handle_outputs, "Expected numeric 'handle' output in Create Instance data_items"
+    assert handle_outputs[0].data_type == "number"
+
+
+def test_pid171_open_excel_ast_has_handle_input(pid_0171_process) -> None:  # type: ignore[no-untyped-def]
+    """Real test against PID_0171: Open Excel stage should have numeric handle input.
+
+    Task 1a requirement: the <input type="number" name="handle" expr="[handle]">
+    element must be extracted and made available for fusion detection.
+    """
+    page = next(
+        (p for p in pid_0171_process.pages if "eeeb6765-9d9f-4374-b7cd-d5ca8f3dfa61" in p.page_id),
+        None,
+    )
+    if page is None:
+        pytest.skip("PID_0171 'Read Excel As Collection' page not found")
+
+    open_excel = next(
+        (s for s in page.stages if s.name == "Open Excel"),
+        None,
+    )
+    assert open_excel is not None
+
+    # Verify the numeric handle input is in data_items
+    handle_inputs = [di for di in open_excel.data_items if di.name == "handle" and di.is_input]
+    assert handle_inputs, "Expected numeric 'handle' input in Open Excel data_items"
+    assert handle_inputs[0].data_type == "number"
+
+
+def test_pid171_create_instance_ast_has_onsuccess_edge(pid_0171_process) -> None:  # type: ignore[no-untyped-def]
+    """Real test against PID_0171: Create Instance should have onsuccess_target.
+
+    Task 1a requirement: the <onsuccess> element must be captured so Task 1b
+    can verify the adjacency (sole onsuccess target is the next stage with no branching).
+    """
+    page = next(
+        (p for p in pid_0171_process.pages if "eeeb6765-9d9f-4374-b7cd-d5ca8f3dfa61" in p.page_id),
+        None,
+    )
+    if page is None:
+        pytest.skip("PID_0171 'Read Excel As Collection' page not found")
+
+    create_instance = next(
+        (s for s in page.stages if s.name == "Create Instance"),
+        None,
+    )
+    assert create_instance is not None
+
+    # Verify onsuccess_target is captured
+    assert create_instance.onsuccess_target is not None
+    # Verify it points to Open Excel
+    open_excel = next(
+        (s for s in page.stages if s.name == "Open Excel"),
+        None,
+    )
+    assert open_excel is not None
+    assert create_instance.onsuccess_target == open_excel.stage_id

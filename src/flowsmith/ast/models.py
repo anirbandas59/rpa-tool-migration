@@ -283,6 +283,60 @@ class BPStage(BaseModel):
         default=None,
         description="Power Automate annotation set by the engine in Phase 5.",
     )
+    fused_with: list[str] = Field(
+        default_factory=list,
+        description=(
+            "List of stage_ids that are fused into this stage. Only populated on the "
+            "last stage in a fusion sequence (where fusion_action is attached). "
+            "Empty for non-fused stages or for stages consumed by a fusion."
+        ),
+    )
+    fusion_action: str | None = Field(
+        default=None,
+        description=(
+            "Resolved PAD action template for a fused sequence. Only populated on the "
+            "last stage in the sequence. None for non-fused stages or stages with no "
+            "matching fusion pattern (those get a ReviewFlag instead)."
+        ),
+    )
+    is_vestigial: bool = Field(
+        default=False,
+        description=(
+            "True if this stage is part of a fusion sequence but produces no independent "
+            "PAD output (e.g. 'Create Instance' when fused with 'Open Workbook'). "
+            "The generator should emit nothing standalone for vestigial stages."
+        ),
+    )
+    pending_flags: list[ReviewFlag] = Field(
+        default_factory=list,
+        description=(
+            "ReviewFlags created during AST building (e.g., by fusion detection) "
+            "that need to be transferred to pa_annotation when it's created in Phase 5. "
+            "These are temporary storage only — the engine should merge them into "
+            "pa_annotation.flags once pa_annotation exists."
+        ),
+    )
+    onsuccess_target: str | None = Field(
+        default=None,
+        description=(
+            "Target stage ID for the <onsuccess> edge, if present. "
+            "Used by fusion detection and reachability analysis to traverse the execution graph."
+        ),
+    )
+    ontrue_target: str | None = Field(
+        default=None,
+        description=(
+            "Target stage ID for the <ontrue> edge (DECISION true branch), if present. "
+            "Used by reachability analysis and code generation for branching stages."
+        ),
+    )
+    onfalse_target: str | None = Field(
+        default=None,
+        description=(
+            "Target stage ID for the <onfalse> edge (DECISION false branch), if present. "
+            "Used by reachability analysis and code generation for branching stages."
+        ),
+    )
 
     @model_validator(mode="after")
     def _derive_code_length(self) -> BPStage:
