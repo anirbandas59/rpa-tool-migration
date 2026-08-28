@@ -1,5 +1,16 @@
 {
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pre-hooks/guard_commit_message_no_author.py"
+          }
+        ]
+      }
+    ],
     "SubagentStop": [
       {
         "matcher": "pad-implementer",
