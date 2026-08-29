@@ -19,6 +19,26 @@
 
 # ── External / custom VBOs ─────────────────────────────────────────────────
 
+- vbo_name: "PID_0003_Object_US_SampleManager"
+  method_patterns: []
+  pa_module: "UIAutomation"
+  runtime: DESKTOP
+  confidence_base: 0.15
+  notes: >
+    UI-automation VBO for SampleManager application interaction.
+    Per architecture doc §B9, all methods require UI selectors and are out of scope.
+    Emit # TODO: UI selector required stub for each method (Task 2b).
+
+- vbo_name: "PID_0005_Object_US_ SampleResultsEntry"
+  method_patterns: []
+  pa_module: "UIAutomation"
+  runtime: DESKTOP
+  confidence_base: 0.15
+  notes: >
+    UI-automation VBO for Results Entry application interaction.
+    Per architecture doc §B9, all methods require UI selectors and are out of scope.
+    Emit # TODO: UI selector required stub for each method (Task 2b).
+
 - vbo_name: "MS Excel VBO"
   method_patterns:
     - "Create Instance"
@@ -26,17 +46,26 @@
     - "Get Worksheet As Collection"
     - "Close Workbook"
     - "Close Instance"
-    - "Get Cell Value"
-    - "Set Cell Value"
-    - "Save Workbook"
-    - "Get Last Row Number"
-    - "Create Worksheet"
+    - "Write to cell"
+    - "Save As"
   pa_module: "Excel"
   runtime: DESKTOP
   confidence_base: 0.80
   notes: >
     Maps to PAD Excel module. High method-for-method coverage.
     Verify column/row indexing differences (1-based in BP, 1-based in PAD).
+    Methods updated per vbo-action-mapping.md Excel table (Task 2b).
+  method_actions:
+    "Get Worksheet As Collection": "Excel.ReadFromExcel.ReadAllCells Instance: <ins> GetCellContentsMode: Excel.GetCellContentsMode.PlainText FirstLineIsHeader: True RangeValue=> <var>"
+    "Write to cell": "Excel.WriteToExcel.WriteCell Instance: <ins> Value: <val> Column: <n> Row: <n>"
+    "Save As": "Excel.SaveExcel.SaveAs Instance: <ins> DocumentFormat: Excel.ExcelFormat.FromExtension DocumentPath: <path>"
+  fusion_patterns:
+    - sequence: ["Create Instance", "Open Workbook"]
+      fused_action: "Excel.LaunchExcel.LaunchAndOpenUnderExistingProcess Path: <path> Visible: False ReadOnly: False UseMachineLocale: False Instance=> <var>"
+      vestigial_stages: ["Create Instance"]
+    - sequence: ["Close Workbook", "Close Instance"]
+      fused_action: "Excel.CloseExcel.Close Instance: <ins>"
+      vestigial_stages: ["Close Workbook"]
 
 - vbo_name: "MS Outlook Email VBO"
   method_patterns:
@@ -47,6 +76,40 @@
   notes: >
     Only 'Send Email' seen in this sample.
     Maps to PAD Outlook module or Cloud Flow Office365 connector action.
+
+- vbo_name: "MS Outlook Email VBO Extended"
+  method_patterns:
+    - "Get Received Items"
+    - "Mark Email As Read"
+    - "Move Email"
+  pa_module: "External"
+  runtime: DESKTOP
+  confidence_base: 0.80
+  notes: >
+    Extended Outlook VBO methods. Maps to External.InvokeCloudConnector with
+    cloud connector invocation from Desktop Flow (same nuance as clsCredentialsActions).
+    Methods from vbo-action-mapping.md Outlook table (Task 2b).
+  method_actions:
+    "Get Received Items": "External.InvokeCloudConnector ... OperationId: 'GetEmailsV3' @folderPath: ... @fetchOnlyUnread: True @includeAttachments: True @top: <n> @GetEmailsV3Response=> <var>"
+    "Mark Email As Read": "External.InvokeCloudConnector ... OperationId: 'MarkAsRead_V3' @messageId: ... @mailboxAddress: ... @'body/isRead': 'True'"
+    "Move Email": "External.InvokeCloudConnector ... OperationId: 'MoveV2' @messageId: ... @folderPath: ... @mailboxAddress: ... @MoveV2Response=> <var>"
+
+- vbo_name: "MS Outlook Extended VBO"
+  method_patterns:
+    - "Get Received Items"
+    - "Mark Email As Read"
+    - "Move Email"
+  pa_module: "External"
+  runtime: DESKTOP
+  confidence_base: 0.80
+  notes: >
+    Extended Outlook VBO methods (alternate naming convention).
+    Maps to External.InvokeCloudConnector with cloud connector invocation from Desktop Flow.
+    Methods from vbo-action-mapping.md Outlook table (Task 2b).
+  method_actions:
+    "Get Received Items": "External.InvokeCloudConnector ... OperationId: 'GetEmailsV3' @folderPath: ... @fetchOnlyUnread: True @includeAttachments: True @top: <n> @GetEmailsV3Response=> <var>"
+    "Mark Email As Read": "External.InvokeCloudConnector ... OperationId: 'MarkAsRead_V3' @messageId: ... @mailboxAddress: ... @'body/isRead': 'True'"
+    "Move Email": "External.InvokeCloudConnector ... OperationId: 'MoveV2' @messageId: ... @folderPath: ... @mailboxAddress: ... @MoveV2Response=> <var>"
 
 - vbo_name: "Utility - Collection Manipulation"
   method_patterns:
@@ -268,10 +331,12 @@
     - "Update Config Value"
   pa_module: "shared_sharepointonline"
   runtime: CLOUD
-  confidence_base: 0.65
+  confidence_base: 0.45
   notes: >
-    Reads/writes SharePoint list used as config store.
-    Maps to Cloud Flow SharePoint connector (GetItems / UpdateItem).
+    Reads/writes SharePoint list used as config store. In PID_171, this VBO's role
+    is superseded by the CF_PID_171_US_Read Config File cloud flow (architecture doc
+    §A2 and §B14 rows 22/24). No direct confirmed PAD mapping in vbo-action-mapping.md.
+    Low confidence — confirm whether this VBO is still needed before generating code for it.
 
 - vbo_name: "DWF Utility - Screenshot"
   method_patterns:
@@ -281,6 +346,19 @@
   confidence_base: 0.60
   notes: "Maps to PAD Workstation.TakeScreenshot.TakeScreenshotAndSaveToFile action."
 
+- vbo_name: "Utility_Object_Generic_ScreenShot"
+  method_patterns:
+    - "Take Screenshot"
+  pa_module: "Workstation"
+  runtime: DESKTOP
+  confidence_base: 0.75
+  notes: >
+    Screenshot utility VBO. Distinct from 'DWF Utility - Screenshot'.
+    Maps to PAD Workstation.TakeScreenshot.TakeScreenshotAndSaveToFile action.
+    Per DF_PID_171_US_LIMS_Prelude_Main.robin.txt L1361 (Task 2b fix pass).
+  method_actions:
+    "Take Screenshot": "Workstation.TakeScreenshot.TakeScreenshotAndSaveToFile File: <path> ImageFormat: System.ImageFormat.Png"
+
 - vbo_name: "GET Http File - BLOB"
   method_patterns:
     - "Download BLOB"
@@ -288,6 +366,17 @@
   runtime: CLOUD
   confidence_base: 0.60
   notes: "HTTP binary download. Maps to Cloud Flow HTTP action with binary response."
+
+- vbo_name: "Utility - Image Search"
+  method_patterns:
+    - "Find Image"
+    - "Search"
+  pa_module: ""
+  runtime: DESKTOP
+  confidence_base: 0.15
+  notes: >
+    No confirmed PAD equivalent found for PID_171 usage — STOP, do not invent.
+    Image search/OCR functionality may require custom PAD scripting or external connector.
 
 - vbo_name: "IBP Utility - Environment"
   method_patterns:

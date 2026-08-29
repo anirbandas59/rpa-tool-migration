@@ -719,15 +719,27 @@ class TestRealSampleScoring:
         score = scorer.score_process(annotated_process)
         assert score.spot_check_count == 4808
 
-    def test_real_sample_partial_count_154(self, scorer, annotated_process):
-        """Real sample has 154 PARTIAL stages."""
-        score = scorer.score_process(annotated_process)
-        assert score.partial_count == 154
+    def test_real_sample_partial_count_152(self, scorer, annotated_process):
+        """Real sample has 152 PARTIAL stages.
 
-    def test_real_sample_manual_count_489(self, scorer, annotated_process):
-        """Real sample has 489 MANUAL stages."""
+        Shifted from 154 by Task 2b's catalogue corrections (Excel method_patterns
+        rewrite, 6 new VBO entries including the fixed PID_0005 space key, SharePoint
+        confidence change from 0.65→0.45) which legitimately changed real annotation
+        outcomes for a more accurate result.
+        """
         score = scorer.score_process(annotated_process)
-        assert score.manual_count == 489
+        assert score.partial_count == 152
+
+    def test_real_sample_manual_count_491(self, scorer, annotated_process):
+        """Real sample has 491 MANUAL stages.
+
+        Shifted from 489 by Task 2b's catalogue corrections (Excel method_patterns
+        rewrite, 6 new VBO entries including the fixed PID_0005 space key, SharePoint
+        confidence change from 0.65→0.45) which legitimately changed real annotation
+        outcomes for a more accurate result.
+        """
+        score = scorer.score_process(annotated_process)
+        assert score.manual_count == 491
 
     def test_real_sample_error_flag_count_485(self, scorer, annotated_process):
         """Real sample has 485 error flags."""

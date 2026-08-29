@@ -518,7 +518,7 @@ class TestLoadRules:
         """load_rules defaults to mapping/ directory in cwd."""
         config = load_rules(force_reload=True)
         assert len(config.stage_rules) == 26
-        assert len(config.vbo_catalogue) == 32
+        assert len(config.vbo_catalogue) == 38
 
     def test_load_real_stage_rules(self) -> None:
         """load_rules successfully loads the real stage_rules.yaml."""
@@ -542,7 +542,7 @@ class TestLoadRules:
     def test_load_real_vbo_catalogue(self) -> None:
         """load_rules successfully loads the real vbo_catalogue.yaml."""
         config = load_rules(force_reload=True)
-        assert len(config.vbo_catalogue) == 32
+        assert len(config.vbo_catalogue) == 38
 
         # Check specific VBOs exist
         excel = config.get_vbo_entry("MS Excel VBO")
@@ -732,9 +732,9 @@ class TestIntegration:
             assert rule is not None, f"Rule for {stage_type} not found"
 
     def test_real_vbo_catalogue_loadable(self) -> None:
-        """Real vbo_catalogue.yaml contains all 32 expected entries."""
+        """Real vbo_catalogue.yaml contains all 38 expected entries."""
         config = load_rules(force_reload=True)
-        assert len(config.vbo_catalogue) == 32
+        assert len(config.vbo_catalogue) == 38
 
         # Check some known VBOs
         known_vbos = [
