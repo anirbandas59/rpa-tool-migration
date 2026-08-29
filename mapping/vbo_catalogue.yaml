@@ -44,21 +44,22 @@
     - "Create Instance"
     - "Open Workbook"
     - "Get Worksheet As Collection"
+    - "Get Worksheet Name"
     - "Close Workbook"
     - "Close Instance"
-    - "Write to cell"
-    - "Save As"
+    - "Write Collection"
+    - "Save Current Workbook As"
   pa_module: "Excel"
   runtime: DESKTOP
   confidence_base: 0.80
   notes: >
     Maps to PAD Excel module. High method-for-method coverage.
     Verify column/row indexing differences (1-based in BP, 1-based in PAD).
-    Methods updated per vbo-action-mapping.md Excel table (Task 2b).
+    Method action keys updated per real action="..." strings in PID_0171.bprelease (Task 2b fix pass).
   method_actions:
     "Get Worksheet As Collection": "Excel.ReadFromExcel.ReadAllCells Instance: <ins> GetCellContentsMode: Excel.GetCellContentsMode.PlainText FirstLineIsHeader: True RangeValue=> <var>"
-    "Write to cell": "Excel.WriteToExcel.WriteCell Instance: <ins> Value: <val> Column: <n> Row: <n>"
-    "Save As": "Excel.SaveExcel.SaveAs Instance: <ins> DocumentFormat: Excel.ExcelFormat.FromExtension DocumentPath: <path>"
+    "Write Collection": "Excel.WriteToExcel.WriteCell Instance: <ins> Value: <val> Column: <n> Row: <n>"
+    "Save Current Workbook As": "Excel.SaveExcel.SaveAs Instance: <ins> DocumentFormat: Excel.ExcelFormat.FromExtension DocumentPath: <path>"
   fusion_patterns:
     - sequence: ["Create Instance", "Open Workbook"]
       fused_action: "Excel.LaunchExcel.LaunchAndOpenUnderExistingProcess Path: <path> Visible: False ReadOnly: False UseMachineLocale: False Instance=> <var>"
@@ -70,46 +71,43 @@
 - vbo_name: "MS Outlook Email VBO"
   method_patterns:
     - "Send Email"
+    - "Mark Email As Read"
+    - "Move Email to Inbox Sub Folder"
   pa_module: "shared_office365"
   runtime: DESKTOP
   confidence_base: 0.75
   notes: >
-    Only 'Send Email' seen in this sample.
     Maps to PAD Outlook module or Cloud Flow Office365 connector action.
+    Three methods observed in PID_0171.bprelease (Task 2b fix pass).
+  method_actions:
+    "Send Email": "External.InvokeCloudConnector ... OperationId: 'SendEmailV2' @'emailMessage/To': ... @'emailMessage/Subject': ... @'emailMessage/Body': ... @'emailMessage/From': ... @'emailMessage/Cc': ... @'emailMessage/Attachments': <list> @'emailMessage/Importance': 'Normal'"
+    "Mark Email As Read": "External.InvokeCloudConnector ... OperationId: 'MarkAsRead_V3' @messageId: ... @mailboxAddress: ... @'body/isRead': 'True'"
+    "Move Email to Inbox Sub Folder": "External.InvokeCloudConnector ... OperationId: 'MoveV2' @messageId: ... @folderPath: ... @mailboxAddress: ... @MoveV2Response=> <var>"
 
 - vbo_name: "MS Outlook Email VBO Extended"
   method_patterns:
-    - "Get Received Items"
-    - "Mark Email As Read"
-    - "Move Email"
+    - "Save Attachments"
   pa_module: "External"
   runtime: DESKTOP
-  confidence_base: 0.80
+  confidence_base: 0.35
   notes: >
-    Extended Outlook VBO methods. Maps to External.InvokeCloudConnector with
-    cloud connector invocation from Desktop Flow (same nuance as clsCredentialsActions).
-    Methods from vbo-action-mapping.md Outlook table (Task 2b).
-  method_actions:
-    "Get Received Items": "External.InvokeCloudConnector ... OperationId: 'GetEmailsV3' @folderPath: ... @fetchOnlyUnread: True @includeAttachments: True @top: <n> @GetEmailsV3Response=> <var>"
-    "Mark Email As Read": "External.InvokeCloudConnector ... OperationId: 'MarkAsRead_V3' @messageId: ... @mailboxAddress: ... @'body/isRead': 'True'"
-    "Move Email": "External.InvokeCloudConnector ... OperationId: 'MoveV2' @messageId: ... @folderPath: ... @mailboxAddress: ... @MoveV2Response=> <var>"
+    Extended Outlook VBO. Only 'Save Attachments' action observed in PID_0171.bprelease (Task 2b fix pass).
+    No confirmed PAD template found in vbo-action-mapping.md — STOP, do not invent.
+    Attachment handling via External.InvokeCloudConnector requires manual verification of cloud connector API.
 
 - vbo_name: "MS Outlook Extended VBO"
   method_patterns:
-    - "Get Received Items"
-    - "Mark Email As Read"
-    - "Move Email"
+    - "Get Received Items (Basic) - Group Email"
   pa_module: "External"
   runtime: DESKTOP
-  confidence_base: 0.80
+  confidence_base: 0.75
   notes: >
-    Extended Outlook VBO methods (alternate naming convention).
-    Maps to External.InvokeCloudConnector with cloud connector invocation from Desktop Flow.
-    Methods from vbo-action-mapping.md Outlook table (Task 2b).
+    Extended Outlook VBO (alternate naming convention). Only 'Get Received Items (Basic) - Group Email'
+    observed in PID_0171.bprelease (Task 2b fix pass).
+    Maps to External.InvokeCloudConnector with GetEmailsV3 cloud connector operation from Desktop Flow
+    per vbo-action-mapping.md Outlook table.
   method_actions:
-    "Get Received Items": "External.InvokeCloudConnector ... OperationId: 'GetEmailsV3' @folderPath: ... @fetchOnlyUnread: True @includeAttachments: True @top: <n> @GetEmailsV3Response=> <var>"
-    "Mark Email As Read": "External.InvokeCloudConnector ... OperationId: 'MarkAsRead_V3' @messageId: ... @mailboxAddress: ... @'body/isRead': 'True'"
-    "Move Email": "External.InvokeCloudConnector ... OperationId: 'MoveV2' @messageId: ... @folderPath: ... @mailboxAddress: ... @MoveV2Response=> <var>"
+    "Get Received Items (Basic) - Group Email": "External.InvokeCloudConnector ... OperationId: 'GetEmailsV3' @folderPath: ... @fetchOnlyUnread: True @includeAttachments: True @top: <n> @GetEmailsV3Response=> <var>"
 
 - vbo_name: "Utility - Collection Manipulation"
   method_patterns:
@@ -348,16 +346,17 @@
 
 - vbo_name: "Utility_Object_Generic_ScreenShot"
   method_patterns:
-    - "Take Screenshot"
+    - "Capture Screenshot"
   pa_module: "Workstation"
   runtime: DESKTOP
   confidence_base: 0.75
   notes: >
     Screenshot utility VBO. Distinct from 'DWF Utility - Screenshot'.
     Maps to PAD Workstation.TakeScreenshot.TakeScreenshotAndSaveToFile action.
-    Per DF_PID_171_US_LIMS_Prelude_Main.robin.txt L1361 (Task 2b fix pass).
+    Real action='Capture Screenshot' per PID_0171.bprelease; template confirmed at
+    DF_PID_171_US_LIMS_Prelude_Main.robin.txt L1361 (Task 2b fix pass).
   method_actions:
-    "Take Screenshot": "Workstation.TakeScreenshot.TakeScreenshotAndSaveToFile File: <path> ImageFormat: System.ImageFormat.Png"
+    "Capture Screenshot": "Workstation.TakeScreenshot.TakeScreenshotAndSaveToFile File: <path> ImageFormat: System.ImageFormat.Png"
 
 - vbo_name: "GET Http File - BLOB"
   method_patterns:
@@ -377,6 +376,19 @@
   notes: >
     No confirmed PAD equivalent found for PID_171 usage — STOP, do not invent.
     Image search/OCR functionality may require custom PAD scripting or external connector.
+
+- vbo_name: "Utility_Object_Generic_ImageSearch"
+  method_patterns:
+    - "Clipboard image to PNG File"
+    - "Take ScreenShot"
+  pa_module: ""
+  runtime: DESKTOP
+  confidence_base: 0.15
+  notes: >
+    Image search utility VBO. Distinct from 'Utility - Image Search' (different VBO name string).
+    Two methods observed in PID_0171.bprelease (Task 2b fix pass).
+    No confirmed PAD templates found in vbo-action-mapping.md — STOP, do not invent.
+    Image capture/OCR functionality may require custom PAD scripting or external connector.
 
 - vbo_name: "IBP Utility - Environment"
   method_patterns:
