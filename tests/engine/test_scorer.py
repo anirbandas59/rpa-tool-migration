@@ -694,67 +694,90 @@ class TestModelImmutability:
 class TestRealSampleScoring:
     """Integration tests using the real sample process."""
 
-    def test_real_sample_stage_count_6576(self, scorer, annotated_process):
-        """Real sample has exactly 6576 stages."""
-        score = scorer.score_process(annotated_process)
-        assert score.stage_count == 6576
+    def test_real_sample_stage_count_724(self, scorer, annotated_process):
+        """Real sample has exactly 724 stages.
 
-    def test_real_sample_auto_count_1125(self, scorer, annotated_process):
-        """Real sample has 1125 AUTO stages.
-
-        EXCEPTION stages with exception_usecurrent=True are annotated at
-        confidence 0.90 (AUTO band) by StageAnnotator._annotate_exception(),
-        shifting 82 stages from SPOT_CHECK to AUTO relative to the pre
-        Sub-Task-3 baseline (previously 1043).
+        Shifted from 6576 by Task 3a's artefact-isolation fix: parse_element()
+        previously walked the whole release document (root.iter(...)) for every
+        artefact, so the "real sample" fixture (which unwraps to processes[0])
+        was accidentally scored against all 22 VBO objects' stages too, not just
+        the main process's own 18 pages. Now correctly scoped to the main
+        process alone (docs/reviews/3a-2026-08-30-isolation-fixpass.md).
         """
         score = scorer.score_process(annotated_process)
-        assert score.auto_count == 1125
+        assert score.stage_count == 724
 
-    def test_real_sample_spot_check_count_4808(self, scorer, annotated_process):
-        """Real sample has 4808 SPOT_CHECK stages.
+    def test_real_sample_auto_count_51(self, scorer, annotated_process):
+        """Real sample has 51 AUTO stages.
 
-        See test_real_sample_auto_count_1125 — 82 EXCEPTION stages moved out
-        of SPOT_CHECK into AUTO (previously 4890).
+        Shifted from 1125 by Task 3a's artefact-isolation fix (see
+        test_real_sample_stage_count_724) — the real_process fixture now
+        reflects only the main process's own stages.
         """
         score = scorer.score_process(annotated_process)
-        assert score.spot_check_count == 4808
+        assert score.auto_count == 51
 
-    def test_real_sample_partial_count_152(self, scorer, annotated_process):
-        """Real sample has 152 PARTIAL stages.
+    def test_real_sample_spot_check_count_623(self, scorer, annotated_process):
+        """Real sample has 623 SPOT_CHECK stages.
 
-        Shifted from 154 by Task 2b's catalogue corrections (Excel method_patterns
-        rewrite, 6 new VBO entries including the fixed PID_0005 space key, SharePoint
-        confidence change from 0.65→0.45) which legitimately changed real annotation
-        outcomes for a more accurate result.
+        Shifted from 4808 by Task 3a's artefact-isolation fix (see
+        test_real_sample_stage_count_724).
         """
         score = scorer.score_process(annotated_process)
-        assert score.partial_count == 152
+        assert score.spot_check_count == 623
 
-    def test_real_sample_manual_count_491(self, scorer, annotated_process):
-        """Real sample has 491 MANUAL stages.
+    def test_real_sample_partial_count_30(self, scorer, annotated_process):
+        """Real sample has 30 PARTIAL stages.
 
-        Shifted from 489 by Task 2b's catalogue corrections (Excel method_patterns
-        rewrite, 6 new VBO entries including the fixed PID_0005 space key, SharePoint
-        confidence change from 0.65→0.45) which legitimately changed real annotation
-        outcomes for a more accurate result.
+        Shifted from 152 by Task 3a's artefact-isolation fix (see
+        test_real_sample_stage_count_724); the prior 154->152 shift from
+        Task 2b's catalogue corrections (Excel method_patterns rewrite, 6 new
+        VBO entries including the fixed PID_0005 space key, SharePoint
+        confidence change 0.65->0.45) still applies within the correctly
+        scoped main-process-only stage set.
         """
         score = scorer.score_process(annotated_process)
-        assert score.manual_count == 491
+        assert score.partial_count == 30
 
-    def test_real_sample_error_flag_count_485(self, scorer, annotated_process):
-        """Real sample has 485 error flags."""
-        score = scorer.score_process(annotated_process)
-        assert score.error_flag_count == 485
+    def test_real_sample_manual_count_20(self, scorer, annotated_process):
+        """Real sample has 20 MANUAL stages.
 
-    def test_real_sample_warn_flag_count_53(self, scorer, annotated_process):
-        """Real sample has 53 warn flags."""
+        Shifted from 491 by Task 3a's artefact-isolation fix (see
+        test_real_sample_stage_count_724); the prior 489->491 shift from
+        Task 2b's catalogue corrections still applies within the correctly
+        scoped main-process-only stage set.
+        """
         score = scorer.score_process(annotated_process)
-        assert score.warn_flag_count == 53
+        assert score.manual_count == 20
 
-    def test_real_sample_page_count_399(self, scorer, annotated_process):
-        """Real sample has 399 pages."""
+    def test_real_sample_error_flag_count_16(self, scorer, annotated_process):
+        """Real sample has 16 error flags.
+
+        Shifted from 485 by Task 3a's artefact-isolation fix (see
+        test_real_sample_stage_count_724).
+        """
         score = scorer.score_process(annotated_process)
-        assert score.page_count == 399
+        assert score.error_flag_count == 16
+
+    def test_real_sample_warn_flag_count_4(self, scorer, annotated_process):
+        """Real sample has 4 warn flags.
+
+        Shifted from 53 by Task 3a's artefact-isolation fix (see
+        test_real_sample_stage_count_724).
+        """
+        score = scorer.score_process(annotated_process)
+        assert score.warn_flag_count == 4
+
+    def test_real_sample_page_count_18(self, scorer, annotated_process):
+        """Real sample has 18 pages.
+
+        Shifted from 399 by Task 3a's artefact-isolation fix (see
+        test_real_sample_stage_count_724) — 399 was the whole release
+        document's page count (main process + 21 other artefacts), not the
+        main process's own 18 pages.
+        """
+        score = scorer.score_process(annotated_process)
+        assert score.page_count == 18
 
     def test_real_sample_migration_readiness_not_empty(self, scorer, annotated_process):
         """Real sample migration_readiness is a non-empty string."""

@@ -371,13 +371,20 @@ class TestIntegration:
         not Path("samples/blueprism/PID_0127.bprelease").exists(), reason="Real sample unavailable"
     )
     def test_all_stages_annotated_real_sample(self, real_process) -> None:
-        """All stages in real sample have PAAnnotation."""
+        """All stages in real sample have PAAnnotation.
+
+        Count shifted from 6576 to 724 by Task 3a's artefact-isolation fix:
+        parse_element() previously walked the whole release document for every
+        artefact, so this fixture (which unwraps to processes[0]) was
+        accidentally counting all 22 VBO objects' stages too, not just the
+        main process's own 18 pages (docs/reviews/3a-2026-08-30-isolation-fixpass.md).
+        """
         create_annotator().annotate_process(real_process)
         total = sum(len(p.stages) for p in real_process.pages)
         annotated = sum(
             1 for p in real_process.pages for s in p.stages if s.pa_annotation is not None
         )
-        assert total == annotated == 6576
+        assert total == annotated == 724
 
     @pytest.mark.skipif(
         not Path("samples/blueprism/PID_0127.bprelease").exists(), reason="Real sample unavailable"

@@ -1,22 +1,51 @@
-"""Blue Prism XML process parser — .bprelease → RawProcess dict.
+"""Blue Prism XML process parser — .bprelease → multi-artefact RawProcess dict.
 
-Parses Blue Prism .bprelease XML files into a RawProcess TypedDict,
-ready for AST building. Handles namespace-aware element discovery,
-stage type preservation, data item extraction, and parameter mapping.
+Parses Blue Prism .bprelease XML files into a multi-artefact structure containing
+processes, objects (VBOs), and environment variables. Handles namespace-aware
+element discovery, stage type preservation, data item extraction, and parameter
+mapping for each artefact independently.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 from lxml import etree
 
 from flowsmith.ast.builder import RawDataItem, RawPage, RawProcess, RawStage
-from flowsmith.exceptions import ParseError
+from flowsmith.exceptions import ConfigError, ParseError
 
-# Blue Prism XML namespace
+# Blue Prism XML namespaces
 NS = "http://www.blueprism.co.uk/product/process"
+BPR = "http://www.blueprism.co.uk/product/release"
+ENV = "http://www.blueprism.co.uk/product/environment-variable"
+
+
+class RawEnvironmentVariable(TypedDict):
+    """A single environment variable from the release."""
+
+    id: str
+    name: str
+    type: str
+    value: str
+    description: str
+
+
+class MultiArtefactRelease(TypedDict):
+    """Multi-artefact release parsing result from parse_process().
+
+    Contains processes, objects (VBOs), environment variables, and validation stats.
+    This is the new return type for parse_process() — Task 3a.
+    """
+
+    processes: list[RawProcess]
+    objects: list[RawProcess]
+    environment_variables: list[RawEnvironmentVariable]
+    source_file: str
+    validation: dict[
+        str, int
+    ]  # declared_count, process_count, object_count, env_var_count, group_count
 
 
 def _ns(tag: str) -> str:
@@ -425,113 +454,66 @@ def _parse_page(subsheet_elem: Any) -> RawPage:
         raise ParseError(f"Failed to parse page: {exc}") from exc
 
 
-def parse_process(path: Path) -> RawProcess:
-    """Parse a Blue Prism .bprelease or .xml file into a RawProcess dict.
+def parse_element(artefact_elem: Any, release_id: str, root: Any) -> RawProcess:
+    """Parse a single process or object artefact element into a RawProcess.
 
-    Reads the XML, extracts process metadata, pages, and stages,
-    and returns a RawProcess dict matching the TypedDict contract.
-
-    Uses namespace-aware full-document stage collection via root.iter()
-    to extract all stages regardless of nesting depth.
+    This is the core per-artefact parsing function used by parse_process().
+    It handles extracting metadata, pages, and stages from a single <process>
+    or <object> element, returning a RawProcess dict that matches the existing
+    AST builder's expectations.
 
     Args:
-        path: Path to the .bprelease or .xml file.
+        artefact_elem: An lxml Element representing <process> or <object> root.
+        release_id: The id attribute from the release-level <process>/<object> wrapper.
+        root: The root element of the full XML tree (used for full-document stage collection).
 
     Returns:
         RawProcess dict ready to pass to build_ast().
 
     Raises:
-        ParseError: If the file does not exist, cannot be read,
-            or is not valid Blue Prism XML.
+        ParseError: If required metadata or structure is missing.
     """
-    if not path.exists():
-        raise ParseError(f"File does not exist: {path}")
-
     try:
-        tree = etree.parse(str(path))
-    except OSError as exc:
-        raise ParseError(f"Failed to read file {path}: {exc}") from exc
-    except etree.XMLSyntaxError as exc:
-        raise ParseError(f"Invalid XML in {path}: {exc}") from exc
+        # Find the inner <process> element if this is an outer wrapper
+        # (real .bprelease structure has wrapper → process → stages)
+        process_elem = artefact_elem
+        metadata_elem = artefact_elem
 
-    try:
-        root = tree.getroot()
-        root_tag = _strip_ns(root.tag)
+        # If artefact_elem has a child <process>, use it as the actual element
+        for child in artefact_elem:
+            if _strip_ns(child.tag) == "process":
+                process_elem = child
+                break
 
-        # Handle both direct <process> root and wrapped <release><contents><process> structure
-        process_elem = None
-        metadata_elem = None
-
-        if root_tag == "process":
-            process_elem = root
-            metadata_elem = root
-        elif root_tag == "release":
-            # Look for <process> inside <contents>
-            # Try with namespace first, then without
-            namespace = root.nsmap.get(None) or (
-                list(root.nsmap.values())[0] if root.nsmap else None
-            )
-
-            contents = None
-            if namespace:
-                contents = root.find(f"{{{namespace}}}contents")
-            if contents is None:
-                contents = root.find("contents")
-
-            if contents is not None:
-                # Find the first <process> in contents (outer process wrapper with id)
-                outer_process = None
-                for child in contents:
-                    if _strip_ns(child.tag) == "process":
-                        outer_process = child
-                        break
-
-                metadata_elem = outer_process
-
-                # Then find the inner <process> inside the outer one
-                # (the actual process with stages and subsheets)
-                if outer_process is not None:
-                    for child in outer_process:
-                        if _strip_ns(child.tag) == "process":
-                            process_elem = child
-                            break
-
-                    # If no inner process, use the outer one
-                    if process_elem is None:
-                        process_elem = outer_process
-
-        if process_elem is None or metadata_elem is None:
-            raise ParseError(
-                f"Expected root element <process> or <release><contents><process>, got <{root_tag}> in {path}"
-            )
-
-        # Extract process metadata (use metadata_elem for id, process_elem for other fields)
-        process_id = metadata_elem.get("id", "").strip()
+        # Extract process metadata (use release_id and outer element for id, process_elem for other fields)
+        process_id = release_id.strip()
         if not process_id:
-            raise ParseError("process element missing required 'id' attribute")
+            process_id = metadata_elem.get("id", "").strip()
+        if not process_id:
+            raise ValueError("artefact element missing required 'id' attribute")
 
         process_name = (process_elem.get("name", "") or metadata_elem.get("name", "")).strip()
         if not process_name:
-            raise ParseError("process element missing required 'name' attribute")
+            raise ValueError("artefact element missing required 'name' attribute")
 
         process_version = (
             process_elem.get("version", "") or metadata_elem.get("version", "")
         ).strip()
 
-        # ── FULL-DOCUMENT STAGE COLLECTION (namespace-aware) ─────────────────────
+        # ── ARTEFACT-SCOPED STAGE COLLECTION (namespace-aware) ─────────────────────
 
-        # Step 1: Collect ALL subsheets from entire document
+        # Step 1: Collect subsheets from this artefact only
         # Try namespace-aware first, then fall back to non-namespaced for test fixtures
         subsheets_by_id: dict[str, Any] = {}
         subsheets_published: dict[str, bool] = {}
-        all_subsheet_elems = list(root.iter(_ns("subsheet")))
+        all_subsheet_elems = list(artefact_elem.iter(_ns("subsheet")))
         if not all_subsheet_elems:
-            all_subsheet_elems = list(root.iter("subsheet"))
+            all_subsheet_elems = list(artefact_elem.iter("subsheet"))
 
         for subsheet_elem in all_subsheet_elems:
             page_id = subsheet_elem.get("subsheetid", "").strip()
             if not page_id:
-                raise ParseError("subsheet missing required 'subsheetid' attribute")
+                raise ValueError("subsheet missing required 'subsheetid' attribute")
 
             # Extract name from child element (namespace-aware)
             name_elem = subsheet_elem.find(_ns("name"))
@@ -582,11 +564,11 @@ def parse_process(path: Path) -> RawProcess:
                         paged_stages[page_id] = []
                     paged_stages[page_id].append(stage)
 
-        # Format B: Collect flat stages from root with <subsheetid> children (real format)
-        # This extracts all 7,605 stages, not just 810
-        all_stage_elems = list(root.iter(_ns("stage")))
+        # Format B: Collect flat stages from artefact with <subsheetid> children (real format)
+        # This extracts all stages from this artefact only
+        all_stage_elems = list(artefact_elem.iter(_ns("stage")))
         if not all_stage_elems:
-            all_stage_elems = list(root.iter("stage"))
+            all_stage_elems = list(artefact_elem.iter("stage"))
 
         for stage_elem in all_stage_elems:
             stage_id = stage_elem.get("stageid", "").strip()
@@ -664,10 +646,174 @@ def parse_process(path: Path) -> RawProcess:
             name=process_name,
             version=process_version,
             pages=pages,
-            source_file=str(path.absolute()),
+            source_file="",  # Will be set by parse_process
         )
 
     except ParseError:
+        raise
+    except (ValueError, AttributeError) as exc:
+        raise ParseError(f"Failed to parse artefact: {exc}") from exc
+
+
+def parse_process(path: Path) -> MultiArtefactRelease:
+    """Parse a Blue Prism .bprelease file into a multi-artefact structure.
+
+    Reads the XML, extracts all processes, objects (VBOs), and environment variables
+    from the release container. Returns a structured dict that distinguishes the
+    different artefact types, allowing downstream consumers (Task 4a+) to handle
+    each independently.
+
+    **Return type change (Task 3a):** This function now returns `MultiArtefactRelease`
+    (a dict with `processes`, `objects`, `environment_variables`, and validation stats)
+    instead of a single `RawProcess`. The old single-process return type is **not**
+    backward compatible — see Task 4a for how downstream consumers adapt.
+
+    Args:
+        path: Path to the .bprelease file.
+
+    Returns:
+        MultiArtefactRelease dict with parsed processes, objects, env vars, and stats.
+
+    Raises:
+        ParseError: If the file does not exist, cannot be read, or is not valid XML.
+        ConfigError: If the declared item count doesn't match the actual count.
+    """
+    if not path.exists():
+        raise ParseError(f"File does not exist: {path}")
+
+    try:
+        tree = etree.parse(str(path))
+    except OSError as exc:
+        raise ParseError(f"Failed to read file {path}: {exc}") from exc
+    except etree.XMLSyntaxError as exc:
+        raise ParseError(f"Invalid XML in {path}: {exc}") from exc
+
+    try:
+        root = tree.getroot()
+        root_tag = _strip_ns(root.tag)
+
+        # Handle both direct <process> root and wrapped <release><contents><process> structure
+        if root_tag == "process":
+            # Single process file (not a release container)
+            # For backward compatibility, wrap it in a MultiArtefactRelease
+            raw_process = parse_element(root, root.get("id", ""), root)
+            raw_process["source_file"] = str(path.absolute())
+            return MultiArtefactRelease(
+                processes=[raw_process],
+                objects=[],
+                environment_variables=[],
+                source_file=str(path.absolute()),
+                validation={
+                    "declared_count": 1,
+                    "process_count": 1,
+                    "object_count": 0,
+                    "env_var_count": 0,
+                    "group_count": 0,
+                },
+            )
+
+        elif root_tag == "release":
+            # Multi-artefact release container
+            # Locate the <bpr:contents> element (in the release namespace)
+            contents = None
+            # Try with explicit release namespace first
+            contents = root.find(f"{{{BPR}}}contents")
+            if contents is None:
+                # Try without namespace for compatibility
+                contents = root.find("contents")
+
+            if contents is None:
+                raise ParseError("No <bpr:contents> element found in release file")
+
+            # Validate declared count (per CLAUDE.md and task requirement)
+            declared_count = int(contents.get("count", 0))
+
+            # ── Iterate and parse all artefacts ──────────────────────────────────
+
+            processes: list[RawProcess] = []
+            objects: list[RawProcess] = []
+            env_vars: list[RawEnvironmentVariable] = []
+            groups: list[dict] = []
+
+            for child in contents:
+                tag = _strip_ns(child.tag)
+                release_id = child.get("id", "").strip()
+
+                if tag == "process":
+                    try:
+                        raw_proc = parse_element(child, release_id, root)
+                        raw_proc["source_file"] = str(path.absolute())
+                        processes.append(raw_proc)
+                    except ParseError as exc:
+                        raise ParseError(f"Failed to parse process {release_id}: {exc}") from exc
+
+                elif tag == "object":
+                    try:
+                        raw_obj = parse_element(child, release_id, root)
+                        raw_obj["source_file"] = str(path.absolute())
+                        objects.append(raw_obj)
+                    except ParseError as exc:
+                        raise ParseError(f"Failed to parse object {release_id}: {exc}") from exc
+
+                elif tag == "environment-variable":
+                    # Parse environment variable (Task 3b, but included here for completeness)
+                    try:
+                        desc_elem = child.find(f"{{{ENV}}}description")
+                        if desc_elem is None:
+                            desc_elem = child.find("description")
+                        env_var = RawEnvironmentVariable(
+                            id=child.get("id", "").strip(),
+                            name=child.get("name", "").strip(),
+                            type=child.get("type", "text").strip(),
+                            value=child.get("value", "").strip(),
+                            description=(
+                                desc_elem.text.strip()
+                                if desc_elem is not None and desc_elem.text
+                                else ""
+                            ),
+                        )
+                        env_vars.append(env_var)
+                    except (ValueError, AttributeError) as exc:
+                        raise ParseError(f"Failed to parse environment variable: {exc}") from exc
+
+                elif tag in ("process-group", "object-group"):
+                    # Note groups but don't process them further — they're reference metadata only
+                    groups.append({"id": child.get("id", ""), "name": child.get("name", "")})
+
+                # All other tags are silently skipped
+
+            # ── Validation: verify declared count matches actual count ──────────────
+
+            total_count = len(processes) + len(objects) + len(env_vars) + len(groups)
+            if total_count != declared_count:
+                raise ConfigError(
+                    f"Content count mismatch: declared={declared_count}, "
+                    f"actual={total_count} (processes={len(processes)}, objects={len(objects)}, "
+                    f"env_vars={len(env_vars)}, groups={len(groups)})"
+                )
+
+            return MultiArtefactRelease(
+                processes=processes,
+                objects=objects,
+                environment_variables=env_vars,
+                source_file=str(path.absolute()),
+                validation={
+                    "declared_count": declared_count,
+                    "process_count": len(processes),
+                    "object_count": len(objects),
+                    "env_var_count": len(env_vars),
+                    "group_count": len(groups),
+                },
+            )
+
+        else:
+            raise ParseError(
+                f"Expected root element <process> or <release>, got <{root_tag}> in {path}"
+            )
+
+    except ParseError:
+        raise
+    except ConfigError:
         raise
     except (etree.XMLSyntaxError, AttributeError, ValueError) as exc:
         raise ParseError(f"Failed to parse {path}: {exc}") from exc

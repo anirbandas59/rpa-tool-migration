@@ -127,33 +127,40 @@ def calculation_bprelease(tmp_path: Path) -> Path:
 
 
 def test_parse_returns_raw_process(minimal_bprelease: Path) -> None:
-    """Result is a dict with all required RawProcess keys."""
+    """Result is a MultiArtefactRelease dict with processes list and validation."""
     result = parse_process(minimal_bprelease)
 
     assert isinstance(result, dict)
-    assert "process_id" in result
-    assert "name" in result
-    assert "version" in result
-    assert "pages" in result
+    assert "processes" in result
+    assert "objects" in result
+    assert "environment_variables" in result
     assert "source_file" in result
+    assert "validation" in result
+    # First process should have RawProcess structure
+    assert len(result["processes"]) > 0
+    first_process = result["processes"][0]
+    assert "process_id" in first_process
+    assert "name" in first_process
+    assert "version" in first_process
+    assert "pages" in first_process
 
 
 def test_process_name_extracted(minimal_bprelease: Path) -> None:
     """Process name matches XML."""
     result = parse_process(minimal_bprelease)
-    assert result["name"] == "TestProcess"
+    assert result["processes"][0]["name"] == "TestProcess"
 
 
 def test_process_id_extracted(minimal_bprelease: Path) -> None:
     """Process ID matches XML."""
     result = parse_process(minimal_bprelease)
-    assert result["process_id"] == "proc_123"
+    assert result["processes"][0]["process_id"] == "proc_123"
 
 
 def test_process_version_extracted(minimal_bprelease: Path) -> None:
     """Process version matches XML."""
     result = parse_process(minimal_bprelease)
-    assert result["version"] == "1.0"
+    assert result["processes"][0]["version"] == "1.0"
 
 
 def test_source_file_absolute_path(minimal_bprelease: Path) -> None:
@@ -168,25 +175,25 @@ def test_source_file_absolute_path(minimal_bprelease: Path) -> None:
 def test_page_count(minimal_bprelease: Path) -> None:
     """Correct number of pages returned."""
     result = parse_process(minimal_bprelease)
-    assert len(result["pages"]) == 1
+    assert len(result["processes"][0]["pages"]) == 1
 
 
 def test_page_count_multipage(multi_page_bprelease: Path) -> None:
     """Multi-page file returns multiple pages."""
     result = parse_process(multi_page_bprelease)
-    assert len(result["pages"]) == 2
+    assert len(result["processes"][0]["pages"]) == 2
 
 
 def test_main_page_flagged(minimal_bprelease: Path) -> None:
     """is_main=True on the correct page."""
     result = parse_process(minimal_bprelease)
-    assert result["pages"][0]["is_main"] is True
+    assert result["processes"][0]["pages"][0]["is_main"] is True
 
 
 def test_main_page_by_name(multi_page_bprelease: Path) -> None:
     """Main page is identified by name matching process name."""
     result = parse_process(multi_page_bprelease)
-    main_pages = [p for p in result["pages"] if p["is_main"]]
+    main_pages = [p for p in result["processes"][0]["pages"] if p["is_main"]]
     assert len(main_pages) == 1
     assert main_pages[0]["name"] == "MainProcess"
 
@@ -194,20 +201,20 @@ def test_main_page_by_name(multi_page_bprelease: Path) -> None:
 def test_page_id_extracted(minimal_bprelease: Path) -> None:
     """Page ID matches subsheetid attribute."""
     result = parse_process(minimal_bprelease)
-    assert result["pages"][0]["page_id"] == "pg_001"
+    assert result["processes"][0]["pages"][0]["page_id"] == "pg_001"
 
 
 def test_page_name_extracted(minimal_bprelease: Path) -> None:
     """Page name matches XML."""
     result = parse_process(minimal_bprelease)
-    assert result["pages"][0]["name"] == "TestProcess"
+    assert result["processes"][0]["pages"][0]["name"] == "TestProcess"
 
 
 def test_multipage_stages_isolated(multi_page_bprelease: Path) -> None:
     """Stages on page 1 do not appear on page 2."""
     result = parse_process(multi_page_bprelease)
-    page1_stage_ids = {s["stage_id"] for s in result["pages"][0]["stages"]}
-    page2_stage_ids = {s["stage_id"] for s in result["pages"][1]["stages"]}
+    page1_stage_ids = {s["stage_id"] for s in result["processes"][0]["pages"][0]["stages"]}
+    page2_stage_ids = {s["stage_id"] for s in result["processes"][0]["pages"][1]["stages"]}
     assert not (page1_stage_ids & page2_stage_ids)  # No overlap
 
 
@@ -217,13 +224,13 @@ def test_multipage_stages_isolated(multi_page_bprelease: Path) -> None:
 def test_stage_count_per_page(minimal_bprelease: Path) -> None:
     """Correct stage count per page."""
     result = parse_process(minimal_bprelease)
-    assert len(result["pages"][0]["stages"]) == 3
+    assert len(result["processes"][0]["pages"][0]["stages"]) == 3
 
 
 def test_stage_type_preserved_as_raw_string(minimal_bprelease: Path) -> None:
     """Stage type is preserved exactly as it appears in XML (raw, not normalised)."""
     result = parse_process(minimal_bprelease)
-    stages = result["pages"][0]["stages"]
+    stages = result["processes"][0]["pages"][0]["stages"]
     assert stages[0]["stage_type"] == "Start"
     assert stages[1]["stage_type"] == "Action"
     assert stages[2]["stage_type"] == "End"
@@ -232,13 +239,13 @@ def test_stage_type_preserved_as_raw_string(minimal_bprelease: Path) -> None:
 def test_stage_id_extracted(minimal_bprelease: Path) -> None:
     """Stage ID matches stageid attribute."""
     result = parse_process(minimal_bprelease)
-    assert result["pages"][0]["stages"][0]["stage_id"] == "s_001"
+    assert result["processes"][0]["pages"][0]["stages"][0]["stage_id"] == "s_001"
 
 
 def test_stage_name_extracted(minimal_bprelease: Path) -> None:
     """Stage name matches name attribute."""
     result = parse_process(minimal_bprelease)
-    stages = result["pages"][0]["stages"]
+    stages = result["processes"][0]["pages"][0]["stages"]
     assert stages[0]["name"] == "Start"
     assert stages[1]["name"] == "Call Action"
     assert stages[2]["name"] == "End"
@@ -250,7 +257,7 @@ def test_stage_name_extracted(minimal_bprelease: Path) -> None:
 def test_data_item_extracted(minimal_bprelease: Path) -> None:
     """Data items are extracted with correct fields."""
     result = parse_process(minimal_bprelease)
-    start_stage = result["pages"][0]["stages"][0]
+    start_stage = result["processes"][0]["pages"][0]["stages"][0]
     assert len(start_stage["data_items"]) == 1
     di = start_stage["data_items"][0]
     assert di["name"] == "Counter"
@@ -261,7 +268,7 @@ def test_data_item_extracted(minimal_bprelease: Path) -> None:
 def test_data_item_is_input_flag(minimal_bprelease: Path) -> None:
     """usage='input' → is_input=True."""
     result = parse_process(minimal_bprelease)
-    action_stage = result["pages"][0]["stages"][1]
+    action_stage = result["processes"][0]["pages"][0]["stages"][1]
     output_di = action_stage["data_items"][0]
     assert output_di["is_input"] is False
     assert output_di["is_output"] is True
@@ -270,7 +277,7 @@ def test_data_item_is_input_flag(minimal_bprelease: Path) -> None:
 def test_data_item_is_output_flag(minimal_bprelease: Path) -> None:
     """usage='output' → is_output=True."""
     result = parse_process(minimal_bprelease)
-    action_stage = result["pages"][0]["stages"][1]
+    action_stage = result["processes"][0]["pages"][0]["stages"][1]
     di = action_stage["data_items"][0]
     assert di["is_output"] is True
 
@@ -288,21 +295,21 @@ def test_data_item_in_out_flag() -> None:
 def test_exception_handler_id_extracted(exception_handling_bprelease: Path) -> None:
     """exception_handler_id extracted from <onexception> child."""
     result = parse_process(exception_handling_bprelease)
-    risky_stage = result["pages"][0]["stages"][1]
+    risky_stage = result["processes"][0]["pages"][0]["stages"][1]
     assert risky_stage["exception_handler_id"] == "s_003"
 
 
 def test_exception_type_extracted(exception_handling_bprelease: Path) -> None:
     """exception_type extracted from <exception type="..."> child."""
     result = parse_process(exception_handling_bprelease)
-    risky_stage = result["pages"][0]["stages"][1]
+    risky_stage = result["processes"][0]["pages"][0]["stages"][1]
     assert risky_stage["exception_type"] == "Business Exception"
 
 
 def test_stage_no_exception_handler_is_none(minimal_bprelease: Path) -> None:
     """Stage with no exception handler has exception_handler_id=None."""
     result = parse_process(minimal_bprelease)
-    start_stage = result["pages"][0]["stages"][0]
+    start_stage = result["processes"][0]["pages"][0]["stages"][0]
     assert start_stage["exception_handler_id"] is None
 
 
@@ -312,7 +319,7 @@ def test_stage_no_exception_handler_is_none(minimal_bprelease: Path) -> None:
 def test_action_params_map_populated(minimal_bprelease: Path) -> None:
     """Action inputs are mapped correctly in params_map."""
     result = parse_process(minimal_bprelease)
-    action_stage = result["pages"][0]["stages"][1]
+    action_stage = result["processes"][0]["pages"][0]["stages"][1]
     assert "Param1" in action_stage["params_map"]
     assert action_stage["params_map"]["Param1"] == "Hello"
 
@@ -320,7 +327,7 @@ def test_action_params_map_populated(minimal_bprelease: Path) -> None:
 def test_calculation_params_map_populated(calculation_bprelease: Path) -> None:
     """Calculation expressions are mapped correctly in params_map."""
     result = parse_process(calculation_bprelease)
-    calc_stage = result["pages"][0]["stages"][1]
+    calc_stage = result["processes"][0]["pages"][0]["stages"][1]
     assert "result" in calc_stage["params_map"]
     assert calc_stage["params_map"]["result"] == "a + b"
 
@@ -328,7 +335,7 @@ def test_calculation_params_map_populated(calculation_bprelease: Path) -> None:
 def test_stage_no_params_has_empty_map(minimal_bprelease: Path) -> None:
     """Stage with no inputs/calculations has empty params_map."""
     result = parse_process(minimal_bprelease)
-    start_stage = result["pages"][0]["stages"][0]
+    start_stage = result["processes"][0]["pages"][0]["stages"][0]
     assert start_stage["params_map"] == {}
 
 
@@ -499,7 +506,7 @@ def test_missing_page_name_fallback(tmp_path: Path) -> None:
     good_file = tmp_path / "fallback_name.bprelease"
     good_file.write_text(xml, encoding="utf-8")
     result = parse_process(good_file)
-    assert result["pages"][0]["name"] == "pg_fallback"
+    assert result["processes"][0]["pages"][0]["name"] == "pg_fallback"
 
 
 def test_main_page_fallback_first_page(tmp_path: Path) -> None:
@@ -518,7 +525,7 @@ def test_main_page_fallback_first_page(tmp_path: Path) -> None:
     good_file = tmp_path / "fallback_main.bprelease"
     good_file.write_text(xml, encoding="utf-8")
     result = parse_process(good_file)
-    main_pages = [p for p in result["pages"] if p["is_main"]]
+    main_pages = [p for p in result["processes"][0]["pages"] if p["is_main"]]
     assert len(main_pages) == 1
     assert main_pages[0]["page_id"] == "pg1"
 
@@ -530,25 +537,25 @@ def test_full_minimal_flow(minimal_bprelease: Path) -> None:
     """Full parse of minimal fixture works end-to-end."""
     result = parse_process(minimal_bprelease)
 
-    assert result["process_id"] == "proc_123"
-    assert result["name"] == "TestProcess"
-    assert result["version"] == "1.0"
-    assert len(result["pages"]) == 1
-    assert result["pages"][0]["is_main"] is True
-    assert len(result["pages"][0]["stages"]) == 3
+    assert result["processes"][0]["process_id"] == "proc_123"
+    assert result["processes"][0]["name"] == "TestProcess"
+    assert result["processes"][0]["version"] == "1.0"
+    assert len(result["processes"][0]["pages"]) == 1
+    assert result["processes"][0]["pages"][0]["is_main"] is True
+    assert len(result["processes"][0]["pages"][0]["stages"]) == 3
 
 
 def test_full_multipage_flow(multi_page_bprelease: Path) -> None:
     """Full parse of multi-page fixture works end-to-end."""
     result = parse_process(multi_page_bprelease)
 
-    assert result["process_id"] == "proc_456"
-    assert result["name"] == "MainProcess"
-    assert len(result["pages"]) == 2
-    assert result["pages"][0]["is_main"] is True
-    assert result["pages"][1]["is_main"] is False
-    assert len(result["pages"][0]["stages"]) == 2
-    assert len(result["pages"][1]["stages"]) == 2
+    assert result["processes"][0]["process_id"] == "proc_456"
+    assert result["processes"][0]["name"] == "MainProcess"
+    assert len(result["processes"][0]["pages"]) == 2
+    assert result["processes"][0]["pages"][0]["is_main"] is True
+    assert result["processes"][0]["pages"][1]["is_main"] is False
+    assert len(result["processes"][0]["pages"][0]["stages"]) == 2
+    assert len(result["processes"][0]["pages"][1]["stages"]) == 2
 
 
 @pytest.mark.skipif(
@@ -559,10 +566,11 @@ def test_real_sample_parses() -> None:
     """Real sample file PID_0127.bprelease parses without error."""
     result = parse_process(Path("samples/blueprism/PID_0127.bprelease"))
 
-    assert result["process_id"]
-    assert result["name"]
-    assert len(result["pages"]) > 0
-    total_stages = sum(len(p["stages"]) for p in result["pages"])
+    assert result["processes"]
+    assert result["processes"][0]["process_id"]
+    assert result["processes"][0]["name"]
+    assert len(result["processes"][0]["pages"]) > 0
+    total_stages = sum(len(p["stages"]) for p in result["processes"][0]["pages"])
     assert total_stages > 0, "Expected at least one stage"
 
 
@@ -572,7 +580,7 @@ def test_real_sample_parses() -> None:
 def test_action_vbo_object_in_params_map(minimal_bprelease: Path) -> None:
     """Action stage with <resource> element stores VBO object and action in params_map."""
     result = parse_process(minimal_bprelease)
-    action_stage = result["pages"][0]["stages"][1]
+    action_stage = result["processes"][0]["pages"][0]["stages"][1]
 
     assert action_stage["stage_type"] == "Action"
     assert action_stage["name"] == "Call Action"
@@ -584,7 +592,7 @@ def test_non_action_stage_has_no_vbo_keys(multi_page_bprelease: Path) -> None:
     """Non-Action stages (Start, End, Decision, etc.) do not have _vbo_* keys."""
     result = parse_process(multi_page_bprelease)
 
-    for page in result["pages"]:
+    for page in result["processes"][0]["pages"]:
         for stage in page["stages"]:
             if stage["stage_type"] != "Action":
                 assert "_vbo_object" not in stage["params_map"]
@@ -611,7 +619,7 @@ def test_action_without_resource_has_no_vbo_keys(tmp_path: Path) -> None:
     filepath.write_text(xml_content, encoding="utf-8")
 
     result = parse_process(filepath)
-    action_stage = result["pages"][0]["stages"][1]
+    action_stage = result["processes"][0]["pages"][0]["stages"][1]
 
     assert action_stage["stage_type"] == "Action"
     assert "_vbo_object" not in action_stage["params_map"]
@@ -788,42 +796,42 @@ def published_page_bprelease(tmp_path: Path) -> Path:
 def test_decision_expression_extracted(decision_bprelease: Path) -> None:
     """decision_expression is extracted from <decision expression="...">."""
     result = parse_process(decision_bprelease)
-    decision_stage = result["pages"][0]["stages"][1]
+    decision_stage = result["processes"][0]["pages"][0]["stages"][1]
     assert decision_stage["decision_expression"] == "[Flag] = True"
 
 
 def test_decision_expression_none_when_absent(minimal_bprelease: Path) -> None:
     """decision_expression is None for stages without a <decision> child."""
     result = parse_process(minimal_bprelease)
-    start_stage = result["pages"][0]["stages"][0]
+    start_stage = result["processes"][0]["pages"][0]["stages"][0]
     assert start_stage["decision_expression"] is None
 
 
 def test_code_text_extracted(code_narrative_bprelease: Path) -> None:
     """code_text is extracted from the <code> CDATA body."""
     result = parse_process(code_narrative_bprelease)
-    code_stage = result["pages"][0]["stages"][1]
+    code_stage = result["processes"][0]["pages"][0]["stages"][1]
     assert code_stage["code_text"] == 'System.Console.WriteLine("hi")'
 
 
 def test_narrative_extracted(code_narrative_bprelease: Path) -> None:
     """narrative is extracted from the <narrative> text child."""
     result = parse_process(code_narrative_bprelease)
-    code_stage = result["pages"][0]["stages"][1]
+    code_stage = result["processes"][0]["pages"][0]["stages"][1]
     assert code_stage["narrative"] == "Runs a small VBScript snippet."
 
 
 def test_narrative_none_when_absent(minimal_bprelease: Path) -> None:
     """narrative is None when no <narrative> child is present."""
     result = parse_process(minimal_bprelease)
-    start_stage = result["pages"][0]["stages"][0]
+    start_stage = result["processes"][0]["pages"][0]["stages"][0]
     assert start_stage["narrative"] is None
 
 
 def test_data_stage_initial_value_extracted(data_initialvalue_bprelease: Path) -> None:
     """initial_value is extracted from a non-empty <initialvalue> element."""
     result = parse_process(data_initialvalue_bprelease)
-    counter_stage = result["pages"][0]["stages"][0]
+    counter_stage = result["processes"][0]["pages"][0]["stages"][0]
     assert counter_stage["initial_value"] == "0"
     # It should also be reflected on the synthesised data item.
     assert counter_stage["data_items"][0]["initial_value"] == "0"
@@ -832,7 +840,7 @@ def test_data_stage_initial_value_extracted(data_initialvalue_bprelease: Path) -
 def test_data_stage_empty_initial_value_is_none(data_initialvalue_bprelease: Path) -> None:
     """A self-closing <initialvalue /> element yields initial_value=None."""
     result = parse_process(data_initialvalue_bprelease)
-    empty_stage = result["pages"][0]["stages"][1]
+    empty_stage = result["processes"][0]["pages"][0]["stages"][1]
     assert empty_stage["initial_value"] is None
     assert empty_stage["data_items"][0]["initial_value"] is None
 
@@ -840,7 +848,7 @@ def test_data_stage_empty_initial_value_is_none(data_initialvalue_bprelease: Pat
 def test_waitstart_timeout_and_groupid_extracted(wait_loop_bprelease: Path) -> None:
     """timeout_seconds and group_id are extracted from WaitStart's children."""
     result = parse_process(wait_loop_bprelease)
-    stages = result["pages"][0]["stages"]
+    stages = result["processes"][0]["pages"][0]["stages"]
     wait_start = next(s for s in stages if s["stage_id"] == "s_001")
     assert wait_start["group_id"] == "grp_1"
     assert wait_start["timeout_seconds"] == 120
@@ -849,7 +857,7 @@ def test_waitstart_timeout_and_groupid_extracted(wait_loop_bprelease: Path) -> N
 def test_waitend_groupid_extracted_no_timeout(wait_loop_bprelease: Path) -> None:
     """WaitEnd carries the same group_id but has no <timeout> (so None)."""
     result = parse_process(wait_loop_bprelease)
-    stages = result["pages"][0]["stages"]
+    stages = result["processes"][0]["pages"][0]["stages"]
     wait_end = next(s for s in stages if s["stage_id"] == "s_002")
     assert wait_end["group_id"] == "grp_1"
     assert wait_end["timeout_seconds"] is None
@@ -858,7 +866,7 @@ def test_waitend_groupid_extracted_no_timeout(wait_loop_bprelease: Path) -> None
 def test_loopstart_groupid_extracted(wait_loop_bprelease: Path) -> None:
     """LoopStart/LoopEnd also carry group_id for bracket matching."""
     result = parse_process(wait_loop_bprelease)
-    stages = result["pages"][0]["stages"]
+    stages = result["processes"][0]["pages"][0]["stages"]
     loop_start = next(s for s in stages if s["stage_id"] == "s_003")
     loop_end = next(s for s in stages if s["stage_id"] == "s_004")
     assert loop_start["group_id"] == "grp_2"
@@ -868,7 +876,7 @@ def test_loopstart_groupid_extracted(wait_loop_bprelease: Path) -> None:
 def test_exception_detail_extracted(exception_detail_bprelease: Path) -> None:
     """exception_detail is extracted from <exception detail="...">."""
     result = parse_process(exception_detail_bprelease)
-    throw_stage = result["pages"][0]["stages"][0]
+    throw_stage = result["processes"][0]["pages"][0]["stages"][0]
     assert throw_stage["exception_detail"] == "[Message]"
     assert throw_stage["exception_usecurrent"] is False
 
@@ -876,49 +884,49 @@ def test_exception_detail_extracted(exception_detail_bprelease: Path) -> None:
 def test_exception_usecurrent_true(exception_detail_bprelease: Path) -> None:
     """exception_usecurrent=True when usecurrent="yes"."""
     result = parse_process(exception_detail_bprelease)
-    rethrow_stage = result["pages"][0]["stages"][1]
+    rethrow_stage = result["processes"][0]["pages"][0]["stages"][1]
     assert rethrow_stage["exception_usecurrent"] is True
 
 
 def test_exception_usecurrent_defaults_false(minimal_bprelease: Path) -> None:
     """exception_usecurrent defaults to False when no <exception> child exists."""
     result = parse_process(minimal_bprelease)
-    start_stage = result["pages"][0]["stages"][0]
+    start_stage = result["processes"][0]["pages"][0]["stages"][0]
     assert start_stage["exception_usecurrent"] is False
 
 
 def test_input_friendlyname_extracted(friendlyname_bprelease: Path) -> None:
     """friendlyname attribute on <input> is captured in input_friendlynames."""
     result = parse_process(friendlyname_bprelease)
-    action_stage = result["pages"][0]["stages"][0]
+    action_stage = result["processes"][0]["pages"][0]["stages"][0]
     assert action_stage["input_friendlynames"]["Param1"] == "Greeting"
 
 
 def test_input_friendlyname_empty_when_absent(minimal_bprelease: Path) -> None:
     """input_friendlynames is empty when no <input> has a friendlyname attribute."""
     result = parse_process(minimal_bprelease)
-    action_stage = result["pages"][0]["stages"][1]
+    action_stage = result["processes"][0]["pages"][0]["stages"][1]
     assert action_stage["input_friendlynames"] == {}
 
 
 def test_page_published_true(published_page_bprelease: Path) -> None:
     """published=True for a subsheet with published="true"."""
     result = parse_process(published_page_bprelease)
-    main_page = next(p for p in result["pages"] if p["page_id"] == "pg_001")
+    main_page = next(p for p in result["processes"][0]["pages"] if p["page_id"] == "pg_001")
     assert main_page["published"] is True
 
 
 def test_page_published_false(published_page_bprelease: Path) -> None:
     """published=False for a subsheet with published="false"."""
     result = parse_process(published_page_bprelease)
-    helper_page = next(p for p in result["pages"] if p["page_id"] == "pg_002")
+    helper_page = next(p for p in result["processes"][0]["pages"] if p["page_id"] == "pg_002")
     assert helper_page["published"] is False
 
 
 def test_page_published_defaults_false(minimal_bprelease: Path) -> None:
     """published defaults to False when the subsheet has no published attribute."""
     result = parse_process(minimal_bprelease)
-    assert result["pages"][0]["published"] is False
+    assert result["processes"][0]["pages"][0]["published"] is False
 
 
 # ── Real sample validation (PID_0171.bprelease) ─────────────────────────────
@@ -928,10 +936,18 @@ PID_0171 = Path("samples/blueprism/PID_0171.bprelease")
 
 @pytest.fixture(scope="module")
 def pid_0171_raw() -> dict:
-    """Parse the real PID_0171 sample once per test module."""
+    """Parse the real PID_0171 sample once per test module.
+
+    As of Task 3a, parse_process() returns MultiArtefactRelease.
+    This fixture extracts the first process (the main PID_0171 process)
+    for backward compatibility with existing tests.
+    """
     if not PID_0171.exists():
         pytest.skip("PID_0171 sample not available")
-    return parse_process(PID_0171)
+    release = parse_process(PID_0171)
+    if release["processes"]:
+        return release["processes"][0]
+    pytest.skip("No processes found in PID_0171 release")
 
 
 def test_pid171_decision_stage_has_expression(pid_0171_raw: dict) -> None:
@@ -1042,7 +1058,7 @@ def decision_with_edges_bprelease(tmp_path: Path) -> Path:
 def test_action_input_in_params_map(action_with_inputs_outputs_bprelease: Path) -> None:
     """ACTION stage inputs are stored in params_map as before."""
     result = parse_process(action_with_inputs_outputs_bprelease)
-    create_stage = result["pages"][0]["stages"][1]
+    create_stage = result["processes"][0]["pages"][0]["stages"][1]
 
     assert create_stage["stage_type"] == "Action"
     assert "Enable Events" in create_stage["params_map"]
@@ -1052,7 +1068,7 @@ def test_action_input_in_params_map(action_with_inputs_outputs_bprelease: Path) 
 def test_action_input_in_data_items(action_with_inputs_outputs_bprelease: Path) -> None:
     """ACTION stage inputs are ALSO added to data_items with is_input=True (Task 1a)."""
     result = parse_process(action_with_inputs_outputs_bprelease)
-    create_stage = result["pages"][0]["stages"][1]
+    create_stage = result["processes"][0]["pages"][0]["stages"][1]
 
     # Find the "Enable Events" data item
     enable_events_di = next(
@@ -1067,7 +1083,7 @@ def test_action_input_in_data_items(action_with_inputs_outputs_bprelease: Path) 
 def test_action_output_in_data_items(action_with_inputs_outputs_bprelease: Path) -> None:
     """ACTION stage outputs are added to data_items with is_output=True (Task 1a)."""
     result = parse_process(action_with_inputs_outputs_bprelease)
-    create_stage = result["pages"][0]["stages"][1]
+    create_stage = result["processes"][0]["pages"][0]["stages"][1]
 
     # Find the "handle" output data item
     handle_di = next((di for di in create_stage["data_items"] if di["name"] == "handle"), None)
@@ -1080,7 +1096,7 @@ def test_action_output_in_data_items(action_with_inputs_outputs_bprelease: Path)
 def test_onsuccess_target_captured(action_with_inputs_outputs_bprelease: Path) -> None:
     """<onsuccess> element target stage ID is captured in onsuccess_target (Task 1a)."""
     result = parse_process(action_with_inputs_outputs_bprelease)
-    create_stage = result["pages"][0]["stages"][1]
+    create_stage = result["processes"][0]["pages"][0]["stages"][1]
 
     assert create_stage["onsuccess_target"] == "s_003"
 
@@ -1088,7 +1104,7 @@ def test_onsuccess_target_captured(action_with_inputs_outputs_bprelease: Path) -
 def test_onsuccess_target_none_when_absent(minimal_bprelease: Path) -> None:
     """onsuccess_target defaults to None when no <onsuccess> element."""
     result = parse_process(minimal_bprelease)
-    start_stage = result["pages"][0]["stages"][0]
+    start_stage = result["processes"][0]["pages"][0]["stages"][0]
 
     assert start_stage["onsuccess_target"] is None
 
@@ -1096,7 +1112,7 @@ def test_onsuccess_target_none_when_absent(minimal_bprelease: Path) -> None:
 def test_ontrue_target_captured(decision_with_edges_bprelease: Path) -> None:
     """<ontrue> element target stage ID is captured in ontrue_target (Task 1a)."""
     result = parse_process(decision_with_edges_bprelease)
-    decision_stage = result["pages"][0]["stages"][1]
+    decision_stage = result["processes"][0]["pages"][0]["stages"][1]
 
     assert decision_stage["ontrue_target"] == "s_003"
 
@@ -1104,7 +1120,7 @@ def test_ontrue_target_captured(decision_with_edges_bprelease: Path) -> None:
 def test_onfalse_target_captured(decision_with_edges_bprelease: Path) -> None:
     """<onfalse> element target stage ID is captured in onfalse_target (Task 1a)."""
     result = parse_process(decision_with_edges_bprelease)
-    decision_stage = result["pages"][0]["stages"][1]
+    decision_stage = result["processes"][0]["pages"][0]["stages"][1]
 
     assert decision_stage["onfalse_target"] == "s_004"
 
@@ -1112,7 +1128,7 @@ def test_onfalse_target_captured(decision_with_edges_bprelease: Path) -> None:
 def test_ontrue_onfalse_none_when_absent(minimal_bprelease: Path) -> None:
     """ontrue_target and onfalse_target default to None when absent."""
     result = parse_process(minimal_bprelease)
-    start_stage = result["pages"][0]["stages"][0]
+    start_stage = result["processes"][0]["pages"][0]["stages"][0]
 
     assert start_stage["ontrue_target"] is None
     assert start_stage["onfalse_target"] is None
@@ -1215,3 +1231,232 @@ def test_pid171_create_instance_has_onsuccess_edge(pid_0171_raw: dict) -> None:
     )
     assert open_excel is not None
     assert create_instance["onsuccess_target"] == open_excel["stage_id"]
+
+
+# ── Task 3a: Multi-artefact release parsing ──────────────────────────────────
+
+
+def test_multi_artefact_release_returns_correct_structure(tmp_path: Path) -> None:
+    """parse_process() returns MultiArtefactRelease with processes, objects, env_vars, validation."""
+    xml_content = """\
+<?xml version="1.0" encoding="utf-8"?>
+<bpr:release xmlns:bpr="http://www.blueprism.co.uk/product/release"
+             xmlns="http://www.blueprism.co.uk/product/process"
+             xmlns:env="http://www.blueprism.co.uk/product/environment-variable">
+  <bpr:name>TestRelease</bpr:name>
+  <bpr:contents count="3">
+    <process id="proc_001" name="Process1" version="1.0">
+      <process name="Process1">
+        <subsheet subsheetid="pg_001" name="Process1">
+          <stage stageid="s_001" type="Start" name="Start"/>
+          <stage stageid="s_002" type="End" name="End"/>
+        </subsheet>
+      </process>
+    </process>
+    <object id="obj_001" name="Object1" version="1.0">
+      <process name="Object1">
+        <subsheet subsheetid="pg_002" name="Initialize">
+          <stage stageid="s_003" type="Start" name="Start"/>
+          <stage stageid="s_004" type="End" name="End"/>
+        </subsheet>
+      </process>
+    </object>
+    <environment-variable id="ev_001" name="TestVar" type="text" value="test_value">
+      <env:description>A test environment variable</env:description>
+    </environment-variable>
+  </bpr:contents>
+</bpr:release>
+"""
+    filepath = tmp_path / "test_multi.bprelease"
+    filepath.write_text(xml_content, encoding="utf-8")
+
+    result = parse_process(filepath)
+
+    # Verify top-level structure
+    assert "processes" in result
+    assert "objects" in result
+    assert "environment_variables" in result
+    assert "validation" in result
+    assert "source_file" in result
+
+    # Verify counts
+    assert len(result["processes"]) == 1
+    assert len(result["objects"]) == 1
+    assert len(result["environment_variables"]) == 1
+
+    # Verify processes content
+    assert result["processes"][0]["name"] == "Process1"
+    assert result["processes"][0]["process_id"] == "proc_001"
+
+    # Verify objects content
+    assert result["objects"][0]["name"] == "Object1"
+    assert result["objects"][0]["process_id"] == "obj_001"
+
+    # Verify environment variables content
+    assert result["environment_variables"][0]["name"] == "TestVar"
+    assert result["environment_variables"][0]["value"] == "test_value"
+
+    # Verify validation stats
+    assert result["validation"]["declared_count"] == 3
+    assert result["validation"]["process_count"] == 1
+    assert result["validation"]["object_count"] == 1
+    assert result["validation"]["env_var_count"] == 1
+
+
+def test_multi_artefact_validation_count_mismatch(tmp_path: Path) -> None:
+    """parse_process() raises ConfigError if declared count doesn't match actual."""
+    from flowsmith.exceptions import ConfigError
+
+    xml_content = """\
+<?xml version="1.0" encoding="utf-8"?>
+<bpr:release xmlns:bpr="http://www.blueprism.co.uk/product/release"
+             xmlns="http://www.blueprism.co.uk/product/process">
+  <bpr:name>TestRelease</bpr:name>
+  <bpr:contents count="5">
+    <process id="proc_001" name="Process1" version="1.0">
+      <process name="Process1">
+        <subsheet subsheetid="pg_001" name="Process1">
+          <stage stageid="s_001" type="Start" name="Start"/>
+        </subsheet>
+      </process>
+    </process>
+  </bpr:contents>
+</bpr:release>
+"""
+    filepath = tmp_path / "test_mismatch.bprelease"
+    filepath.write_text(xml_content, encoding="utf-8")
+
+    with pytest.raises(ConfigError, match="Content count mismatch"):
+        parse_process(filepath)
+
+
+def test_pid_0171_multi_artefact_parsing() -> None:
+    """Test multi-artefact parsing against real PID_0171.bprelease file.
+
+    Verifies that:
+    - Parsing returns 2 processes (main + RPA_Sharepoint_API_ConfigFile_Download)
+    - VBO/object artefacts are present
+    - Validation counts are correct
+    """
+    from pathlib import Path
+
+    pid_0171_path = Path("samples/blueprism/PID_0171.bprelease")
+    if not pid_0171_path.exists():
+        pytest.skip("PID_0171.bprelease not found")
+
+    result = parse_process(pid_0171_path)
+
+    # Verify multi-artefact structure
+    assert "processes" in result
+    assert "objects" in result
+    assert "environment_variables" in result
+
+    # Verify we have 2 processes
+    assert len(result["processes"]) == 2, f"Expected 2 processes, got {len(result['processes'])}"
+
+    # Verify process names
+    process_names = [p["name"] for p in result["processes"]]
+    assert "PID_171_US_Process_LIMS_Prelude" in process_names
+    assert "RPA_Sharepoint_API_ConfigFile_Download" in process_names
+
+    # Verify we have VBO objects (at least some)
+    assert len(result["objects"]) > 0, "Expected VBO/object artefacts in PID_0171"
+
+    # Verify object structure (all should have process_id, name, pages, etc.)
+    for obj in result["objects"]:
+        assert "process_id" in obj
+        assert "name" in obj
+        assert "pages" in obj
+        assert isinstance(obj["pages"], list)
+
+    # Verify validation counts match
+    validation = result["validation"]
+    assert validation["process_count"] == 2
+    assert validation["object_count"] == len(result["objects"])
+    assert validation["declared_count"] == (
+        validation["process_count"]
+        + validation["object_count"]
+        + validation["env_var_count"]
+        + validation["group_count"]
+    ), "Validation count mismatch"
+
+
+def test_per_artefact_page_isolation_pid_0171() -> None:
+    """Regression test: each artefact in multi-artefact release has isolated page set.
+
+    This test would have caught the bug where every artefact returned the same
+    full-document page set instead of being scoped to its own content (Task 3a
+    fix pass, PID 171).
+
+    Verifies:
+    - Two processes in PID_0171 return DIFFERENT page counts (23 vs 7, not both 381)
+    - VBO objects each return a distinct, small page count (not the full 381)
+    - No artefact shares the full-document page set with another
+    """
+    from pathlib import Path
+
+    pid_0171_path = Path("samples/blueprism/PID_0171.bprelease")
+    if not pid_0171_path.exists():
+        pytest.skip("PID_0171.bprelease not found")
+
+    result = parse_process(pid_0171_path)
+
+    # Extract page sets for both processes
+    processes = result["processes"]
+    assert len(processes) == 2, "Expected 2 processes in PID_0171"
+
+    p0_pages = {pg["page_id"] for pg in processes[0]["pages"]}
+    p1_pages = {pg["page_id"] for pg in processes[1]["pages"]}
+
+    p0_name = processes[0]["name"]
+    p1_name = processes[1]["name"]
+    p0_count = len(processes[0]["pages"])
+    p1_count = len(processes[1]["pages"])
+
+    # Verify process page counts are different (not both 381)
+    assert p0_count != p1_count, (
+        f"Process page counts should differ: {p0_name}={p0_count}, "
+        f"{p1_name}={p1_count} (bug: all artefacts had 381 identical pages)"
+    )
+
+    # Verify neither process has the full 381-page superset
+    # (the actual full-document page count if the bug existed)
+    assert p0_count < 50, f"Process {p0_name} should have <50 pages, got {p0_count}"
+    assert p1_count < 50, f"Process {p1_name} should have <50 pages, got {p1_count}"
+
+    # Verify page sets are not identical
+    assert p0_pages != p1_pages, f"Process {p0_name} and {p1_name} should have different page sets"
+
+    # Check VBO objects are similarly isolated
+    objects = result["objects"]
+    assert len(objects) > 0, "Expected VBO objects in PID_0171"
+
+    # Each VBO should have a small, distinct page count (not 381)
+    vbo_page_counts = [len(obj["pages"]) for obj in objects[:5]]
+    for i, count in enumerate(vbo_page_counts):
+        obj_name = objects[i]["name"]
+        assert count < 100, (
+            f"VBO {obj_name} should have <100 pages, got {count} "
+            f"(bug: all VBOs had 381 identical pages)"
+        )
+
+    # Verify at least some VBOs have different page counts from each other
+    # (not all the same, which would indicate continued cross-contamination)
+    assert len(set(vbo_page_counts)) > 1, (
+        f"VBOs should have different page counts, got {vbo_page_counts}"
+    )
+
+
+def test_backward_compat_single_process_file(minimal_bprelease: Path) -> None:
+    """Single <process> root (not wrapped in <release>) returns MultiArtefactRelease."""
+    result = parse_process(minimal_bprelease)
+
+    # Should still return MultiArtefactRelease structure (Task 3a)
+    assert isinstance(result, dict)
+    assert "processes" in result
+    assert "objects" in result
+    assert "environment_variables" in result
+
+    # Single process should be in processes list
+    assert len(result["processes"]) == 1
+    assert result["processes"][0]["name"] == "TestProcess"

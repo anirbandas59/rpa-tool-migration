@@ -55,17 +55,25 @@ class TestRawParserOutput:
     """Tests on raw parsed RawProcess dict before AST building."""
 
     def test_raw_stage_count(self, real_raw: RawProcess) -> None:
-        """Total raw stages across all pages == 7,605.
+        """Total raw stages in main process == 810.
 
-        This includes skip types (Anchor, Note, SubSheetInfo, etc.)
-        and MultipleCalculation stages before fanout.
+        This fixture now correctly extracts only the first process from the
+        multi-artefact release (Task 3a fix pass). The full release contains
+        7,605 stages across main process + 25 VBO objects. The main process
+        alone has 810 stages including skip types (Anchor, Note, SubSheetInfo).
         """
         total = sum(len(page["stages"]) for page in real_raw["pages"])
-        assert total == 7605, f"Expected 7605 raw stages, got {total}"
+        assert total == 810, f"Expected 810 raw stages in main process, got {total}"
 
     def test_raw_page_count(self, real_raw: RawProcess) -> None:
-        """Total pages == 399."""
-        assert len(real_raw["pages"]) == 399
+        """Total pages in main process == 18.
+
+        Fixture extracts only the first process from multi-artefact release (Task 3a).
+        The full release has 479 pages across main process + 25 VBO objects.
+        """
+        assert len(real_raw["pages"]) == 18, (
+            f"Expected 18 pages in main process, got {len(real_raw['pages'])}"
+        )
 
     def test_main_page_has_stages(self, real_raw: RawProcess) -> None:
         """The page with is_main=True exists and has > 0 stages."""
@@ -158,14 +166,19 @@ class TestRawParserOutput:
             )
 
     def test_vbo_count_raw(self, real_raw: RawProcess) -> None:
-        """Unique _vbo_object values == 32 in raw parser output."""
+        """Unique _vbo_object values == 19 in main process.
+
+        Fixture extracts only the first process from multi-artefact release (Task 3a).
+        The main process calls 19 unique VBOs. The full release contains 25 VBO objects,
+        but not all are called by the main process.
+        """
         vbos = set()
         for page in real_raw["pages"]:
             for stage in page["stages"]:
                 if VBO_OBJECT_KEY in stage["params_map"]:
                     vbos.add(stage["params_map"][VBO_OBJECT_KEY])
 
-        assert len(vbos) == 32, f"Expected 32 unique VBOs, found {len(vbos)}"
+        assert len(vbos) == 19, f"Expected 19 unique VBOs in main process, found {len(vbos)}"
 
 
 # ── Group 2: Builder output (normalised BPProcess AST) ─────────────────────────
@@ -175,34 +188,44 @@ class TestNormalisedASTOutput:
     """Tests on normalised AST after build_ast() and stage collapsing."""
 
     def test_normalised_stage_count(self, real_process) -> None:
-        """Total AST stages == 6,576 after normalisation."""
+        """Total AST stages == 724 after normalisation (main process only).
+
+        Fixture now extracts only the first process from multi-artefact release (Task 3a).
+        The full release has 6,576 normalised stages across main process + 25 VBO objects.
+        The main process alone has 724 normalised stages after skip type removal and
+        stage type collapsing.
+        """
         total = sum(len(p.stages) for p in real_process.pages)
-        assert total == 6576, f"Expected 6576 normalised stages, got {total}"
+        assert total == 724, f"Expected 724 normalised stages in main process, got {total}"
 
     @pytest.mark.parametrize(
         "stage_type,expected_count",
         [
-            ("DATA", 2254),
-            ("ACTION", 922),
-            ("END", 530),
-            ("START", 513),
-            ("BLOCK", 442),
-            ("DECISION", 403),
-            ("CODE", 296),
-            ("EXCEPTION", 275),
-            ("COLLECTION", 262),
-            ("CALCULATION", 235),
-            ("WAIT", 148),
-            ("RECOVER", 127),
-            ("NAVIGATE", 69),
-            ("LOOP", 40),
-            ("RESUME", 36),
-            ("READ", 18),
-            ("WRITE", 6),
+            ("DATA", 259),
+            ("ACTION", 174),
+            ("END", 26),
+            ("START", 19),
+            ("BLOCK", 42),
+            ("DECISION", 54),
+            ("CODE", 0),
+            ("EXCEPTION", 22),
+            ("COLLECTION", 34),
+            ("CALCULATION", 42),
+            ("WAIT", 0),
+            ("RECOVER", 21),
+            ("NAVIGATE", 0),
+            ("LOOP", 16),
+            ("RESUME", 15),
+            ("READ", 0),
+            ("WRITE", 0),
         ],
     )
     def test_stage_type_counts(self, real_process, stage_type: str, expected_count: int) -> None:
-        """Stage type counts match ground truth (parametrised for all 17 types)."""
+        """Stage type counts match ground truth for main process only.
+
+        Fixture now extracts only the first process from multi-artefact release (Task 3a).
+        These counts are for the main process after normalisation.
+        """
         counts = Counter(s.stage_type.value for p in real_process.pages for s in p.stages)
         actual = counts[stage_type]
         assert actual == expected_count, (
@@ -273,9 +296,10 @@ class TestNormalisedASTOutput:
             if s.stage_type == StageType.ACTION and s.is_subsheet_call
         ]
 
-        # Raw SubSheet count is 433
-        assert len(subsheet_calls) == 433, (
-            f"Expected 433 subsheet calls, found {len(subsheet_calls)}"
+        # Main process has 26 subsheet calls (full release has 433)
+        # Fixture extracts only the first process from multi-artefact release (Task 3a)
+        assert len(subsheet_calls) == 26, (
+            f"Expected 26 subsheet calls in main process, found {len(subsheet_calls)}"
         )
 
     def test_multiple_calculation_fanout(self, real_raw: RawProcess, real_process) -> None:
@@ -340,7 +364,11 @@ class TestNormalisedASTOutput:
             s for p in real_process.pages for s in p.stages if s.stage_type == StageType.DATA
         ]
 
-        assert len(data_stages) == 2254, f"Expected 2254 DATA stages, found {len(data_stages)}"
+        # Main process has 259 DATA stages (full release has 2254)
+        # Fixture extracts only the first process from multi-artefact release (Task 3a)
+        assert len(data_stages) == 259, (
+            f"Expected 259 DATA stages in main process, found {len(data_stages)}"
+        )
 
         for stage in data_stages:
             assert len(stage.data_items) == 1, (
@@ -367,8 +395,10 @@ class TestNormalisedASTOutput:
             s for p in real_process.pages for s in p.stages if s.stage_type == StageType.COLLECTION
         ]
 
-        assert len(collection_stages) == 262, (
-            f"Expected 262 COLLECTION stages, found {len(collection_stages)}"
+        # Main process has 34 COLLECTION stages (full release has 262)
+        # Fixture extracts only the first process from multi-artefact release (Task 3a)
+        assert len(collection_stages) == 34, (
+            f"Expected 34 COLLECTION stages in main process, found {len(collection_stages)}"
         )
 
         for stage in collection_stages:
@@ -434,11 +464,12 @@ class TestSerialisationRoundTrip:
         # Serialise
         serialise(real_process, output_file)
 
-        # Verify file exists and is large (full process is substantial)
+        # Verify file exists and is large (main process is substantial)
+        # Fixture extracts only the first process (Task 3a), so file is smaller than full release
         assert output_file.exists()
         file_size = output_file.stat().st_size
-        assert file_size > 1_000_000, (
-            f"Serialised file too small: {file_size} bytes, expected > 1MB"
+        assert file_size > 500_000, (
+            f"Serialised file too small: {file_size} bytes, expected > 500KB"
         )
 
         # Verify valid JSON

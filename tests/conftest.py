@@ -17,13 +17,22 @@ def real_raw():
     Parses samples/blueprism/PID_0127.bprelease without building AST.
     Skips if file not available (CI environments may not have it).
 
+    As of Task 3a, parse_process() returns MultiArtefactRelease.
+    This fixture extracts the first process (the main PID_0127 process)
+    and returns it as a RawProcess for backward compatibility with
+    existing test_integration.py and other consuming tests.
+
     Returns:
-        RawProcess dict from parser.
+        RawProcess dict (first process from MultiArtefactRelease).
     """
     sample = Path("samples/blueprism/PID_0127.bprelease")
     if not sample.exists():
         pytest.skip("Real sample file not available")
-    return parse_process(sample)
+    release = parse_process(sample)
+    # Extract first process from MultiArtefactRelease
+    if release["processes"]:
+        return release["processes"][0]
+    pytest.skip("No processes found in release")
 
 
 @pytest.fixture(scope="session")
