@@ -517,13 +517,13 @@ class TestLoadRules:
     def test_load_default_mapping_dir(self) -> None:
         """load_rules defaults to mapping/ directory in cwd."""
         config = load_rules(force_reload=True)
-        assert len(config.stage_rules) == 26
+        assert len(config.stage_rules) == 28
         assert len(config.vbo_catalogue) == 39
 
     def test_load_real_stage_rules(self) -> None:
         """load_rules successfully loads the real stage_rules.yaml."""
         config = load_rules(force_reload=True)
-        assert len(config.stage_rules) == 26
+        assert len(config.stage_rules) == 28
 
         # Check specific rules exist
         start = config.get_stage_rule("Start")
@@ -721,9 +721,9 @@ class TestIntegration:
             assert 0.0 <= entry.confidence_base <= 1.0
 
     def test_real_stage_rules_loadable(self) -> None:
-        """Real stage_rules.yaml contains all 26 expected rules."""
+        """Real stage_rules.yaml contains all 28 expected rules."""
         config = load_rules(force_reload=True)
-        assert len(config.stage_rules) == 26
+        assert len(config.stage_rules) == 28
 
         # Check some known rules
         known_types = ["Start", "End", "Action", "Decision", "Code", "Exception"]
