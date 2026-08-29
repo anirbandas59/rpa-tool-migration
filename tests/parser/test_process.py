@@ -1460,3 +1460,78 @@ def test_backward_compat_single_process_file(minimal_bprelease: Path) -> None:
     # Single process should be in processes list
     assert len(result["processes"]) == 1
     assert result["processes"][0]["name"] == "TestProcess"
+
+
+# ── Task 3b: Environment-variable extraction ───────────────────────────────
+
+
+def test_pid_0171_environment_variables_extraction() -> None:
+    """Test that parsing PID_0171.bprelease extracts exactly 11 environment variables
+    with the correct names as per architecture doc §A2 point 5 (Task 3b).
+    """
+    pid_0171_path = Path("samples/blueprism/PID_0171.bprelease")
+    if not pid_0171_path.exists():
+        pytest.skip("PID_0171.bprelease not found")
+
+    result = parse_process(pid_0171_path)
+
+    # Verify exactly 11 environment variables are extracted
+    env_vars = result["environment_variables"]
+    assert len(env_vars) == 11, f"Expected 11 environment variables, got {len(env_vars)}"
+
+    # Extract the names and sort them for consistent comparison
+    actual_names = sorted([ev["name"] for ev in env_vars])
+
+    # Expected names from architecture doc §A2 point 5
+    expected_names = sorted(
+        [
+            "PID_171_US_EV_LIMS_Prelude_ConfigFile",
+            "RPA_Sharepoint_URL",
+            "RPA_Sharepoint_Credential_Name",
+            "RPA_Sharepoint_Bearer_Token",
+            "RPA_Sharepoint_Random_Wait",
+            "Generic_RPA_Sharepoint_API_Config_File_Folder_Path",
+            "Generic_SupportTeam_EmailID",
+            "RPA_AzureBlob_Download",
+            "RPA_AzureBlob_Container_Name",
+            "RPA_AzureBlob_StorageAccount_Name",
+            "RPA_AzureBlob_Credential_Name",
+        ]
+    )
+
+    assert actual_names == expected_names, (
+        f"Environment variable names mismatch.\n"
+        f"Expected: {expected_names}\n"
+        f"Got: {actual_names}\n"
+        f"Missing: {set(expected_names) - set(actual_names)}\n"
+        f"Extra: {set(actual_names) - set(expected_names)}"
+    )
+
+    # Verify each environment variable has the required fields
+    for ev in env_vars:
+        assert "id" in ev, f"Environment variable {ev['name']} missing 'id' field"
+        assert "name" in ev, "Environment variable missing 'name' field"
+        assert "data_type" in ev, f"Environment variable {ev['name']} missing 'data_type' field"
+        assert "value" in ev, f"Environment variable {ev['name']} missing 'value' field"
+        assert "description" in ev, f"Environment variable {ev['name']} missing 'description' field"
+
+    # Verify data_type values are correct (per architecture doc)
+    data_type_map = {ev["name"]: ev["data_type"] for ev in env_vars}
+    assert data_type_map["RPA_Sharepoint_Random_Wait"] == "number"
+    assert data_type_map["RPA_AzureBlob_Download"] == "flag"
+    # All others should be "text"
+    text_vars = [
+        "PID_171_US_EV_LIMS_Prelude_ConfigFile",
+        "RPA_Sharepoint_URL",
+        "RPA_Sharepoint_Credential_Name",
+        "RPA_Sharepoint_Bearer_Token",
+        "Generic_RPA_Sharepoint_API_Config_File_Folder_Path",
+        "Generic_SupportTeam_EmailID",
+        "RPA_AzureBlob_Container_Name",
+        "RPA_AzureBlob_StorageAccount_Name",
+        "RPA_AzureBlob_Credential_Name",
+    ]
+    for var_name in text_vars:
+        assert data_type_map[var_name] == "text", (
+            f"Environment variable {var_name} has data_type {data_type_map[var_name]}, expected 'text'"
+        )

@@ -23,11 +23,15 @@ ENV = "http://www.blueprism.co.uk/product/environment-variable"
 
 
 class RawEnvironmentVariable(TypedDict):
-    """A single environment variable from the release."""
+    """A single environment variable from the release.
+
+    Matches the shape expected by BPEnvironmentVariable model in ast/models.py,
+    plus additional fields (id, description) for audit/tracing purposes.
+    """
 
     id: str
     name: str
-    type: str
+    data_type: str
     value: str
     description: str
 
@@ -756,7 +760,7 @@ def parse_process(path: Path) -> MultiArtefactRelease:
                         raise ParseError(f"Failed to parse object {release_id}: {exc}") from exc
 
                 elif tag == "environment-variable":
-                    # Parse environment variable (Task 3b, but included here for completeness)
+                    # Parse environment variable (Task 3b)
                     try:
                         desc_elem = child.find(f"{{{ENV}}}description")
                         if desc_elem is None:
@@ -764,7 +768,7 @@ def parse_process(path: Path) -> MultiArtefactRelease:
                         env_var = RawEnvironmentVariable(
                             id=child.get("id", "").strip(),
                             name=child.get("name", "").strip(),
-                            type=child.get("type", "text").strip(),
+                            data_type=child.get("type", "text").strip(),
                             value=child.get("value", "").strip(),
                             description=(
                                 desc_elem.text.strip()
