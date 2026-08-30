@@ -648,12 +648,28 @@ reconciling the one `vbo_router` test count if it turns out to genuinely be stal
 **Required reading:** `docs/bp-to-pad-architecture-PID171.md` §A3 (real Loader/Performer
 `FUNCTION` structure), **§B10 (methodology — read the "1 page → 1 `FUNCTION` is not the rule"
 correction carefully; an earlier version of this section stated a wrong generalisation and this
-task's own Do-list below was written against that wrong version)**, §B11 (Loader/Performer split,
-Main Page's mid-page split point), §B14 (page-by-page crosswalk — the authoritative, cited source
-for every page's real PAD shape), §B15 (exception bubbling across a call boundary — drives this
-task's `BLOCK`/`ON BLOCK ERROR` placement, not just Task 4a's reachability pass). Also read, in
-order, all four prior review cycles on this exact task — `docs/reviews/5a-2026-08-30.md`,
-`5a-2026-08-31-fixpass.md`, `5a-2026-08-31-secondfixpass.md`, `5a-2026-08-31-thirdfixpass.md`.
+task's own Do-list below was written against that wrong version)**, §A5 (the `BLOCK`/
+`ON BLOCK ERROR` **dispatch template and its hard constraint — no `IF` inside a handler body** —
+this is the literal shape Do-step 4 below must produce, not an invented per-call wrapping scheme),
+§B11 (Loader/Performer split, Main Page's mid-page split point), §B14 (page-by-page crosswalk —
+the authoritative, cited source for every page's real PAD shape), §B15 (exception bubbling across
+a call boundary — *why* the wrapping goes where it goes, complementing §A5's *what it looks like*).
+Also read, in order, all four prior review cycles on this exact task —
+`docs/reviews/5a-2026-08-30.md`, `5a-2026-08-31-fixpass.md`, `5a-2026-08-31-secondfixpass.md`,
+`5a-2026-08-31-thirdfixpass.md`.
+
+**Worked example to pattern-match against (not to re-derive from scratch):** BP page
+`Mark Item As Exception` is called from Main's own recovery path (immediately after a `Resume`
+stage — it *is* the recovery continuation, not protected business logic). Its real PAD
+counterpart is not a `BLOCK` wrapped around one `CALL 'Mark Exception'` — it's a **single, coarse**
+`BLOCK` around the *entire* per-item sequence inside `Process Work Queue Items` (Save Attachments,
+Excel, Result Entry, …), whose flat `ON BLOCK ERROR` handler sets `txt_ItemStatus` and falls
+through to `GOTO 'Mark Item as Exception'` / `LABEL 'Mark Item as Exception'` — a shared,
+named dispatch point reached from wherever inside that one `BLOCK` the error actually occurred,
+not a separate `BLOCK` per callee. `CALL 'Mark Exception'` itself then lives under that `LABEL`,
+outside any `BLOCK`. Confirm your generated output matches this shape (one coarse `BLOCK` per
+real BP `Block` stage per Task 4a/4b's persisted map, flat handler, `GOTO`/`LABEL` dispatch to
+named continuation points) before declaring this step done — never nested `BLOCK`s per `CALL`.
 
 **Why this task is being rewritten, not just re-attempted:** four straight review cycles (58% →
 52% → 42% → 49%) found real, fixable defects — sanitised-vs-raw name mismatches, `processid`-vs-
@@ -690,10 +706,15 @@ which no prior pass addressed because nothing told it to.
    `page_id`, Task 4a) and then via *that target's* mapping-file shape/name — never via the calling
    stage's own `stage.name`. Preserve `_resolve_call_target`'s existing `processid` resolution
    (verified correct); extend it to look up the target's final name/shape in the new mapping file.
-4. Once Task 4b lands (persisted Block→Recover pairing on the AST), use it per page to decide which
-   `CALL`/action groups need `BLOCK '<name>' ON BLOCK ERROR ... END` wrapping, per §B15's bubbling
-   model — a call site with no enclosing `Block` on the source BP page gets no wrapping `BLOCK`; do
-   not invent wrapping the source page doesn't have.
+4. Once Task 4b lands (persisted Block→Recover pairing on the AST), use it per page to place
+   `BLOCK '<name>' / ON BLOCK ERROR ... END` wrapping — **one `BLOCK` per real BP `Block` stage**,
+   coarse-grained (wrapping every stage/`CALL` the source page's own `Block` scope actually
+   covers), never one `BLOCK` per individual `CALL`. Per §A5's hard constraint, the handler body
+   must be a flat action sequence (status-flag `SET`s + `GOTO`) — any branching on what happened
+   goes in a plain `IF` placed *after* the enclosing scope, or via `GOTO`/`LABEL` dispatch to a
+   named continuation point (mirroring the source page's own `Recover`→`Resume` target), never as
+   an `IF` inside the handler itself. A call site with no enclosing `Block` on the source BP page
+   gets no wrapping `BLOCK` — do not invent wrapping the source page doesn't have.
 5. Main Page's split at `Get Next Item` (§B11) must route each pre-split stage to whichever
    file/body its *own target's* mapping-file shape and role actually belong to — not by raw
    stage-list index. The third fix-pass review's finding stands and must not recur: 4 of Main

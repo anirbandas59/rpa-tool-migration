@@ -829,12 +829,25 @@ Items`/main body `BLOCK`s) is the backstop — every exception must terminate at
 or the process aborts; there is no third option where an exception silently vanishes partway up
 the call chain.
 
-**Generation rule:** this is the actual purpose of Task 4a's Block→Recover reconstruction beyond
-reachability, and the reason Task 4b persists that pairing onto the AST rather than discarding it
-— Task 5a/5b must consult it (per page) to decide which `CALL`/action groups in a generated
-`FUNCTION` or main body need `BLOCK '<name>' ON BLOCK ERROR ... END` wrapping around them, mirroring
-the source page's own Block/Recover scope nesting, not inventing a wrapping scheme independently
-of it. A call site with no enclosing Block on the calling page emits no wrapping BLOCK — its errors
+**Generation rule — one coarse `BLOCK` per real `Block` stage, never one per `CALL`.** This is the
+actual purpose of Task 4a's Block→Recover reconstruction beyond reachability, and the reason
+Task 4b persists that pairing onto the AST rather than discarding it — Task 5a/5b must consult it
+(per page) to place `BLOCK '<name>' ON BLOCK ERROR ... END` wrapping. Per §A5's dispatch template
+and its hard constraint (no `IF` inside a handler body), the wrapping is **coarse**: one `BLOCK`
+per real BP `Block` stage, covering everything that `Block`'s scope actually covers in the source
+page — not a separate `BLOCK` around each individual `CALL` inside it. A flat handler (status-flag
+`SET`s + `GOTO`) dispatches to a named `LABEL` continuation point; any branching on what happened
+is a plain `IF` placed after the scope, never inside the handler.
+
+**Worked example, confirmed against the real reference:** BP page `Mark Item As Exception` is
+called from Main's own recovery path (right after a `Resume` stage — it *is* the recovery
+continuation, not protected business logic). Its PAD counterpart is not a `BLOCK` around one
+`CALL 'Mark Exception'` — `Process Work Queue Items` wraps its **entire** per-item sequence (Save
+Attachments, Excel, Result Entry, …) in one coarse `BLOCK`, whose flat handler sets
+`txt_ItemStatus` and falls through to `GOTO 'Mark Item as Exception'` / `LABEL 'Mark Item as
+Exception'`; `CALL 'Mark Exception'` itself lives under that `LABEL`, outside any `BLOCK`.
+
+A call site with no enclosing `Block` on the calling page emits no wrapping `BLOCK` — its errors
 are expected to propagate further up (or the callee is expected to have handled them internally,
 case 1 above); do not add speculative `BLOCK`/`ON BLOCK ERROR` wrapping where the source BP page
 has none.
