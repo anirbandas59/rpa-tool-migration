@@ -624,10 +624,57 @@ error-continuation of the nearest enclosing `Block` in the same page) → for ea
    separate action lines, they cannot be inlined into a PAD expression).
 4. Emit the PAD construct (§B12 template) and continue to the next linked stage until `End`.
 
-Each BP **page** becomes one PAD `FUNCTION '<page name>'` (or the un-named main body, for Main
-Page) — never a separate workflow file. This is the single largest correction versus the old
-`src/flowsmith` generator (§A of the earlier gap-analysis docs): 1 BP process → 1 Desktop Flow
-with pages as `FUNCTION`s, not 1 BP page → 1 workflow.
+Each BP **page** becomes PAD content **inside** one Desktop Flow's single `.robin` file — never a
+separate workflow file. This is the single largest correction versus the old `src/flowsmith`
+generator (§A of the earlier gap-analysis docs): 1 BP process → 1 Desktop Flow, not 1 BP page → 1
+workflow.
+
+**Correction — "1 page → 1 `FUNCTION '<page name>'`" is not the rule; functional equivalence is.**
+An earlier version of this line claimed every page becomes its own identically-named `FUNCTION`.
+Checked directly against both reference files (`docs/pad-reference/DF_PID_171_US_Loader.robin.txt`,
+`DF_PID_171_US_LIMS_Prelude_Main.robin.txt`) and §B14's own crosswalk, that's false for a majority
+of pages. A BP page's real PAD shape is one of four things, decided by what the page *does*
+(inputs/outputs/side-effect), never by its BP name:
+
+1. **Its own `FUNCTION`, name unrelated to the BP page name** — e.g. BP page `Read Input Data From
+   Excel` → `FUNCTION 'Fetch Data from Excel file'`; `Mark as read mail` → `FUNCTION 'Move Emails'`.
+   The BP page name is a developer's private label for their own navigation, not a PAD identifier
+   contract — never assume `FUNCTION '<page.name>'` is even approximately right.
+2. **Inlined as a `BLOCK '<name>'` directly in the entry body or a caller's `FUNCTION`, with no
+   `FUNCTION`/`CALL` pair at all** — e.g. `Get Mails` → `BLOCK 'Get unprocessed emails'` inside the
+   Loader's main body; `DataGateway` → `BLOCK 'Data gateway block'` inside `Process Work Queue
+   Items`. Confirmed: neither ever appears as a `FUNCTION` anywhere in either reference file.
+3. **Folded into another `FUNCTION`'s body with no wrapper at all** — e.g. `Reset Global Data`,
+   `Save Attachments`, `Input File Management` are bare inline statements inside `Process Work
+   Queue Items` (§B14 rows 3/9/17 name the exact line ranges).
+4. **Split into several differently-named `FUNCTION`s** — e.g. BP page `Result Entry` becomes 7
+   separate `FUNCTION`s (`Get Results by Analysis and SampleId`, `Open - Entry By Test window`,
+   `Get Components List`, `Close Results Entry Analysis`, `Close Results Entry`,
+   `Set Results Entry`, `Enter Results in App`), none named "Result Entry".
+
+**The general mapping principle (binding on every level of this translation — VBO method
+per §B_VBO, page per this section, whole-process): match by what a step/page/action *takes as
+input and produces as output/side-effect* — never by matching names.** BP developer-assigned
+names (page names, stage names, subsheet labels) exist only for the original author's own
+navigation; PAD's real action/FUNCTION surface uses its own vocabulary. Concretely: "sends an
+email" (BP `Outlook VBO :: Send Mail`) → PAD's Office 365 Outlook `Send an email (V2/V3)` action,
+not anything literally named "Send Mail"; "opens a browser to a URL" (BP `Launch` with a start
+URL, or a two-step launch+navigate) → PAD's `Launch new Edge/Chrome/Firefox`; "starts an
+application" (BP `Start Process`) → PAD's `Run application`; "opens an Excel file" (BP's
+`Create Instance` + `Open Workbook` pair, §B_FUSION) → PAD's single `Excel.LaunchExcel.
+LaunchAndOpenUnderExistingProcess`. One BP construct may need two or more PAD actions combined
+(or vice versa, per §B_FUSION) to be functionally equivalent — the end goal is that the BP
+sequence and the PAD sequence *do the same thing*, not that they *look* alike stage-for-stage.
+§B14's crosswalk table is this principle already applied, page-by-page, for PID_171 — treat it as
+the worked example and citation source, not a coincidence to be re-derived independently.
+
+**Consequence for `CALL` target resolution:** because a calling stage's own display name
+(`stage.name`) can diverge freely from the page it actually invokes, a generated `CALL '<x>'` must
+never be derived from the calling stage's name. Resolve the target via the AST's own call-graph
+edge (`stage.processid` cross-referenced against the target page's `page_id` — built in Task 4a
+specifically for this) and use *that* page's actual PAD identity (per the 4-way decision above) as
+the `CALL` target — whatever name/shape it ends up with, independent of what the calling stage was
+labelled.
 
 **Tooling note:** re-deriving BP-side facts (page/stage inventories, edges, exception strings,
 environment variables, orphan-page checks) should go through this repo's existing parser —
@@ -759,6 +806,38 @@ The Block→Recover→circuit-breaker pipeline, confirmed identical in intent be
 - The consecutive-exception circuit breaker (BP: `Mark Item As Exception` page, `Consecutive
   Exception Limit` default 3, `TERMINATE`) maps exactly to §A7's PAD implementation in `Mark
   Exception` + `Process Work Queue Items`' post-item `flg_HaltRun` check.
+
+**Exception bubbling across a call boundary (binding on Task 5a/5b's `BLOCK`/`ON BLOCK ERROR`
+placement, not just Task 4a's reachability pass).** A call site — a VBO action call or a
+SubSheet/Process call to another page — can be exception-handled in exactly two ways, and which
+one applies determines where `BLOCK '<name>' / ON BLOCK ERROR ... END` wrapping goes in the
+*generated* PAD, not just where a `Block`/`Recover` pair sits in the *source* BP page:
+
+1. **Handled locally, at or inside the call itself.** The callee (a VBO method, or the called
+   page) has its own internal `Recover`/`Resume` (BP) — in PAD terms, its own internal
+   `BLOCK'.../ON BLOCK ERROR'` wrapping — that fully absorbs the error before it returns. Nothing
+   propagates to the caller; the caller sees a normal return.
+2. **Handled by the caller, via a `Block` that wraps the call site.** The callee does *not* catch
+   its own exception (no internal Block/Recover, or a Recover that deliberately re-throws) — it
+   propagates out of the call as a thrown error. On the calling page, if the call site sits inside
+   a `Block`/`Recover` pair, that `Recover` (BP) — a `BLOCK '<name>' ON BLOCK ERROR ... END` (PAD)
+   wrapping the `CALL`/`RunDesktopFlow`/action group — is what actually catches it.
+
+This bubbles recursively: a caller's own unhandled exception becomes the *next* caller's problem,
+all the way up. Per §A5's "Asymmetric exit," Main Page (and PAD's top-level `Process Work Queue
+Items`/main body `BLOCK`s) is the backstop — every exception must terminate at Main's own handling
+or the process aborts; there is no third option where an exception silently vanishes partway up
+the call chain.
+
+**Generation rule:** this is the actual purpose of Task 4a's Block→Recover reconstruction beyond
+reachability, and the reason Task 4b persists that pairing onto the AST rather than discarding it
+— Task 5a/5b must consult it (per page) to decide which `CALL`/action groups in a generated
+`FUNCTION` or main body need `BLOCK '<name>' ON BLOCK ERROR ... END` wrapping around them, mirroring
+the source page's own Block/Recover scope nesting, not inventing a wrapping scheme independently
+of it. A call site with no enclosing Block on the calling page emits no wrapping BLOCK — its errors
+are expected to propagate further up (or the callee is expected to have handled them internally,
+case 1 above); do not add speculative `BLOCK`/`ON BLOCK ERROR` wrapping where the source BP page
+has none.
 
 ### B16. Known gaps / explicit non-goals
 

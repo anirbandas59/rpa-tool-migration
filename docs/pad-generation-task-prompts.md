@@ -644,41 +644,82 @@ reconciling the one `vbo_router` test count if it turns out to genuinely be stal
 
 **Depends on:** Task 4b
 **Files in scope:** `src/flowsmith/generator/pad.py`, `templates/pad/subflow.robin.j2`,
-`tests/generator/test_pad.py`
-**Required reading:** `docs/bp-to-pad-architecture-PID171.md` §A3 (the exact real Loader/Performer
-`FUNCTION` structure to match — main body + helper `FUNCTION`s), §B10 (the page→`FUNCTION`
-methodology), §B11 (Loader/Performer split).
+`mapping/page_target_map.yaml` (new), `tests/generator/test_pad.py`
+**Required reading:** `docs/bp-to-pad-architecture-PID171.md` §A3 (real Loader/Performer
+`FUNCTION` structure), **§B10 (methodology — read the "1 page → 1 `FUNCTION` is not the rule"
+correction carefully; an earlier version of this section stated a wrong generalisation and this
+task's own Do-list below was written against that wrong version)**, §B11 (Loader/Performer split,
+Main Page's mid-page split point), §B14 (page-by-page crosswalk — the authoritative, cited source
+for every page's real PAD shape), §B15 (exception bubbling across a call boundary — drives this
+task's `BLOCK`/`ON BLOCK ERROR` placement, not just Task 4a's reachability pass). Also read, in
+order, all four prior review cycles on this exact task — `docs/reviews/5a-2026-08-30.md`,
+`5a-2026-08-31-fixpass.md`, `5a-2026-08-31-secondfixpass.md`, `5a-2026-08-31-thirdfixpass.md`.
+
+**Why this task is being rewritten, not just re-attempted:** four straight review cycles (58% →
+52% → 42% → 49%) found real, fixable defects — sanitised-vs-raw name mismatches, `processid`-vs-
+`stage.name` CALL resolution, the Main Page split boundary — and fixed most of them correctly. But
+every cycle was chasing dangling `CALL`/`FUNCTION` pairs that recur because the task's own
+Do-step 1 said "one `FUNCTION '<page name>'` per page." Checked directly against both reference
+`.robin` files: that's false for a majority of PID_171's pages — some inline as a `BLOCK` with no
+`FUNCTION` at all (`Get Mails`, `Populate Queue`), some fold into another `FUNCTION`'s body with no
+wrapper (`DataGateway`, `Reset Global Data`, `Save Attachments`), some split into several
+differently-named `FUNCTION`s (`Result Entry` → 7 `FUNCTION`s), and most that do get their own
+`FUNCTION` are renamed (`Read Input Data From Excel` → `FUNCTION 'Fetch Data from Excel file'`).
+**Do not discard the four prior passes' real fixes** — `_resolve_call_target`'s `processid`-based
+resolution and `_split_main_page_if_needed`'s Main-Page-split mechanism are both independently
+verified correct (third fix-pass review) and should be extended, not rewritten from scratch. What
+was missing every time is the *shape* decision (`FUNCTION` vs. inline `BLOCK` vs. fold vs. split),
+which no prior pass addressed because nothing told it to.
 
 **Do:**
-1. `generator/pad.py:generate_process()` currently does `for page in process.pages: ...` and
-   writes **one `.robin` file per page** (confirmed at line ~96) — this is the core architectural
-   gap (strategy doc COV-3/U1). Replace this with: **two** `.robin` outputs per process run — one
-   for the `role: "loader"` pages, one for the `role: "performer"` pages (Task 4b's tagging) —
-   each a single file containing a main body (the entry-point page's stages, inlined) followed by
-   one `FUNCTION '<page name>' ... END FUNCTION` block per other reachable page with that role,
-   matching the shape in `docs/pad-reference/DF_PID_171_US_Loader.robin.txt` and
-   `DF_PID_171_US_LIMS_Prelude_Main.robin.txt`.
-2. A `SubSheet`/`Process`-type `ACTION` stage that calls another page in the same role becomes a
-   `CALL '<page name>' <params>` (already partially supported per `templates/pad/actions/
-   call_subflow.robin.j2` — check it still fires correctly once pages are consolidated into one
-   file rather than separate ones).
-3. Update `templates/pad/subflow.robin.j2` if its current per-file assumption (one `FUNCTION` = one
-   whole file) needs to change to "one `FUNCTION` block within a larger file."
-4. Pages tagged unreachable (Task 4a) should be skipped entirely — not emitted as dead
-   `FUNCTION`s — unless you find a reason not to (note it in your summary if so, don't decide
-   silently).
-5. Keep the existing `@@`/`@INPUT`/`@OUTPUT`/`IMPORT`/`@SENSITIVE` header logic (already correct
-   per the codebase audit, commit `760fb47`) — just move it to fire once per output file (Loader,
-   Performer), not once per page.
+1. Add `mapping/page_target_map.yaml`, one entry per reachable PID_171 page, transcribing §B14's
+   crosswalk into structured data — do not re-derive shapes from BP page names or stage-count
+   heuristics; every entry must cite its §B14 row number. Per-page schema:
+   - `shape`: `function` (own `FUNCTION`; add `target_name` if it differs from the BP page name),
+     `inline_block` (`block_name` + which body it's inlined into — Loader/Performer main body, or
+     a named `FUNCTION`), `fold` (folded into another `FUNCTION`/body, no wrapper — name which),
+     or `split` (list the resulting `target_name`s).
+   - `citation`: the §B14 row number backing this entry.
+   A page with no §B14 row (relevant only once this generator is reused for a future automation)
+   falls back to `function` named after the page, plus a `ReviewFlag` — never silently invent a
+   different shape for an uncited page.
+2. `generate_process()` must consult this mapping per reachable page in a role to decide whether to
+   emit its own `FUNCTION`, inline it as a `BLOCK`, fold it with no wrapper, or split it — replacing
+   the current blanket "always emit `FUNCTION '<page name>'`" behaviour.
+3. Every `CALL '<x>'` resolves its target via the AST's call-graph edge (`stage.processid` → target
+   `page_id`, Task 4a) and then via *that target's* mapping-file shape/name — never via the calling
+   stage's own `stage.name`. Preserve `_resolve_call_target`'s existing `processid` resolution
+   (verified correct); extend it to look up the target's final name/shape in the new mapping file.
+4. Once Task 4b lands (persisted Block→Recover pairing on the AST), use it per page to decide which
+   `CALL`/action groups need `BLOCK '<name>' ON BLOCK ERROR ... END` wrapping, per §B15's bubbling
+   model — a call site with no enclosing `Block` on the source BP page gets no wrapping `BLOCK`; do
+   not invent wrapping the source page doesn't have.
+5. Main Page's split at `Get Next Item` (§B11) must route each pre-split stage to whichever
+   file/body its *own target's* mapping-file shape and role actually belong to — not by raw
+   stage-list index. The third fix-pass review's finding stands and must not recur: 4 of Main
+   Page's 5 pre-split SubSheet calls target *performer*-role pages and belong in the Performer
+   file, regardless of sitting before `Get Next Item` in the stage list.
+6. Pages tagged unreachable (Task 4a) are skipped entirely — not emitted as dead `FUNCTION`s.
+7. Keep the existing `@@`/`@INPUT`/`@OUTPUT`/`IMPORT`/`@SENSITIVE` header logic, firing once per
+   output file. Leaving `@INPUT`/`@OUTPUT` empty when not derivable from the AST is correct (second
+   fix-pass review's Fix 3) — keep its verified-correct `# TODO` marker in the generated `.robin`
+   file itself (Fix C), don't regress it to a code-only comment.
 
-**Done when:** `uv run pytest tests/generator/test_pad.py -v` passes (existing tests will need
-updating for the new 2-file-not-N-file output shape — update them, don't just delete coverage),
-and a new test asserts that generating from `PID_0171.bprelease`'s AST produces exactly 2 `.robin`
-outputs, each containing multiple `FUNCTION ... END FUNCTION` blocks.
+**Done when:** `uv run pytest tests/generator/test_pad.py -v` passes; a new test asserts that
+**every** unique `CALL '<x>'` in each generated file has a matching `FUNCTION '<x>'` in that same
+file (the regression test all four prior reviews flagged as missing — the third fix-pass review's
+own two new tests, `test_call_function_correspondence_in_generated_files` and
+`test_five_critical_calls_appear_in_loader_for_pid171`, encode the old wrong shape as expected
+baseline and must be corrected to assert the right file/shape, not just left as-is); a test
+confirms Main Page's pre-split stages land in the file matching their own target's role, not their
+raw list position; generating from `PID_0171.bprelease`'s AST matches the reference shape for at
+minimum: `Get Mails`/`Populate Queue` as inline `BLOCK`s (no `FUNCTION`), `DataGateway`/
+`Reset Global Data` with no wrapper at all, and `Result Entry` as 7 named `FUNCTION`s.
 
-**Out of scope:** real BP-expression translation inside the stage bodies (Task 5b — this task is
-purely about the *file/FUNCTION* structure, the body content can still be placeholder for now);
-Cloud Flow consolidation (Task 6a).
+**Out of scope:** real BP-expression translation inside stage bodies (Task 5b); Cloud Flow
+consolidation (Task 6a); populating `mapping/page_target_map.yaml` for any automation other than
+PID_171 (a future automation's own page-shape curation is that automation's own task, per this
+project's curation-time-catalogue discipline — §5 of the strategy doc).
 
 ---
 
