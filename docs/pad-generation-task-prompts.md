@@ -545,16 +545,23 @@ strategy doc's COV-4 gap is addressed downstream — not this task); Loader/Perf
 
 ---
 
-## Task 4b — `ast/builder.py`: Loader/Performer role tagging
+## Task 4b — `ast/builder.py`: Loader/Performer role tagging + Task 4a follow-up cleanup
 
 **Depends on:** Task 4a
 **Files in scope:** `src/flowsmith/ast/builder.py`, `src/flowsmith/ast/models.py`,
-`tests/ast/test_builder.py`
+`src/flowsmith/parser/process.py`, `tests/ast/test_builder.py`, `tests/parser/test_process.py`,
+`tests/parser/test_integration.py`, `tests/engine/test_flag_index.py`,
+`tests/mapper/test_vbo_router.py`, `tests/generator/test_pad.py`,
+`docs/bp-to-pad-architecture-PID171.md` (§B14 row 18 annotation only — see step 6)
 **Required reading:** `docs/bp-to-pad-architecture-PID171.md` §B11 (the hard boundary at BP
-stage `85fbb578`, `Get Next Item` on Main Page) and §A3 (what a Loader vs. Performer body actually
-looks like in the real PAD output, for context on what this tagging is ultimately feeding).
+stage `85fbb578`, `Get Next Item` on Main Page), §A3 (what a Loader vs. Performer body actually
+looks like in the real PAD output), and §B14 (page-by-page crosswalk, row 18 `Close Down`);
+`docs/reviews/4a-2026-08-30-final-fixpass.md` (the 6th and passing Task 4a review — its four
+"most significant gaps"/recommendations are what steps 5-8 below close out).
 
 **Do:**
+
+*Role tagging (the task's original scope):*
 1. Using the reachability/call graph from Task 4a, walk Main Page's stages in order and find the
    `Get Next Item` `ACTION` stage (VBO `clsWorkQueuesActions`, method `Get Next Item`) — this is
    the hard split point, not a heuristic (don't guess by page name, as the current
@@ -570,10 +577,66 @@ looks like in the real PAD output, for context on what this tagging is ultimatel
    Queue` are tagged `loader`, and `Save Attachments`, `Result Entry`, `Mark Item As Exception`
    are tagged `performer`.
 
-**Done when:** `uv run pytest tests/ast/ -v` passes, including the new role-tagging test.
+*Task 4a follow-up cleanup (added after the 6th review cycle passed Task 4a at 95% — see
+`docs/reviews/4a-2026-08-30-final-fixpass.md`'s "Most significant gaps"/recommendations):*
 
-**Out of scope:** anything in `generator/` that consumes this tagging (Tasks 5a/6a) — this task
-only adds the field and computes it correctly.
+5. **Persist the Block→Recover pairing.** Task 4a's `_build_block_recover_map` in
+   `ast/builder.py` is computed and discarded inside `_compute_reachability` — it's never attached
+   to the AST, so this task (which already walks the same graph for role tagging) is the first
+   natural consumer. Store the pairing on the model (e.g. a `recover_stage_id: str | None` field
+   on the `BLOCK`-type `BPStage`, or an equivalent `BPPage`-level side-map in `ast/models.py`) so a
+   later rendering task (`BLOCK`/`ON BLOCK ERROR` generation) can reuse it instead of
+   re-deriving it from scratch. Raised in three of Task 4a's six review cycles — this is the last
+   point in the pipeline before that reconstruction cost gets paid again downstream.
+6. **`Close Down` orphan-status conflict — resolve, don't just re-flag.** Task 4a's reachability
+   pass independently confirmed (via a `<processid>` search matching §B11/§B14's own methodology)
+   that `Close Down` has zero callers anywhere in `PID_0171.bprelease` — but architecture doc §B14
+   row 18 lists it as a normal, unflagged Performer page mapped to `Close Application`, with no
+   **STOP** annotation like rows 16/21 carry. Update `docs/bp-to-pad-architecture-PID171.md` §B14
+   row 18 to add a **STOP** annotation matching rows 16/21's format (cite the same
+   `<processid>`-search method, and Task 4a's own reachability output as corroboration), so the doc
+   and the code agree pending a process-owner decision on whether `Close Down` is genuinely dead
+   code. Do not silently change the row's PAD-target mapping — only add the flag.
+7. **Fix the `password`-typed data-item parser gap.** `parser/process.py` never maps an ACTION
+   stage's `<inputs><input type="password" ...>` parameter type onto `BPDataItem.data_type` —
+   confirmed via `tests/generator/test_pad.py::test_pid_0171_page_with_password_item_emits_sensitive`
+   failing because zero password-typed `data_items` exist anywhere in the built AST, even though the
+   string appears 33 times in `PID_0171.bprelease`'s raw XML as an input-parameter type. Add the
+   capture (this is a genuine parser fix, not a stale test count — the `Sensitive` PAD directive
+   this feeds is a real B-side requirement per CLAUDE.md's confidence/annotation model, not
+   cosmetic).
+8. **Reconcile stale hardcoded test counts.** Task 4a's fixes (main-page detection, `Process`-type
+   normalisation, `MultipleCalculation` fan-out) shifted several real-sample totals that tests
+   outside Task 4a's own file scope still assert the old values for. Update, against a single final
+   full-suite run (not per-file, since Fix 2's MC-fanout ripple was previously under-reconciled by
+   exactly this kind of partial update):
+   - `tests/parser/test_integration.py`: `test_raw_page_count` (→19), `test_normalised_stage_count`
+     (→796), `test_stage_type_counts[ACTION-174]` (→175), `test_stage_type_counts[CALCULATION-42]`
+     (→113) — all against `PID_0127.bprelease` via `tests/conftest.py`'s `real_process` fixture.
+   - `tests/engine/test_flag_index.py`'s 8 `test_real_*` assertions and
+     `tests/mapper/test_vbo_router.py::TestIntegration::test_sample_routed_count_is_correct` — do
+     **not** blindly update these to whatever the current run produces; the `vbo_router` one in
+     particular traces back to Task 2b's `vbo_catalogue.yaml` rekey (commit `cd12585`), not this
+     task's changes. Recompute each expected value from a fresh run and confirm by inspection it's
+     explained by an already-understood cause before updating — don't paper over a real regression
+     as a "stale count."
+   - `tests/generator/test_pad.py::test_real_sample_generates_399_files` /
+     `::test_real_sample_stub_count` — update the page/file-count baseline for the post-Task-3a
+     artefact-isolation shrink (already documented in `docs/reviews/3a-2026-08-30-isolation-fixpass.md`).
+     Leave `test_pid_0171_page_with_password_item_emits_sensitive` for step 7's actual fix, not a
+     count update.
+
+**Done when:** `uv run pytest tests/ast/ tests/parser/ -v` passes, including the new role-tagging
+test (step 4) and the Block→Recover persistence being exercised by a test (step 5); `uv run pytest
+tests/ -q` run once at the end shows no failures traceable to this task's own changes (pre-existing,
+independently-explained failures outside this task's scope may remain — cite which, per step 8);
+`docs/bp-to-pad-architecture-PID171.md` §B14 row 18 carries the new **STOP** annotation.
+
+**Out of scope:** anything in `generator/` that consumes role tagging or the persisted Block→Recover
+pairing (Tasks 5a/6a); resolving whether `Close Down` is actually dead code (a process-owner
+decision — this task only makes the doc and the code stop disagreeing); any VBO/mapping fix beyond
+reconciling the one `vbo_router` test count if it turns out to genuinely be stale (a deeper
+`vbo_catalogue.yaml` audit is not this task's job).
 
 ---
 
