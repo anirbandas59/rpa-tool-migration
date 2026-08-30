@@ -1244,3 +1244,86 @@ def test_no_dangling_edge_references(pid_0171_process) -> None:  # type: ignore[
 
     # If we reach here, all edges are well-formed
     assert not dangling_edges, "All edges should resolve to existing stages"
+
+
+def test_pid171_loader_performer_role_tagging(pid_0171_process) -> None:  # type: ignore[no-untyped-def]
+    """Task 4b requirement: pages are tagged with Loader/Performer roles.
+
+    The split point is the 'Get Next Item' ACTION stage (ID 85fbb578-...) on Main Page.
+    Pages reachable before this stage should be tagged "loader";
+    pages reachable from this stage onward should be tagged "performer";
+    unreachable pages should have role=None.
+
+    Task 4b step 4 explicitly requires:
+    - Loader pages: Get Mails, Populate Queue
+    - Performer pages: Save Attachments, Result Entry, Mark Item As Exception
+    """
+    # Loader pages per architecture doc §B14 (tasks before Get Next Item)
+    expected_loader = {"Get Mails", "Populate Queue"}
+    # Performer pages per architecture doc §B14 (tasks after Get Next Item)
+    # Task 4b step 4 explicitly names: Save Attachments, Result Entry, Mark Item As Exception
+    # These are correctly reachable via Block→Recover edges (Task 4a Fix A), which is now
+    # consulted in _tag_loader_performer_roles() (Fix 1 of this pass).
+    expected_performer_minimum = {"Save Attachments", "Result Entry", "Mark Item As Exception"}
+
+    found_loaders = [p for p in pid_0171_process.pages if p.role == "loader"]
+    found_performers = [p for p in pid_0171_process.pages if p.role == "performer"]
+
+    # Verify expected loader pages are tagged
+    found_loader_names = {p.name for p in found_loaders}
+    for expected_name in expected_loader:
+        assert expected_name in found_loader_names, (
+            f"Expected page '{expected_name}' to be tagged 'loader', "
+            f"but found loader pages: {found_loader_names}"
+        )
+
+    # Verify expected performer pages are tagged per task step 4
+    found_performer_names = {p.name for p in found_performers}
+    for expected_name in expected_performer_minimum:
+        assert expected_name in found_performer_names, (
+            f"Expected page '{expected_name}' to be tagged 'performer', "
+            f"but found performer pages: {found_performer_names}"
+        )
+
+    # Verify loader and performer sets don't overlap
+    overlap = found_loader_names & found_performer_names
+    assert not overlap, f"Loader and performer page sets should not overlap, but found: {overlap}"
+
+
+def test_pid171_block_recover_pairing_persisted(pid_0171_process) -> None:  # type: ignore[no-untyped-def]
+    """Task 4b requirement: Block→Recover pairing is persisted onto BLOCK stages.
+
+    Per Task 4a, the implicit Block→Recover relationship is reconstructed during
+    reachability analysis. Task 4b must persist this pairing onto BLOCK stages
+    via the recover_stage_id field, so rendering logic can reuse it.
+    """
+    # Find a BLOCK stage that has a Recover handler
+    block_with_recover = None
+    for page in pid_0171_process.pages:
+        for stage in page.stages:
+            if stage.stage_type == StageType.BLOCK and stage.recover_stage_id:
+                block_with_recover = stage
+                break
+        if block_with_recover:
+            break
+
+    # Verify at least one BLOCK has a recover_stage_id
+    assert block_with_recover is not None, (
+        "Expected at least one BLOCK stage with persisted recover_stage_id, but found none"
+    )
+
+    # Verify the recover_stage_id actually points to a RECOVER stage on the same page
+    recover_stage = None
+    for page in pid_0171_process.pages:
+        for stage in page.stages:
+            if stage.stage_id == block_with_recover.recover_stage_id:
+                recover_stage = stage
+                break
+
+    assert recover_stage is not None, (
+        f"BLOCK stage {block_with_recover.name} has recover_stage_id={block_with_recover.recover_stage_id}, "
+        f"but that stage_id doesn't exist in the AST"
+    )
+    assert recover_stage.stage_type == StageType.RECOVER, (
+        f"Expected recover_stage_id to point to a RECOVER stage, but got {recover_stage.stage_type}"
+    )

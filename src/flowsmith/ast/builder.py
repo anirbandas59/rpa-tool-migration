@@ -15,7 +15,15 @@ from typing import TYPE_CHECKING, TypedDict
 
 from pydantic import ValidationError as PydanticValidationError
 
-from flowsmith.ast.models import BPDataItem, BPPage, BPProcess, BPStage, ReviewFlag, StageType
+from flowsmith.ast.models import (
+    BPDataItem,
+    BPEnvironmentVariable,
+    BPPage,
+    BPProcess,
+    BPStage,
+    ReviewFlag,
+    StageType,
+)
 from flowsmith.exceptions import ASTBuildError
 
 if TYPE_CHECKING:
@@ -784,7 +792,7 @@ def _build_block_recover_map(pages: list[BPPage]) -> dict[str, str]:
 
 def _compute_reachability(
     pages: list[BPPage],
-) -> list[BPPage]:
+) -> tuple[list[BPPage], dict[str, str]]:
     """Compute reachability for each page in a process (Task 4a).
 
     Returns a new list of pages with `reachable=True/False` annotations based
@@ -805,7 +813,8 @@ def _compute_reachability(
         pages: List of BPPage objects from the process.
 
     Returns:
-        New list of BPPage objects with updated reachable annotations.
+        Tuple of (new list of BPPage objects with updated reachable annotations,
+        block_recover_map dict for Task 4b persistence).
     """
     # Build a stage ID → page mapping for quick lookup
     stage_to_page: dict[str, BPPage] = {}
@@ -975,6 +984,282 @@ def _compute_reachability(
         else:
             updated_pages.append(page)
 
+    # Task 4b: return block_recover_map for persistence onto BPStage
+    return updated_pages, block_recover_map
+
+
+def _tag_loader_performer_roles(
+    pages: list[BPPage],
+    block_recover_map: dict[str, str],
+) -> list[BPPage]:
+    """Tag pages with Loader/Performer roles based on the 'Get Next Item' split point (Task 4b).
+
+    Hard split point: BP stage `85fbb578` (`Get Next Item`, Main Page) is the exact boundary.
+    Pages reachable BEFORE this stage are tagged as "loader".
+    Pages reachable FROM this stage onward are tagged as "performer".
+    Unreachable pages get no role (remain None).
+
+    Consults block_recover_map (Task 4a Fix A) to extend reachability through
+    Block→Recover implicit edges, just like _compute_reachability() does.
+
+    Args:
+        pages: List of BPPage objects (already marked with reachability, per Task 4a).
+        block_recover_map: Dict mapping Block stage_id → Recover stage_id (from Task 4a).
+
+    Returns:
+        New list of BPPage objects with role annotations.
+    """
+    # Stage ID of the hard split point (from architecture doc §B11)
+    # Full UUID of the first "Get Next Item" on Main Page (short form: 85fbb578)
+    GET_NEXT_ITEM_STAGE_ID = "85fbb578-f410-4f72-8ca9-58513939bc51"
+
+    # Build a stage ID → page mapping for quick lookup
+    stage_to_page: dict[str, BPPage] = {}
+    for page in pages:
+        for stage in page.stages:
+            stage_to_page[stage.stage_id] = page
+
+    # Find the Main Page
+    main_page: BPPage | None = None
+    get_next_item_stage: BPStage | None = None
+    for page in pages:
+        if page.is_main:
+            main_page = page
+            # Look for the Get Next Item stage on Main Page
+            for stage in page.stages:
+                if stage.stage_id == GET_NEXT_ITEM_STAGE_ID:
+                    get_next_item_stage = stage
+                    break
+            break
+
+    # If we can't find the split point, we can't do role tagging — return unchanged
+    if not main_page or not get_next_item_stage:
+        # Return pages unchanged if no split point found
+        return pages
+
+    # Phase 1: Find all pages reachable BEFORE Get Next Item (Loader pages)
+    # Do a BFS from Main Page's Start, stopping AT the split stage (don't traverse beyond it)
+    loader_pages: set[str] = set()
+    before_visited_stages: set[str] = set()
+    to_visit_stages: list[str] = []
+    pages_checked_for_blocks_before: set[str] = set()
+
+    # Find the Start stage on Main Page
+    start_stage: BPStage | None = None
+    for stage in main_page.stages:
+        if stage.stage_type == StageType.START:
+            start_stage = stage
+            break
+
+    if start_stage:
+        to_visit_stages.append(start_stage.stage_id)
+        loader_pages.add(main_page.page_id)
+
+    while to_visit_stages:
+        stage_id = to_visit_stages.pop(0)
+
+        if stage_id in before_visited_stages:
+            continue
+        before_visited_stages.add(stage_id)
+
+        # Stop traversing if we hit the split point (but still mark the main page as visited)
+        if stage_id == GET_NEXT_ITEM_STAGE_ID:
+            continue
+
+        if stage_id not in stage_to_page:
+            continue
+
+        current_page = stage_to_page[stage_id]
+        current_stage: BPStage | None = None
+
+        for s in current_page.stages:
+            if s.stage_id == stage_id:
+                current_stage = s
+                break
+
+        if not current_stage:
+            continue
+
+        # Mark current page as loader
+        loader_pages.add(current_page.page_id)
+
+        # Task 4a Fix A: When a page becomes reachable, immediately consult its Block→Recover
+        # pairs, just like _compute_reachability() does. This ensures exception handlers are
+        # traversed even when Block stages have zero independent incoming edges.
+        if current_page.page_id not in pages_checked_for_blocks_before:
+            pages_checked_for_blocks_before.add(current_page.page_id)
+            for block_id, recover_id in block_recover_map.items():
+                # Check if this block belongs to the current page
+                if (
+                    block_id in stage_to_page
+                    and stage_to_page[block_id].page_id == current_page.page_id
+                    and recover_id not in before_visited_stages
+                ):
+                    to_visit_stages.append(recover_id)
+
+        # Follow edges, but don't cross into Get Next Item stage
+        if (
+            current_stage.onsuccess_target
+            and current_stage.onsuccess_target != GET_NEXT_ITEM_STAGE_ID
+            and current_stage.onsuccess_target not in before_visited_stages
+        ):
+            to_visit_stages.append(current_stage.onsuccess_target)
+
+        if (
+            current_stage.ontrue_target
+            and current_stage.ontrue_target != GET_NEXT_ITEM_STAGE_ID
+            and current_stage.ontrue_target not in before_visited_stages
+        ):
+            to_visit_stages.append(current_stage.ontrue_target)
+
+        if (
+            current_stage.onfalse_target
+            and current_stage.onfalse_target != GET_NEXT_ITEM_STAGE_ID
+            and current_stage.onfalse_target not in before_visited_stages
+        ):
+            to_visit_stages.append(current_stage.onfalse_target)
+
+        # For SubSheet calls, follow to target page
+        if current_stage.is_subsheet_call:
+            target_page: BPPage | None = None
+
+            # Try processid match first
+            if current_stage.processid:
+                for page in pages:
+                    if page.page_id == current_stage.processid:
+                        target_page = page
+                        break
+
+            # Fall back to name matching
+            if not target_page:
+                target_page_name = current_stage.name
+                for page in pages:
+                    if page.name == target_page_name:
+                        target_page = page
+                        break
+
+            if target_page:
+                loader_pages.add(target_page.page_id)
+                # Add the page's Start stage to traverse it
+                for s in target_page.stages:
+                    if s.stage_type == StageType.START:
+                        if s.stage_id not in before_visited_stages:
+                            to_visit_stages.append(s.stage_id)
+                        break
+
+    # Phase 2: Find all pages reachable FROM Get Next Item onward (Performer pages)
+    # Do a BFS starting from Get Next Item and all edges FROM it
+    performer_pages: set[str] = set()
+    after_visited_stages: set[str] = set()
+    to_visit_stages = [GET_NEXT_ITEM_STAGE_ID]
+    pages_checked_for_blocks_after: set[str] = set()
+
+    while to_visit_stages:
+        stage_id = to_visit_stages.pop(0)
+
+        if stage_id in after_visited_stages:
+            continue
+        after_visited_stages.add(stage_id)
+
+        if stage_id not in stage_to_page:
+            continue
+
+        current_page = stage_to_page[stage_id]
+        current_stage: BPStage | None = None
+
+        for s in current_page.stages:
+            if s.stage_id == stage_id:
+                current_stage = s
+                break
+
+        if not current_stage:
+            continue
+
+        # Mark current page as performer (even if also in loader, performer takes precedence)
+        performer_pages.add(current_page.page_id)
+
+        # Task 4a Fix A: When a page becomes reachable, immediately consult its Block→Recover
+        # pairs, just like _compute_reachability() does. This ensures exception handlers are
+        # traversed even when Block stages have zero independent incoming edges.
+        if current_page.page_id not in pages_checked_for_blocks_after:
+            pages_checked_for_blocks_after.add(current_page.page_id)
+            for block_id, recover_id in block_recover_map.items():
+                # Check if this block belongs to the current page
+                if (
+                    block_id in stage_to_page
+                    and stage_to_page[block_id].page_id == current_page.page_id
+                    and recover_id not in after_visited_stages
+                ):
+                    to_visit_stages.append(recover_id)
+
+        # Follow all edges forward
+        if (
+            current_stage.onsuccess_target
+            and current_stage.onsuccess_target not in after_visited_stages
+        ):
+            to_visit_stages.append(current_stage.onsuccess_target)
+
+        if current_stage.ontrue_target and current_stage.ontrue_target not in after_visited_stages:
+            to_visit_stages.append(current_stage.ontrue_target)
+
+        if (
+            current_stage.onfalse_target
+            and current_stage.onfalse_target not in after_visited_stages
+        ):
+            to_visit_stages.append(current_stage.onfalse_target)
+
+        # For SubSheet calls, follow to target page
+        if current_stage.is_subsheet_call:
+            target_page: BPPage | None = None
+
+            # Try processid match first
+            if current_stage.processid:
+                for page in pages:
+                    if page.page_id == current_stage.processid:
+                        target_page = page
+                        break
+
+            # Fall back to name matching
+            if not target_page:
+                target_page_name = current_stage.name
+                for page in pages:
+                    if page.name == target_page_name:
+                        target_page = page
+                        break
+
+            if target_page:
+                performer_pages.add(target_page.page_id)
+                # Add the page's Start stage to traverse it
+                for s in target_page.stages:
+                    if s.stage_type == StageType.START:
+                        if s.stage_id not in after_visited_stages:
+                            to_visit_stages.append(s.stage_id)
+                        break
+
+    # Build updated pages with role annotations
+    # Priority: performer > loader (if a page is reachable from both, it's performer)
+    updated_pages: list[BPPage] = []
+    for page in pages:
+        if page.page_id in performer_pages:
+            role = "performer"
+        elif page.page_id in loader_pages:
+            role = "loader"
+        else:
+            role = None  # Unreachable or orphaned
+
+        # Create new page object with role (even if None, to be explicit)
+        updated_pages.append(
+            BPPage(
+                page_id=page.page_id,
+                name=page.name,
+                stages=page.stages,
+                is_main=page.is_main,
+                published=page.published,
+                reachable=page.reachable,
+                role=role,
+            )
+        )
+
     return updated_pages
 
 
@@ -1020,8 +1305,31 @@ def build_ast(raw: RawProcess | MultiArtefactRelease, router: VBORouter | None =
         pages.append(_build_page(raw_page, router))
 
     # Compute reachability annotations (Task 4a) — must happen before creating BPProcess
-    # because BPProcess is frozen
-    pages = _compute_reachability(pages)
+    # because BPProcess is frozen. Also returns block_recover_map for Task 4b.
+    pages, block_recover_map = _compute_reachability(pages)
+
+    # Task 4b: Persist the Block→Recover pairing onto BLOCK-type stages
+    # Since BPStage is mutable (not frozen), we can update in place
+    for page in pages:
+        for stage in page.stages:
+            if stage.stage_type == StageType.BLOCK and stage.stage_id in block_recover_map:
+                stage.recover_stage_id = block_recover_map[stage.stage_id]
+
+    # Task 4b: Tag pages with Loader/Performer roles using the reachability graph
+    # Pass block_recover_map so role tagging consults the same Block→Recover edges (Task 4a Fix A)
+    pages = _tag_loader_performer_roles(pages, block_recover_map)
+
+    # Extract environment variables from MultiArtefactRelease if present
+    environment_variables: list[BPEnvironmentVariable] = []
+    if isinstance(raw, dict) and "environment_variables" in raw:
+        for env_var_dict in raw.get("environment_variables", []):  # type: ignore[union-attr]
+            environment_variables.append(
+                BPEnvironmentVariable(
+                    name=env_var_dict.get("name", ""),
+                    data_type=env_var_dict.get("data_type", ""),
+                    value=env_var_dict.get("value"),
+                )
+            )
 
     try:
         return BPProcess(
@@ -1029,6 +1337,7 @@ def build_ast(raw: RawProcess | MultiArtefactRelease, router: VBORouter | None =
             name=process_dict["name"],
             version=process_dict["version"],
             pages=pages,
+            environment_variables=environment_variables,
             source_file=process_dict["source_file"],
         )
     except PydanticValidationError as exc:

@@ -71,8 +71,8 @@ class TestRawParserOutput:
         Fixture extracts only the first process from multi-artefact release (Task 3a).
         The full release has 479 pages across main process + 25 VBO objects.
         """
-        assert len(real_raw["pages"]) == 18, (
-            f"Expected 18 pages in main process, got {len(real_raw['pages'])}"
+        assert len(real_raw["pages"]) == 19, (
+            f"Expected 19 pages in main process, got {len(real_raw['pages'])}"
         )
 
     def test_main_page_has_stages(self, real_raw: RawProcess) -> None:
@@ -192,17 +192,17 @@ class TestNormalisedASTOutput:
 
         Fixture now extracts only the first process from multi-artefact release (Task 3a).
         The full release has 6,576 normalised stages across main process + 25 VBO objects.
-        The main process alone has 724 normalised stages after skip type removal and
-        stage type collapsing.
+        The main process alone has 796 normalised stages after skip type removal and
+        stage type collapsing (Task 4a's MultipleCalculation fan-out +71 stages).
         """
         total = sum(len(p.stages) for p in real_process.pages)
-        assert total == 724, f"Expected 724 normalised stages in main process, got {total}"
+        assert total == 796, f"Expected 796 normalised stages in main process, got {total}"
 
     @pytest.mark.parametrize(
         "stage_type,expected_count",
         [
             ("DATA", 259),
-            ("ACTION", 174),
+            ("ACTION", 175),  # Task 4a's main-page detection fix: +1
             ("END", 26),
             ("START", 19),
             ("BLOCK", 42),
@@ -210,7 +210,7 @@ class TestNormalisedASTOutput:
             ("CODE", 0),
             ("EXCEPTION", 22),
             ("COLLECTION", 34),
-            ("CALCULATION", 42),
+            ("CALCULATION", 113),  # Task 4a's MultipleCalculation fan-out: 42 + 71 = 113
             ("WAIT", 0),
             ("RECOVER", 21),
             ("NAVIGATE", 0),

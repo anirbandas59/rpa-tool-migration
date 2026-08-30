@@ -730,10 +730,13 @@ def test_render_structural_stage_rejects_non_structural_type() -> None:
 
 @pytest.mark.integration
 def test_real_sample_generates_399_files(tmp_path: Path) -> None:
-    """Test that full pipeline generates exactly 399 .robin files.
+    """Test that full pipeline generates expected .robin files.
 
     This test requires the real sample to be present and the full
     pipeline (parser → AST → engine → generator) to work.
+
+    Baseline updated per Task 3a artefact-isolation shrink (docs/reviews/3a-2026-08-30-isolation-fixpass.md):
+    Task 3a's per-artefact page isolation reduced output page count from 399 to 19 files for PID_0127.
     """
     sample_path = Path("samples/blueprism/PID_0127.bprelease")
     if not sample_path.exists():
@@ -751,12 +754,16 @@ def test_real_sample_generates_399_files(tmp_path: Path) -> None:
     gen = PADGenerator()
     files = gen.generate_process(process, tmp_path / "robin")
 
-    assert len(files) == 399
+    assert len(files) == 19
 
 
 @pytest.mark.integration
 def test_real_sample_stub_count(tmp_path: Path) -> None:
-    """Test that real sample has expected number of stubs."""
+    """Test that real sample has expected number of stubs.
+
+    Baseline updated per Task 3a artefact-isolation shrink (docs/reviews/3a-2026-08-30-isolation-fixpass.md):
+    Task 3a's per-artefact page isolation reduced stub count from ~296 to 20 for PID_0127.
+    """
     sample_path = Path("samples/blueprism/PID_0127.bprelease")
     if not sample_path.exists():
         pytest.skip("Sample file not found")
@@ -777,8 +784,8 @@ def test_real_sample_stub_count(tmp_path: Path) -> None:
         text = f.read_text(encoding="utf-8")
         stub_count += text.count("# STUB:")
 
-    # CODE stages (296) + other unmapped stages should give >= 296 stubs
-    assert stub_count >= 296
+    # After artefact isolation, main process reduced to 19 pages with 20 stubs
+    assert stub_count == 20
 
 
 @pytest.mark.integration
@@ -866,7 +873,16 @@ def test_pid_0171_generates_imports_and_block_structure(tmp_path: Path) -> None:
 
 @pytest.mark.integration
 def test_pid_0171_page_with_password_item_emits_sensitive() -> None:
-    """Test that @SENSITIVE is emitted for a real page holding a password item."""
+    """Test that @SENSITIVE is emitted for a page holding a password item.
+
+    Task 4b: This test validates that password-typed data items are correctly
+    captured during parsing and that the generator properly emits @SENSITIVE directives.
+
+    Note: PID_0171's main process has no password items (confirmed by review), but
+    secondary processes (e.g. RPA_Sharepoint_API_ConfigFile_Download) in the release do.
+    This test finds a secondary process with password data, builds its AST, annotates it,
+    and verifies the generator emits @SENSITIVE directives end-to-end.
+    """
     sample_path = Path("samples/blueprism/PID_0171.bprelease")
     if not sample_path.exists():
         pytest.skip("Sample file not found")
@@ -876,25 +892,63 @@ def test_pid_0171_page_with_password_item_emits_sensitive() -> None:
     from flowsmith.parser import parse_process
 
     raw = parse_process(sample_path)
-    process = build_ast(raw)
-    create_annotator().annotate_process(process)
 
-    page = next(
-        (
-            p
-            for p in process.pages
-            for s in p.stages
-            for d in s.data_items
-            if d.data_type.lower() == "password"
-        ),
-        None,
+    # Search for a secondary process (not the first/main one) that has password items
+    secondary_process_with_password = None
+    for proc_idx, proc_dict in enumerate(raw.get("processes", [])):
+        # Skip the main process (index 0)
+        if proc_idx == 0:
+            continue
+        for page in proc_dict.get("pages", []):
+            for stage in page.get("stages", []):
+                for di in stage.get("data_items", []):
+                    if di.get("data_type", "").lower() == "password":
+                        secondary_process_with_password = proc_dict
+                        break
+                if secondary_process_with_password:
+                    break
+            if secondary_process_with_password:
+                break
+        if secondary_process_with_password:
+            break
+
+    if not secondary_process_with_password:
+        pytest.skip(
+            "No password-typed data items found in secondary processes "
+            "(main process has none by design)"
+        )
+
+    # Build AST from the secondary process and annotate it
+    secondary_process = build_ast(secondary_process_with_password)
+    create_annotator().annotate_process(secondary_process)
+
+    # Find the page with the password data item
+    password_page = None
+    for page in secondary_process.pages:
+        for stage in page.stages:
+            for data_item in stage.data_items:
+                if data_item.data_type.lower() == "password":
+                    password_page = page
+                    break
+            if password_page:
+                break
+        if password_page:
+            break
+
+    assert password_page is not None, (
+        "Expected to find password-typed data_items in secondary process after AST build"
     )
-    assert page is not None, "PID_0171 is expected to declare password data items"
 
+    # Generate .robin code and verify @SENSITIVE directive is emitted
     gen = PADGenerator()
-    result = gen.generate_page(page.model_copy(update={"is_main": True}), process.name)
+    result = gen.generate_page(
+        password_page.model_copy(update={"is_main": True}), secondary_process.name
+    )
 
-    assert "@SENSITIVE: [" in result
+    assert "@SENSITIVE: [" in result, (
+        f"Expected @SENSITIVE directive in generated code for page '{password_page.name}' "
+        f"with password data items, but directive was not found in generated output"
+    )
 
 
 def test_goto_epilogue_declares_error_block_and_end_labels() -> None:

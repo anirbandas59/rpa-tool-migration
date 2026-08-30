@@ -348,6 +348,14 @@ class BPStage(BaseModel):
             "Used by reachability analysis and code generation for branching stages."
         ),
     )
+    recover_stage_id: str | None = Field(
+        default=None,
+        description=(
+            "For BLOCK stages: the stage_id of the paired RECOVER stage (Task 4b). "
+            "Persisted from _build_block_recover_map() for reuse by rendering logic. "
+            "None for non-BLOCK stages or BLOCK stages with no associated Recover."
+        ),
+    )
 
     @model_validator(mode="after")
     def _derive_code_length(self) -> BPStage:
@@ -391,6 +399,15 @@ class BPPage(BaseModel):
             "True if this page is reachable from the process entry-point (Main Page) "
             "via onsuccess/ontrue/onfalse edges or SubSheet/Process cross-references. "
             "Unreachable pages (orphans) are marked False (Task 4a)."
+        ),
+    )
+    role: str | None = Field(
+        default=None,
+        description=(
+            "Loader/Performer role tag (Task 4b). Set by the role-tagging pass: "
+            "\"loader\" for pages reachable before the 'Get Next Item' stage (BP stage 85fbb578); "
+            '"performer" for pages reachable from that stage onward. '
+            "None for unreachable pages or if role tagging hasn't run yet."
         ),
     )
 
