@@ -34,6 +34,7 @@ def make_raw_stage(
     onsuccess_target: str | None = None,
     ontrue_target: str | None = None,
     onfalse_target: str | None = None,
+    processid: str | None = None,
 ) -> RawStage:
     """Build a minimal valid RawStage dict."""
     return RawStage(
@@ -56,6 +57,7 @@ def make_raw_stage(
         onsuccess_target=onsuccess_target,
         ontrue_target=ontrue_target,
         onfalse_target=onfalse_target,
+        processid=processid,
     )
 
 
@@ -74,6 +76,7 @@ def make_raw_process(
                 name="Main",
                 stages=[],
                 is_main=True,
+                published=False,
             )
         ]
     return RawProcess(
@@ -94,6 +97,7 @@ def single_page_process(*stages: RawStage, is_main: bool = True) -> RawProcess:
                 name="Main",
                 stages=list(stages),
                 is_main=is_main,
+                published=False,
             )
         ]
     )
@@ -132,20 +136,36 @@ def test_skip_processinfo() -> None:
     assert build_ast(raw).pages[0].stages == []
 
 
-def test_skip_process_type() -> None:
-    raw = single_page_process(make_raw_stage(stage_type="Process", name="P"))
-    assert build_ast(raw).pages[0].stages == []
+def test_process_type_normalised_to_action() -> None:
+    """Process stages are normalised to ACTION(is_process_call=True) per CLAUDE.md."""
+    raw = single_page_process(make_raw_stage(stage_id="p1", stage_type="Process", name="P"))
+    result = build_ast(raw)
+    assert len(result.pages[0].stages) == 1
+    stage = result.pages[0].stages[0]
+    assert stage.stage_type == StageType.ACTION
+    assert stage.is_process_call is True
+    assert stage.name == "P"
 
 
 def test_all_skip_types_together() -> None:
+    """Skip types (Anchor, Note, SubSheetInfo, ProcessInfo) are dropped.
+
+    Process type is normalised to ACTION, not skipped, so it should appear in output.
+    """
     raw = single_page_process(
         make_raw_stage(stage_id="s1", stage_type="Anchor"),
         make_raw_stage(stage_id="s2", stage_type="Note"),
         make_raw_stage(stage_id="s3", stage_type="SubSheetInfo"),
         make_raw_stage(stage_id="s4", stage_type="ProcessInfo"),
-        make_raw_stage(stage_id="s5", stage_type="Process"),
+        make_raw_stage(stage_id="s5", stage_type="Process", name="ProcessStage"),
     )
-    assert build_ast(raw).pages[0].stages == []
+    result = build_ast(raw)
+    # Only the Process stage should remain (normalised to ACTION with is_process_call=True)
+    assert len(result.pages[0].stages) == 1
+    stage = result.pages[0].stages[0]
+    assert stage.stage_id == "s5"
+    assert stage.stage_type == StageType.ACTION
+    assert stage.is_process_call is True
 
 
 # ── Direct map tests ─────────────────────────────────────────────────────────
@@ -384,6 +404,7 @@ def test_multipage_process() -> None:
                 page_id="pg1",
                 name="Main",
                 is_main=True,
+                published=True,
                 stages=[
                     make_raw_stage(stage_id="s1", stage_type="Start"),
                     make_raw_stage(stage_id="s2", stage_type="End"),
@@ -393,6 +414,7 @@ def test_multipage_process() -> None:
                 page_id="pg2",
                 name="Login",
                 is_main=False,
+                published=False,
                 stages=[
                     make_raw_stage(stage_id="s3", stage_type="Action", name="Click"),
                 ],
@@ -436,8 +458,8 @@ def test_exception_type_preserved() -> None:
 def test_is_main_page_preserved() -> None:
     raw = make_raw_process(
         pages=[
-            RawPage(page_id="pg1", name="Main", stages=[], is_main=True),
-            RawPage(page_id="pg2", name="Sub", stages=[], is_main=False),
+            RawPage(page_id="pg1", name="Main", stages=[], is_main=True, published=True),
+            RawPage(page_id="pg2", name="Sub", stages=[], is_main=False, published=False),
         ]
     )
     result = build_ast(raw)
@@ -1131,3 +1153,94 @@ def test_pid171_create_instance_ast_has_onsuccess_edge(pid_0171_process) -> None
     )
     assert open_excel is not None
     assert create_instance.onsuccess_target == open_excel.stage_id
+
+
+# ── Task 4a: Reachability / Call-Graph Tests ──────────────────────────────
+
+
+def test_simple_process_single_page_is_reachable(pid_0171_process) -> None:  # type: ignore[no-untyped-def]
+    """Single-page process: Main Page should always be marked reachable (Task 4a)."""
+    main_page = next((p for p in pid_0171_process.pages if p.is_main), None)
+    assert main_page is not None
+    assert main_page.reachable is True
+
+
+def test_pid171_orphan_pages_marked_unreachable(pid_0171_process) -> None:  # type: ignore[no-untyped-def]
+    """Task 4a requirement: orphan pages in PID_0171 should be marked unreachable.
+
+    Per architecture doc §B11/§B14: 'Mark leftout Items as Exception' and
+    'Send Info to Data Gateways' have no callers — they are orphan pages.
+    """
+    orphan_names = {"Mark leftout Items as Exception", "Send Info to Data Gateways"}
+    found_orphans = [p for p in pid_0171_process.pages if p.name in orphan_names]
+
+    assert found_orphans, "Expected to find orphan pages in PID_0171, found none"
+
+    for orphan_page in found_orphans:
+        assert orphan_page.reachable is False, (
+            f"Page '{orphan_page.name}' should be marked unreachable"
+        )
+
+
+def test_pid171_reachable_pages_marked_correctly(pid_0171_process) -> None:  # type: ignore[no-untyped-def]
+    """Task 4a requirement: named reachable pages must be marked reachable.
+
+    Per Task 4a step 4 and Done-when: the pages "Get Mails" and "Populate Queue"
+    are direct callers in the main page's execution chain and must be marked reachable.
+    """
+    named_reachable = {"Get Mails", "Populate Queue"}
+    found_pages = [p for p in pid_0171_process.pages if p.name in named_reachable]
+
+    assert len(found_pages) == 2, (
+        f"Expected to find both 'Get Mails' and 'Populate Queue', found {len(found_pages)}"
+    )
+
+    for page in found_pages:
+        assert page.reachable is True, (
+            f"Page '{page.name}' should be marked reachable (is a direct caller in main page)"
+        )
+
+
+def test_no_dangling_edge_references(pid_0171_process) -> None:  # type: ignore[no-untyped-def]
+    """Task 4a well-formedness check: no dangling onsuccess/ontrue/onfalse references.
+
+    Per the strategy doc's well-formedness criteria, every edge target in the AST
+    must resolve to an actual stage within the same page. Any dangling reference is
+    a defect in either:
+    - Skip-type pass-through collapse (Anchor, Note, SubSheetInfo, ProcessInfo)
+    - MultipleCalculation ID-collapse redirection
+    - Block→Recover pairing
+    - Overall edge redirection logic
+
+    This test scans all edges and confirms no target stage_id is orphaned.
+    """
+    # Build the set of all actual stage IDs in the process
+    all_stage_ids: set[str] = set()
+    for page in pid_0171_process.pages:
+        for stage in page.stages:
+            all_stage_ids.add(stage.stage_id)
+
+    # Scan every edge and check if its target exists
+    dangling_edges: list[tuple[str, str, str]] = []  # (page_name, stage_name, edge_type)
+
+    for page in pid_0171_process.pages:
+        for stage in page.stages:
+            if stage.onsuccess_target and stage.onsuccess_target not in all_stage_ids:
+                dangling_edges.append((page.name, stage.name, "onsuccess"))
+            if stage.ontrue_target and stage.ontrue_target not in all_stage_ids:
+                dangling_edges.append((page.name, stage.name, "ontrue"))
+            if stage.onfalse_target and stage.onfalse_target not in all_stage_ids:
+                dangling_edges.append((page.name, stage.name, "onfalse"))
+
+    # Report any dangling edges found
+    if dangling_edges:
+        error_lines = [
+            f"Dangling {edge_type} from {page_name}::{stage_name}"
+            for page_name, stage_name, edge_type in dangling_edges
+        ]
+        raise AssertionError(
+            f"Found {len(dangling_edges)} dangling edge reference(s):\n" + "\n".join(error_lines)
+        )
+
+    # If we reach here, all edges are well-formed
+    assert not dangling_edges, "All edges should resolve to existing stages"

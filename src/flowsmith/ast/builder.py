@@ -2,8 +2,8 @@
 
 This is the single place where:
   - Stage type strings from XML are normalised to StageType enum values
-  - Non-canonical types are collapsed (MultipleCalculation, SubSheet, WaitStart/End, etc.)
-  - Skip types are dropped (Anchor, Note, SubSheetInfo, ProcessInfo, Process)
+  - Non-canonical types are collapsed (MultipleCalculation, SubSheet, Process, WaitStart/End, etc.)
+  - Skip types are dropped (Anchor, Note, SubSheetInfo, ProcessInfo)
   - Paired bracket stages are matched and pair_id is assigned
   - Pydantic ValidationError is wrapped as ASTBuildError
 """
@@ -20,6 +20,18 @@ from flowsmith.exceptions import ASTBuildError
 
 if TYPE_CHECKING:
     from flowsmith.mapper.vbo_router import VBORouter
+
+
+# Type alias for the multi-artefact release shape from Task 3a/3b
+class MultiArtefactRelease(TypedDict, total=False):
+    """Multi-artefact release parsing result — Task 3a/3b."""
+
+    processes: list[RawProcess]
+    objects: list[RawProcess]
+    environment_variables: list[dict[str, str]]
+    source_file: str
+    validation: dict[str, int]
+
 
 # ── Input contract TypedDicts ───────────────────────────────────────────────
 
@@ -56,6 +68,7 @@ class RawStage(TypedDict):
     onsuccess_target: str | None
     ontrue_target: str | None
     onfalse_target: str | None
+    processid: str | None  # SubSheet/Process cross-reference ID (Task 4a)
 
 
 class RawPage(TypedDict):
@@ -80,9 +93,7 @@ class RawProcess(TypedDict):
 
 # ── Normalisation constants ─────────────────────────────────────────────────
 
-_SKIP_TYPES: frozenset[str] = frozenset(
-    {"Anchor", "Note", "SubSheetInfo", "ProcessInfo", "Process"}
-)
+_SKIP_TYPES: frozenset[str] = frozenset({"Anchor", "Note", "SubSheetInfo", "ProcessInfo"})
 
 _DIRECT_MAP: dict[str, StageType] = {
     "Start": StageType.START,
@@ -133,6 +144,7 @@ def _extract_common_stage_fields(raw: RawStage) -> dict[str, object]:
         "onsuccess_target": raw.get("onsuccess_target"),
         "ontrue_target": raw.get("ontrue_target"),
         "onfalse_target": raw.get("onfalse_target"),
+        "processid": raw.get("processid"),  # SubSheet/Process cross-reference (Task 4a)
     }
 
 
@@ -217,6 +229,21 @@ def _normalise_stages(
                     name=raw["name"],
                     data_items=data_items,
                     is_subsheet_call=True,
+                    **common_fields,
+                )
+            )
+            continue
+
+        if stage_type == "Process":
+            # PROCESS stages are normalised to ACTION(is_process_call=True) per CLAUDE.md
+            # "Normalised on parse" table: PROCESS → ACTION (is_process_call=True)
+            stages.append(
+                BPStage(
+                    stage_id=stage_id,
+                    stage_type=StageType.ACTION,
+                    name=raw["name"],
+                    data_items=data_items,
+                    is_process_call=True,
                     **common_fields,
                 )
             )
@@ -535,6 +562,130 @@ def _detect_vbo_call_fusions(
             stage_n_plus_1.pending_flags.append(flag)
 
 
+def _build_multiple_calculation_map(raw_stages: list[RawStage]) -> dict[str, str]:
+    """Build a map of MultipleCalculation stage IDs to their first fanned-out sub-stage ID.
+
+    When a MultipleCalculation stage is normalised, it is split into N CALCULATION stages
+    with IDs like {original_id}__calc_1, {original_id}__calc_2, etc. Any edge that
+    pointed at the original MultipleCalculation ID should be redirected to the first
+    fanned-out sub-stage.
+
+    Args:
+        raw_stages: List of RawStage dicts from one page (before normalization).
+
+    Returns:
+        Dict mapping original MultipleCalculation stage_id → first __calc_N sub-stage ID.
+        Non-MultipleCalculation stages are not included.
+    """
+    mc_map: dict[str, str] = {}
+
+    for raw_stage in raw_stages:
+        if raw_stage["stage_type"] != "MultipleCalculation":
+            continue
+
+        original_id = raw_stage["stage_id"]
+        # The first fanned-out sub-stage will have ID {original_id}__calc_1
+        first_sub_id = f"{original_id}__calc_1"
+        mc_map[original_id] = first_sub_id
+
+    return mc_map
+
+
+def _apply_multiple_calculation_redirects(
+    stages: list[BPStage],
+    mc_map: dict[str, str],
+) -> None:
+    """Update stage edges to redirect MultipleCalculation references to their first sub-stage.
+
+    For any stage whose onsuccess/ontrue/onfalse target is a MultipleCalculation that's
+    been fanned out, redirect it to the first sub-stage.
+
+    Args:
+        stages: Normalized stage list (modified in-place).
+        mc_map: Map from original MC stage_id to first __calc_N sub-stage ID.
+    """
+    for stage in stages:
+        if stage.onsuccess_target and stage.onsuccess_target in mc_map:
+            stage.onsuccess_target = mc_map[stage.onsuccess_target]
+        if stage.ontrue_target and stage.ontrue_target in mc_map:
+            stage.ontrue_target = mc_map[stage.ontrue_target]
+        if stage.onfalse_target and stage.onfalse_target in mc_map:
+            stage.onfalse_target = mc_map[stage.onfalse_target]
+
+
+def _build_skip_type_passthrough_map(raw_stages: list[RawStage]) -> dict[str, str]:
+    """Build a map of skip-type stage IDs to their pass-through targets.
+
+    Skip-type stages (Anchor, Note, SubSheetInfo, ProcessInfo) are pure routing artifacts
+    with no semantic meaning. When a skip-type stage is encountered, edges that point to it
+    should pass through to the skip-type's own onsuccess target. This function builds that
+    mapping, handling chains of skip-types by recursively following onsuccess edges until
+    a non-skip-type is found.
+
+    Per CLAUDE.md's normalisation rules, all these stages are skipped (no AST node),
+    but their pass-through edges must be preserved to maintain execution continuity.
+
+    Args:
+        raw_stages: List of RawStage dicts from one page (before normalization).
+
+    Returns:
+        Dict mapping skip-type stage_id → ultimate target stage_id (following the chain).
+        Non-skip-type stages are not included in this map.
+    """
+    # Build stage_id → raw stage dict for quick lookup
+    stage_map: dict[str, RawStage] = {s["stage_id"]: s for s in raw_stages}
+
+    passthrough_map: dict[str, str] = {}
+
+    # For each skip-type stage, find its ultimate pass-through target
+    for raw_stage in raw_stages:
+        # All four skip types per CLAUDE.md
+        if raw_stage["stage_type"] not in _SKIP_TYPES:
+            continue
+
+        current_id = raw_stage["stage_id"]
+        visited: set[str] = set()  # Track visited to detect cycles
+
+        # Follow onsuccess edges until we hit a non-skip-type or a cycle
+        while current_id and current_id not in visited:
+            if current_id not in stage_map:
+                break  # Target stage not found
+            visited.add(current_id)
+            current_stage = stage_map[current_id]
+
+            # If this stage is not a skip-type, we've found our ultimate target
+            if current_stage["stage_type"] not in _SKIP_TYPES:
+                passthrough_map[raw_stage["stage_id"]] = current_id
+                break
+
+            # This is a skip-type, keep following
+            current_id = current_stage.get("onsuccess_target")
+
+    return passthrough_map
+
+
+def _apply_anchor_passthroughs(
+    stages: list[BPStage],
+    anchor_passthrough_map: dict[str, str],
+) -> None:
+    """Update stage edges to bypass Anchors using the passthrough map.
+
+    For any stage whose onsuccess/ontrue/onfalse target is an Anchor,
+    redirect it to the Anchor's ultimate pass-through target.
+
+    Args:
+        stages: Normalized stage list (modified in-place).
+        anchor_passthrough_map: Map from Anchor stage_id to ultimate target.
+    """
+    for stage in stages:
+        if stage.onsuccess_target and stage.onsuccess_target in anchor_passthrough_map:
+            stage.onsuccess_target = anchor_passthrough_map[stage.onsuccess_target]
+        if stage.ontrue_target and stage.ontrue_target in anchor_passthrough_map:
+            stage.ontrue_target = anchor_passthrough_map[stage.ontrue_target]
+        if stage.onfalse_target and stage.onfalse_target in anchor_passthrough_map:
+            stage.onfalse_target = anchor_passthrough_map[stage.onfalse_target]
+
+
 def _build_page(raw_page: RawPage, router: VBORouter | None = None) -> BPPage:
     """Build a validated BPPage from a raw page dict.
 
@@ -547,12 +698,29 @@ def _build_page(raw_page: RawPage, router: VBORouter | None = None) -> BPPage:
         Validated BPPage with all stages normalised and pairs assigned.
         Fusion-candidate stages have fused_with, fusion_action, and is_vestigial
         fields populated if a match is found; unresolved candidates get ReviewFlags
-        in pending_flags.
+        in pending_flags. Skip-type stages are dropped, and edges pointing to them
+        are redirected to their pass-through targets. MultipleCalculation stages
+        are fanned out, and edges to the original MC ID are redirected to the first
+        sub-stage (Task 4a).
 
     Raises:
         ASTBuildError: If normalisation or pair matching fails.
     """
+    # Build skip-type pass-through map BEFORE normalizing (so we still have skip-type data)
+    # This handles Anchor, Note, SubSheetInfo, ProcessInfo per CLAUDE.md's skip-type list
+    skip_type_passthrough_map = _build_skip_type_passthrough_map(raw_page["stages"])
+
+    # Build MultipleCalculation redirect map BEFORE normalizing (so we know which will fan out)
+    mc_redirect_map = _build_multiple_calculation_map(raw_page["stages"])
+
     stages, bracket_roles = _normalise_stages(raw_page["stages"])
+
+    # Apply skip-type redirects to normalized stages
+    _apply_anchor_passthroughs(stages, skip_type_passthrough_map)
+
+    # Apply MultipleCalculation redirects to normalized stages (Task 4a Fix 2)
+    _apply_multiple_calculation_redirects(stages, mc_redirect_map)
+
     _assign_wait_loop_pairs(stages, bracket_roles, raw_page["name"])
     _assign_block_pairs(stages, raw_page["name"])
     _detect_vbo_call_fusions(stages, router, raw_page["name"])
@@ -566,39 +734,302 @@ def _build_page(raw_page: RawPage, router: VBORouter | None = None) -> BPPage:
     )
 
 
+def _build_block_recover_map(pages: list[BPPage]) -> dict[str, str]:
+    """Build a map of BLOCK stage IDs to their corresponding RECOVER stage IDs.
+
+    Per CLAUDE.md rule 4 and the task's Do-step 2, the Block→Recover relationship
+    is implicit in BP XML (never explicitly encoded as an edge). This function
+    reconstructs it by scanning each page for Block/Recover pairs in document order.
+
+    For each Block stage with an unmatched Recover in the same page, the first
+    such Recover is paired with the Block. This handles the common case where
+    a Block has zero independent incoming edges (it's a pure scope marker whose
+    protected body is entered directly by the mainline flow) — we must construct
+    this pairing structurally, not via BFS reachability.
+
+    Args:
+        pages: List of BPPage objects from the process.
+
+    Returns:
+        Dict mapping Block stage_id → Recover stage_id (its paired handler).
+    """
+    block_recover_map: dict[str, str] = {}
+
+    for page in pages:
+        # Find all Block and Recover stages in this page
+        block_stages: dict[int, BPStage] = {}  # index → stage
+        recover_stages: dict[int, BPStage] = {}  # index → stage
+
+        for idx, stage in enumerate(page.stages):
+            if stage.stage_type == StageType.BLOCK:
+                block_stages[idx] = stage
+            elif stage.stage_type == StageType.RECOVER:
+                recover_stages[idx] = stage
+
+        # Pair Blocks with Recovers: for each Block, find the first unmatched
+        # Recover after it in document order
+        used_recover_indices: set[int] = set()
+
+        for block_idx, block_stage in sorted(block_stages.items()):
+            # Find the first Recover after this Block that hasn't been used
+            for recover_idx in sorted(recover_stages.keys()):
+                if recover_idx > block_idx and recover_idx not in used_recover_indices:
+                    recover_stage = recover_stages[recover_idx]
+                    block_recover_map[block_stage.stage_id] = recover_stage.stage_id
+                    used_recover_indices.add(recover_idx)
+                    break
+
+    return block_recover_map
+
+
+def _compute_reachability(
+    pages: list[BPPage],
+) -> list[BPPage]:
+    """Compute reachability for each page in a process (Task 4a).
+
+    Returns a new list of pages with `reachable=True/False` annotations based
+    on reachability from the Main Page via onsuccess/ontrue/onfalse edges,
+    SubSheet cross-references, or implicit Block→Recover edges.
+
+    The Block→Recover pairing is constructed structurally (per CLAUDE.md rule 4),
+    independently of whether a Block has incoming edges in the BFS, since real
+    Blocks can be pure scope markers with no independent incoming edges. Crucially,
+    we consult a page's Block→Recover pairs whenever ANY stage on that page becomes
+    reachable, not only when the Block stage itself is independently visited via
+    BFS (Task 4a Fix A).
+
+    SubSheet cross-references are matched first by processid (if available),
+    then by page name as a fallback.
+
+    Args:
+        pages: List of BPPage objects from the process.
+
+    Returns:
+        New list of BPPage objects with updated reachable annotations.
+    """
+    # Build a stage ID → page mapping for quick lookup
+    stage_to_page: dict[str, BPPage] = {}
+    for page in pages:
+        for stage in page.stages:
+            stage_to_page[stage.stage_id] = page
+
+    # Build Block→Recover pairing map structurally (Task 4a)
+    # This must be done before BFS so we can follow implicit edges even for
+    # Blocks with zero independent incoming edges
+    block_recover_map = _build_block_recover_map(pages)
+
+    # Identify the main page (entry point for reachability analysis)
+    main_page: BPPage | None = None
+    for page in pages:
+        if page.is_main:
+            main_page = page
+            break
+
+    visited_pages: set[str] = set()
+
+    if not main_page:
+        # No main page found — mark all as reachable (conservative default)
+        for page in pages:
+            visited_pages.add(page.page_id)
+    else:
+        # Perform a graph traversal starting from main_page's Start stage
+        visited_stages: set[str] = set()
+        to_visit_stages: list[str] = []
+
+        # Find the Start stage on the main page to begin traversal
+        start_stage: BPStage | None = None
+        for stage in main_page.stages:
+            if stage.stage_type == StageType.START:
+                start_stage = stage
+                break
+
+        if start_stage:
+            to_visit_stages.append(start_stage.stage_id)
+            visited_pages.add(main_page.page_id)
+
+        # BFS traversal of the execution graph
+        # Track which pages we've checked for Block→Recover pairs to avoid duplicate processing
+        pages_checked_for_blocks: set[str] = set()
+
+        while to_visit_stages:
+            stage_id = to_visit_stages.pop(0)
+            if stage_id in visited_stages:
+                continue
+            visited_stages.add(stage_id)
+
+            if stage_id not in stage_to_page:
+                continue
+
+            current_page = stage_to_page[stage_id]
+            current_stage: BPStage | None = None
+
+            for s in current_page.stages:
+                if s.stage_id == stage_id:
+                    current_stage = s
+                    break
+
+            if not current_stage:
+                continue
+
+            # Mark current page as visited
+            if current_page.page_id not in visited_pages:
+                visited_pages.add(current_page.page_id)
+
+            # Task 4a Fix A: When a page becomes reachable, immediately consult its Block→Recover
+            # pairs. This ensures exception handlers are traversed even when Block stages have
+            # zero independent incoming edges.
+            if current_page.page_id not in pages_checked_for_blocks:
+                pages_checked_for_blocks.add(current_page.page_id)
+                for block_id, recover_id in block_recover_map.items():
+                    # Check if this block belongs to the current page
+                    if (
+                        block_id in stage_to_page
+                        and stage_to_page[block_id].page_id == current_page.page_id
+                        and recover_id not in visited_stages
+                    ):
+                        to_visit_stages.append(recover_id)
+
+            # Follow onsuccess edge (standard flow)
+            if current_stage.onsuccess_target:
+                target_id = current_stage.onsuccess_target
+                if target_id in stage_to_page:
+                    target_page = stage_to_page[target_id]
+                    visited_pages.add(target_page.page_id)
+                    if target_id not in visited_stages:
+                        to_visit_stages.append(target_id)
+                elif target_id not in visited_stages:
+                    # Unknown target stage — still mark as to visit to traverse it later
+                    to_visit_stages.append(target_id)
+
+            # Follow ontrue edge (DECISION true branch)
+            if current_stage.ontrue_target:
+                target_id = current_stage.ontrue_target
+                if target_id in stage_to_page:
+                    target_page = stage_to_page[target_id]
+                    visited_pages.add(target_page.page_id)
+                    if target_id not in visited_stages:
+                        to_visit_stages.append(target_id)
+                elif target_id not in visited_stages:
+                    to_visit_stages.append(target_id)
+
+            # Follow onfalse edge (DECISION false branch)
+            if current_stage.onfalse_target:
+                target_id = current_stage.onfalse_target
+                if target_id in stage_to_page:
+                    target_page = stage_to_page[target_id]
+                    visited_pages.add(target_page.page_id)
+                    if target_id not in visited_stages:
+                        to_visit_stages.append(target_id)
+                elif target_id not in visited_stages:
+                    to_visit_stages.append(target_id)
+
+            # For SubSheet calls, match by processid first (Task 4a),
+            # then fall back to page name matching.
+            # Per CLAUDE.md, processid is the designed matching mechanism.
+            if current_stage.is_subsheet_call:
+                target_page: BPPage | None = None
+
+                # Try processid match first
+                if current_stage.processid:
+                    for page in pages:
+                        if (
+                            page.page_id == current_stage.processid
+                            and page.page_id not in visited_pages
+                        ):
+                            target_page = page
+                            break
+
+                # Fall back to name matching if processid didn't match or isn't available
+                if not target_page:
+                    target_page_name = current_stage.name
+                    for page in pages:
+                        if page.name == target_page_name and page.page_id not in visited_pages:
+                            target_page = page
+                            break
+
+                if target_page:
+                    visited_pages.add(target_page.page_id)
+                    # Add the page's Start stage to begin traversing it
+                    for s in target_page.stages:
+                        if s.stage_type == StageType.START:
+                            if s.stage_id not in visited_stages:
+                                to_visit_stages.append(s.stage_id)
+                            break
+
+    # Now build a new list of pages with updated reachable flags
+    updated_pages: list[BPPage] = []
+    for page in pages:
+        is_reachable = page.page_id in visited_pages
+        if page.reachable != is_reachable:
+            # Create a new page object with updated reachable flag
+            updated_pages.append(
+                BPPage(
+                    page_id=page.page_id,
+                    name=page.name,
+                    stages=page.stages,
+                    is_main=page.is_main,
+                    published=page.published,
+                    reachable=is_reachable,
+                )
+            )
+        else:
+            updated_pages.append(page)
+
+    return updated_pages
+
+
 # ── Public API ──────────────────────────────────────────────────────────────
 
 
-def build_ast(raw: RawProcess, router: VBORouter | None = None) -> BPProcess:
+def build_ast(raw: RawProcess | MultiArtefactRelease, router: VBORouter | None = None) -> BPProcess:
     """Build a validated BPProcess AST from a raw parsed dict.
 
+    Accepts either a single RawProcess or a MultiArtefactRelease (from Task 3a/3b).
+    If a MultiArtefactRelease is provided, extracts the first (main) process.
+
     Args:
-        raw: RawProcess dict produced by the XML parser.
+        raw: RawProcess dict from the parser, or MultiArtefactRelease from parse_process().
         router: Optional VBORouter for resolving VBO call-fusion patterns.
             If provided, fusion candidates are checked against vbo_catalogue.yaml.
 
     Returns:
-        Fully validated BPProcess with all stages normalised.
-        Stages with fusion candidates have fused_with, fusion_action, and
-        is_vestigial fields populated (if a match is found) or pending_flags
-        (if unresolved).
+        Fully validated BPProcess with all stages normalised and reachability
+        annotations. Stages with fusion candidates have fused_with, fusion_action,
+        and is_vestigial fields populated (if a match is found) or pending_flags
+        (if unresolved). Each page is tagged with reachability status.
 
     Raises:
         ASTBuildError: If any normalisation or validation step
             fails — unmatched pairs, unknown stage types,
             orphan stage IDs, Pydantic validation errors.
     """
+    # Handle MultiArtefactRelease from Task 3a/3b
+    process_dict: RawProcess
+    if isinstance(raw, dict) and "processes" in raw:
+        # This is a MultiArtefactRelease
+        release = raw  # type: ignore[assignment]
+        if not release.get("processes"):
+            raise ASTBuildError("MultiArtefactRelease has no processes")
+        process_dict = release["processes"][0]
+    else:
+        # This is a single RawProcess
+        process_dict = raw  # type: ignore[assignment]
+
     pages: list[BPPage] = []
-    for raw_page in raw["pages"]:
+    for raw_page in process_dict["pages"]:
         pages.append(_build_page(raw_page, router))
+
+    # Compute reachability annotations (Task 4a) — must happen before creating BPProcess
+    # because BPProcess is frozen
+    pages = _compute_reachability(pages)
 
     try:
         return BPProcess(
-            process_id=raw["process_id"],
-            name=raw["name"],
-            version=raw["version"],
+            process_id=process_dict["process_id"],
+            name=process_dict["name"],
+            version=process_dict["version"],
             pages=pages,
-            source_file=raw["source_file"],
+            source_file=process_dict["source_file"],
         )
     except PydanticValidationError as exc:
         raise ASTBuildError(f"AST validation failed: {exc}") from exc

@@ -111,7 +111,7 @@ class StageAnnotator:
         return self._annotate_from_rules(stage)
 
     def _annotate_action(self, stage: BPStage) -> PAAnnotation:
-        """Annotate ACTION stage (VBO call or subsheet call)."""
+        """Annotate ACTION stage (VBO call, subsheet call, or process call)."""
         if stage.is_subsheet_call:
             # Subsheet call
             confidence = 0.85
@@ -123,6 +123,54 @@ class StageAnnotator:
                 band=ConfidenceBand.from_score(confidence),
                 params_map=stage.params_map,
                 flags=[],
+            )
+
+        if stage.is_process_call:
+            # Process call — use the Process stage rule from stage_rules.yaml
+            # Per architecture doc §B13 and CLAUDE.md normalisation table: PROCESS → ACTION
+            # Look up by "Process" bp_stage_type, not by stage.stage_type (which is ACTION)
+            rule = self._config.get_stage_rule("Process")
+
+            if rule is None:
+                # No Process rule found — this shouldn't happen if stage_rules.yaml is correct
+                confidence = 0.0
+                return PAAnnotation(
+                    target_type="",
+                    target_module="",
+                    runtime=Runtime.DESKTOP,
+                    confidence=confidence,
+                    band=ConfidenceBand.from_score(confidence),
+                    params_map={},
+                    flags=[
+                        ReviewFlag(
+                            stage_id=stage.stage_id,
+                            reason="No Process rule found in stage_rules.yaml",
+                            severity="error",
+                            suggested_fix="Add Process entry to mapping/stage_rules.yaml",
+                        )
+                    ],
+                )
+
+            # Rule found
+            flags = []
+            if rule.confidence_base < 0.50:
+                flags.append(
+                    ReviewFlag(
+                        stage_id=stage.stage_id,
+                        reason=f"Process call has low confidence ({rule.confidence_base}) — {rule.notes[:100]}",
+                        severity="error",
+                        suggested_fix="Review and complete manually",
+                    )
+                )
+
+            return PAAnnotation(
+                target_type=rule.pa_target_action,
+                target_module=rule.pa_module,
+                runtime=rule.runtime,
+                confidence=rule.confidence_base,
+                band=ConfidenceBand.from_score(rule.confidence_base),
+                params_map={},
+                flags=flags,
             )
 
         # VBO call
@@ -140,9 +188,9 @@ class StageAnnotator:
                 flags=[
                     ReviewFlag(
                         stage_id=stage.stage_id,
-                        reason="ACTION stage has no VBO metadata and is not a subsheet call",
+                        reason="ACTION stage has no VBO metadata and is not a subsheet or process call",
                         severity="error",
-                        suggested_fix="Check XML parsing — ACTION must have _vbo_object or be flagged as subsheet",
+                        suggested_fix="Check XML parsing — ACTION must have _vbo_object or be flagged as subsheet/process call",
                     )
                 ],
             )

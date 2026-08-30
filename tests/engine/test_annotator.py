@@ -259,6 +259,26 @@ class TestUnitAnnotations:
         annotation = annotator.annotate_stage(stage)
         assert annotation.band == ConfidenceBand.MANUAL
 
+    def test_action_process_call_uses_process_rule(
+        self, annotator: StageAnnotator, make_stage
+    ) -> None:
+        """ACTION Process call (is_process_call=True) uses Process stage rule.
+
+        Process-type stages are normalised to ACTION(is_process_call=True) per CLAUDE.md.
+        They should use the Process entry from stage_rules.yaml (confidence_base: 0.5)
+        rather than falling through to VBO router, which would fail.
+        """
+        stage = make_stage(
+            stage_type=StageType.ACTION,
+            is_process_call=True,
+            name="Download Config File from SharePoint",
+        )
+        annotation = annotator.annotate_stage(stage)
+        # Should get Process rule: confidence 0.5, PARTIAL band (0.50 <= score < 0.70)
+        assert annotation.confidence == 0.5
+        assert annotation.band == ConfidenceBand.PARTIAL
+        assert annotation.target_module == "External"
+
     def test_review_flag_stage_id_filled(self, annotator: StageAnnotator, make_stage) -> None:
         """All ReviewFlags have stage_id filled (not empty)."""
         stage = make_stage(stage_type=StageType.CODE, stage_id="s123")
@@ -378,13 +398,20 @@ class TestIntegration:
         artefact, so this fixture (which unwraps to processes[0]) was
         accidentally counting all 22 VBO objects' stages too, not just the
         main process's own 18 pages (docs/reviews/3a-2026-08-30-isolation-fixpass.md).
+        Shifted from 724 to 725 by Task 4a (prior pass): one Process-type stage
+        normalized to ACTION(is_process_call=True) per CLAUDE.md, previously
+        had been skipped, now preserved per prior fix.
+        Shifted from 725 to 796 by Task 4a (this pass): MultipleCalculation fix
+        correctly populates 66 fanned-out sub-stages (from 1 collapsed MC element),
+        adding 71 stages net. Prior assertion of 725 was against intermediate build
+        state before all fixes applied together.
         """
         create_annotator().annotate_process(real_process)
         total = sum(len(p.stages) for p in real_process.pages)
         annotated = sum(
             1 for p in real_process.pages for s in p.stages if s.pa_annotation is not None
         )
-        assert total == annotated == 724
+        assert total == annotated == 796
 
     @pytest.mark.skipif(
         not Path("samples/blueprism/PID_0127.bprelease").exists(), reason="Real sample unavailable"

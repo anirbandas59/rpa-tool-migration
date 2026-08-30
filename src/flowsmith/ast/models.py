@@ -234,6 +234,17 @@ class BPStage(BaseModel):
         default=False,
         description="True when a SUBSHEET BP stage has been normalised to ACTION.",
     )
+    is_process_call: bool = Field(
+        default=False,
+        description="True when a PROCESS BP stage has been normalised to ACTION per CLAUDE.md.",
+    )
+    processid: str | None = Field(
+        default=None,
+        description=(
+            "SubSheet/Process cross-reference ID from BP XML <processid> element. "
+            "Used by reachability analysis to match SubSheet calls to target pages (Task 4a)."
+        ),
+    )
     params_map: dict[str, str] = Field(
         default_factory=dict,
         description="Stage-level BP parameter name -> PA parameter name mapping.",
@@ -372,6 +383,14 @@ class BPPage(BaseModel):
         description=(
             'True when the BP <subsheet published="true"> flag is set — determines '
             "whether this page becomes its own PAD Workflow element."
+        ),
+    )
+    reachable: bool = Field(
+        default=True,
+        description=(
+            "True if this page is reachable from the process entry-point (Main Page) "
+            "via onsuccess/ontrue/onfalse edges or SubSheet/Process cross-references. "
+            "Unreachable pages (orphans) are marked False (Task 4a)."
         ),
     )
 

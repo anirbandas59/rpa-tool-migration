@@ -190,12 +190,19 @@ def test_main_page_flagged(minimal_bprelease: Path) -> None:
     assert result["processes"][0]["pages"][0]["is_main"] is True
 
 
-def test_main_page_by_name(multi_page_bprelease: Path) -> None:
-    """Main page is identified by name matching process name."""
+def test_main_page_by_implicit_stages(multi_page_bprelease: Path) -> None:
+    """Main page is identified as the implicit page containing stages without <subsheetid>.
+
+    Per CLAUDE.md rule 2: "Stage has no <subsheetid> + root is <process> → Main Page (implicit)".
+    In Format A (test format where all stages are nested in subsheets), there are no implicit
+    main-page stages, so the first subsheet is used as the main page for backward compatibility.
+    """
     result = parse_process(multi_page_bprelease)
     main_pages = [p for p in result["processes"][0]["pages"] if p["is_main"]]
     assert len(main_pages) == 1
-    assert main_pages[0]["name"] == "MainProcess"
+    # In Format A (nested stages), the first subsheet becomes the main page
+    assert main_pages[0]["name"] == "MainProcess"  # Name of first subsheet
+    assert len(main_pages[0]["stages"]) == 2  # The Start and End stages from that subsheet
 
 
 def test_page_id_extracted(minimal_bprelease: Path) -> None:
@@ -983,6 +990,30 @@ def test_pid171_wait_loop_start_have_group_id(pid_0171_raw: dict) -> None:
         assert stage["group_id"] is not None, (
             f"Stage {stage['stage_id']} ({stage['stage_type']}) has no group_id"
         )
+
+
+def test_pid171_main_page_correctly_identified(pid_0171_raw: dict) -> None:
+    """Task 4a Bug 2 fix: main page is correctly identified as containing stages without subsheetid.
+
+    Per CLAUDE.md rule 2: stages with no <subsheetid> form the implicit Main Page.
+    The real PID_0171 sample uses Format B (flat stages), so there's an implicit main page
+    with stages like "Start" and "ProcessInfo" that have no subsheetid.
+    The main page should NOT be "Mark Item As Completed" (which is a subsheet).
+    """
+    main_pages = [p for p in pid_0171_raw["pages"] if p["is_main"]]
+    assert len(main_pages) == 1, "Expected exactly one main page"
+
+    main_page = main_pages[0]
+    # The main page should use the process name as its name (if ProcessInfo exists as marker)
+    process_name = pid_0171_raw["name"]
+    assert main_page["name"] == process_name, (
+        f"Main page should be named '{process_name}' (from ProcessInfo marker), "
+        f"not '{main_page['name']}' (a subsheet)"
+    )
+
+    # The main page should contain at least a Start stage (minimum requirement per BP)
+    start_stages = [s for s in main_page["stages"] if s["stage_type"] == "Start"]
+    assert start_stages, "Main page should contain at least one Start stage, found none"
 
 
 # ── Task 1a: ACTION input/output and edge target parsing ───────────────────

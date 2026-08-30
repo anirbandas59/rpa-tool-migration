@@ -344,6 +344,7 @@ def _parse_stage(stage_elem: Any) -> RawStage:
                         )
 
         # For Calculation stages: extract calculation expressions (namespace-aware)
+        # First, try top-level <calculation> (for regular CALCULATION stages)
         calc_elem = stage_elem.find(_ns("calculation"))
         if calc_elem is None:
             calc_elem = stage_elem.find("calculation")
@@ -352,6 +353,28 @@ def _parse_stage(stage_elem: Any) -> RawStage:
             calc_stage = calc_elem.get("stage", "").strip()
             if calc_stage and calc_expr:
                 params_map[calc_stage] = calc_expr
+
+        # For MultipleCalculation stages: extract from <steps><calculation> elements
+        # (Task 4a Fix 2: ensure params_map is populated for MC fan-out)
+        steps_elem = stage_elem.find(_ns("steps"))
+        if steps_elem is None:
+            steps_elem = stage_elem.find("steps")
+        if steps_elem is not None:
+            # Try with namespace first
+            ns_calcs = list(steps_elem.findall(_ns("calculation")))
+            if ns_calcs:
+                for calc in ns_calcs:
+                    calc_expr = calc.get("expression", "").strip()
+                    calc_stage = calc.get("stage", "").strip()
+                    if calc_stage and calc_expr:
+                        params_map[calc_stage] = calc_expr
+            else:
+                # Try without namespace
+                for calc in steps_elem.findall("calculation"):
+                    calc_expr = calc.get("expression", "").strip()
+                    calc_stage = calc.get("stage", "").strip()
+                    if calc_stage and calc_expr:
+                        params_map[calc_stage] = calc_expr
 
         # For Action stages: extract VBO object and action from <resource> child (namespace-aware)
         resource_elem = stage_elem.find(_ns("resource"))
@@ -388,6 +411,15 @@ def _parse_stage(stage_elem: Any) -> RawStage:
         if onfalse_elem is not None and onfalse_elem.text:
             onfalse_target = onfalse_elem.text.strip()
 
+        # Parse <processid> for SubSheet/Process-type stages (Task 4a)
+        # This is the cross-reference ID that matches a target page's subsheetid
+        processid: str | None = None
+        processid_elem = stage_elem.find(_ns("processid"))
+        if processid_elem is None:
+            processid_elem = stage_elem.find("processid")
+        if processid_elem is not None and processid_elem.text:
+            processid = processid_elem.text.strip()
+
         return RawStage(
             stage_id=stage_id,
             stage_type=stage_type,
@@ -408,6 +440,7 @@ def _parse_stage(stage_elem: Any) -> RawStage:
             onsuccess_target=onsuccess_target,
             ontrue_target=ontrue_target,
             onfalse_target=onfalse_target,
+            processid=processid,
         )
     except (ValueError, AttributeError) as exc:
         raise ParseError(f"Failed to parse stage: {exc}") from exc
@@ -601,36 +634,60 @@ def parse_element(artefact_elem: Any, release_id: str, root: Any) -> RawProcess:
 
         pages: list[RawPage] = []
 
-        # Find the main page (matches process name, or first subsheet)
-        main_page_id = None
-        main_page_name = None
-        for page_id, name in subsheets_by_id.items():
-            if name == process_name:
-                main_page_id = page_id
-                main_page_name = name
-                break
+        # Per CLAUDE.md parser rule 2: "Stage has no <subsheetid> + root is <process> → Main Page (implicit)"
+        # The main page is implicitly the one that contains all main_stages (stages without <subsheetid>).
+        # ProcessInfo is the reliable marker that this implicit page exists.
+        # Only create the implicit main page if there are actual stages without subsheetid (Format B).
+        # Format A (test format) has all stages nested in subsheets, so no implicit main page.
+        if main_stages:
+            main_page_name = "Main Page"
+            main_page_id = "main_page"  # Synthetic ID for the implicit main page
 
-        # Fallback: use first subsheet as main
-        if main_page_id is None and subsheets_by_id:
+            # If a ProcessInfo stage exists (reliable marker per CLAUDE.md rule 2),
+            # derive the page name from it or use the process name
+            for stage in main_stages:
+                if stage.get("stage_type") == "ProcessInfo":
+                    # Found the ProcessInfo marker — use process name as main page name
+                    main_page_name = process_name
+                    break
+
+            # Add the main page (containing all stages without subsheetid)
+            pages.append(
+                RawPage(
+                    page_id=main_page_id,
+                    name=main_page_name,
+                    stages=main_stages,
+                    is_main=True,
+                    published=False,  # Implicit main page is never marked published
+                )
+            )
+        elif subsheets_by_id:
+            # Format A (test format): all stages are nested in subsheets, no implicit main page
+            # Use the first subsheet as the main page (legacy fallback for backward compatibility)
             main_page_id = next(iter(subsheets_by_id.keys()))
             main_page_name = subsheets_by_id[main_page_id]
-
-        # If no subsheets exist, create a default main page
-        if not main_page_id:
-            main_page_id = "main"
-            main_page_name = process_name
-
-        # Add main page with stages that have no subsheetid
-        main_page_stages = main_stages + paged_stages.pop(main_page_id, [])
-        pages.append(
-            RawPage(
-                page_id=main_page_id,
-                name=main_page_name,
-                stages=main_page_stages,
-                is_main=True,
-                published=subsheets_published.get(main_page_id, False),
+            # Pop this subsheet from paged_stages so it's not added again as a non-main page
+            main_page_stages = paged_stages.pop(main_page_id, [])
+            pages.append(
+                RawPage(
+                    page_id=main_page_id,
+                    name=main_page_name,
+                    stages=main_page_stages,
+                    is_main=True,
+                    published=subsheets_published.get(main_page_id, False),
+                )
             )
-        )
+        else:
+            # No stages and no subsheets — create a minimal empty main page
+            pages.append(
+                RawPage(
+                    page_id="main_page",
+                    name=process_name,
+                    stages=[],
+                    is_main=True,
+                    published=False,
+                )
+            )
 
         # Add remaining sub-pages
         for page_id, stages in paged_stages.items():
