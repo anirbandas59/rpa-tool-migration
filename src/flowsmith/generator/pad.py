@@ -41,6 +41,40 @@ STRUCTURAL_STAGE_TYPES: frozenset[StageType] = frozenset(
 GOTO_ERROR_BLOCK = "GOTO 'Error Block'"
 GOTO_END = "GOTO 'End'"
 
+# Flag variable set by the coarse BLOCK handler (§A5, §B15 reference lines 1389/1394/1398).
+# The real reference uses flg_ErrorOccurred; the post-block gating IF reads this flag.
+COARSE_BLOCK_ERROR_FLAG = "flg_ErrorOccurred"
+
+# The 3-tier exception type strings (§A5) used in the typed handler arms of coarse BLOCKs.
+# These are the only valid values — derived from §A5, not from stage.exception_type (which
+# is only populated on EXCEPTION/throw stages, never on BLOCK stages — ast/models.py).
+_COARSE_TYPED_HANDLERS: list[tuple[str, list[str]]] = [
+    (
+        "Business Exception",
+        [
+            "CALL 'Get Error'",
+            "SET txt_ExceptionType TO $'''Business Exception'''",
+            f"SET {COARSE_BLOCK_ERROR_FLAG} TO True",
+        ],
+    ),
+    (
+        "System Unavailable Exception",
+        [
+            "SET flg_Screenshot TO True",
+            "CALL 'Get Error'",
+            "SET txt_ExceptionType TO $'''System Unavailable Exception'''",
+            f"SET {COARSE_BLOCK_ERROR_FLAG} TO True",
+        ],
+    ),
+]
+
+# Catch-all handler actions for the coarse BLOCK (§A5 reference lines 1395–1398).
+_COARSE_CATCHALL_ACTIONS: list[str] = [
+    "SET flg_Screenshot TO True",
+    "CALL 'Get Error'",
+    f"SET {COARSE_BLOCK_ERROR_FLAG} TO True",
+]
+
 # Main Page split point (Get Next Item stage ID, per architecture doc §B11)
 GET_NEXT_ITEM_STAGE_ID = "85fbb578-f410-4f72-8ca9-58513939bc51"
 
@@ -465,22 +499,30 @@ class PADGenerator:
                         if target_page and target_page.role == role:
                             stages_to_render.append(stage)
 
-            action_lines: list[str] = []
-
-            # Render each stage, but resolve CALL targets by their own role
-            for stage in stages_to_render:
-                rendered = self._render_stage_in_main_page(
-                    stage, process, process_map, role, variable_name_mapping
+            # Render each stage, applying coarse BLOCK pattern (§A5, §B15) where applicable.
+            # Use a role-aware render function that filters calls by target role.
+            def _render_main_stage(
+                s: BPStage,
+                proc: BPProcess | None,
+                pmap: dict[str, Any] | None,
+                vnm: dict[str, str] | None,
+            ) -> str:
+                return self._render_stage_in_main_page(
+                    s, process, process_map, role, variable_name_mapping
                 )
-                if rendered:
-                    action_lines.append(rendered)
 
-            actions_content = "\n".join(action_lines)
+            actions_content = self._render_stage_list_with_coarse_blocks(
+                stages_to_render,
+                process,
+                process_map,
+                variable_name_mapping,
+                render_stage_fn=_render_main_stage,
+            )
             epilogue = self._render_goto_epilogue(actions_content)
             if epilogue:
                 actions_content = f"{actions_content}\n{epilogue}"
 
-            return actions_content if action_lines else ""
+            return actions_content if actions_content.strip() else ""
 
         except Exception as e:
             raise GenerationError(f"Failed to render Main Page for role '{role}': {e}") from e
@@ -755,14 +797,11 @@ class PADGenerator:
             # Determine GLOBAL qualifier
             is_global = shape_info.get("global", False)
 
-            # Render all stages in the page
-            action_lines: list[str] = []
-            for stage in page.stages:
-                rendered = self._render_stage(stage, process, process_map, variable_name_mapping)
-                if rendered:
-                    action_lines.append(rendered)
-
-            actions_content = "\n".join(action_lines)
+            # Render all stages in the page, applying coarse BLOCK pattern (§A5, §B15)
+            # where the page has Block stages with a persisted recover_stage_id (Task 4b).
+            actions_content = self._render_stage_list_with_coarse_blocks(
+                page.stages, process, process_map, variable_name_mapping
+            )
             epilogue = self._render_goto_epilogue(actions_content)
             if epilogue:
                 actions_content = f"{actions_content}\n{epilogue}"
@@ -1648,6 +1687,222 @@ class PADGenerator:
             lines.append(comment)
 
         return "\n".join(lines) if lines else ""
+
+    def _render_stage_list_with_coarse_blocks(
+        self,
+        stages: list[BPStage],
+        process: BPProcess | None = None,
+        process_map: dict[str, Any] | None = None,
+        variable_name_mapping: dict[str, str] | None = None,
+        render_stage_fn: Any = None,
+    ) -> str:
+        """Render a list of stages, applying the coarse BLOCK/ON BLOCK ERROR pattern (§A5, §B15).
+
+        When a BLOCK stage has ``recover_stage_id`` set (Task 4b persistence), that BLOCK
+        wraps everything between itself and its paired RECOVER in a single coarse BLOCK —
+        one BLOCK per real BP Block stage, never one per CALL (§B15 generation rule).
+
+        The ``ON BLOCK ERROR`` handler body is a flat action sequence:
+        ``SET txt_ItemStatus TO 'System Exception'`` + ``GOTO '<label>'`` (§B15),
+        with no ``IF`` inside (§A5 hard constraint).
+
+        Continuation stages (SubSheet calls to pages whose BP name contains "Exception"
+        between BLOCK and RECOVER) are placed under ``LABEL '<bp_page_name>'`` after the
+        BLOCK body — they are the recovery dispatch targets, not re-executed inside the
+        protected scope (§B15 worked example).
+
+        Stages with no enclosing BLOCK (``recover_stage_id`` is None) are rendered
+        normally via ``render_stage_fn`` — no wrapping is invented (§B15 Do-step 5).
+
+        Args:
+            stages: Ordered stage list to render.
+            process: The BPProcess (forwarded to per-stage renderers).
+            process_map: Process map from page_target_map.yaml.
+            variable_name_mapping: Optional BP-name→PAD-name dict from Task 5b.
+            render_stage_fn: Callable(stage, process, process_map, variable_name_mapping) → str.
+                             Defaults to ``self._render_stage``.
+
+        Returns:
+            All rendered lines joined by newlines.
+        """
+        if render_stage_fn is None:
+            render_stage_fn = self._render_stage
+
+        # Identify coarse-BLOCK groups: map from BLOCK stage_id → (block_idx, recover_idx, resume_idx)
+        # A coarse BLOCK is one whose recover_stage_id is set (Task 4b).
+        coarse_block_map: dict[str, tuple[int, int, int | None]] = {}
+        for idx, stage in enumerate(stages):
+            if stage.stage_type == StageType.BLOCK and stage.recover_stage_id:
+                recover_id = stage.recover_stage_id
+                # Find the RECOVER stage index
+                recover_idx = next(
+                    (i for i, s in enumerate(stages) if s.stage_id == recover_id),
+                    None,
+                )
+                if recover_idx is None:
+                    # Recover stage not in this list — skip coarse-BLOCK treatment
+                    continue
+                # Find the first RESUME after the RECOVER
+                resume_idx: int | None = next(
+                    (
+                        i
+                        for i, s in enumerate(stages)
+                        if i > recover_idx and s.stage_type == StageType.RESUME
+                    ),
+                    None,
+                )
+                coarse_block_map[stage.stage_id] = (idx, recover_idx, resume_idx)
+
+        # Build the set of stage indices that are consumed as part of a coarse BLOCK group
+        # so we can skip them in the main render loop.
+        consumed_indices: set[int] = set()
+        for _block_id, (block_idx, recover_idx, resume_idx) in coarse_block_map.items():
+            consumed_indices.add(block_idx)  # the BLOCK stage itself
+            consumed_indices.add(recover_idx)  # the RECOVER stage
+            if resume_idx is not None:
+                consumed_indices.add(resume_idx)  # the RESUME stage
+
+        output_lines: list[str] = []
+        idx = 0
+        while idx < len(stages):
+            stage = stages[idx]
+
+            # Is this the opener of a coarse BLOCK group?
+            if stage.stage_id in coarse_block_map:
+                block_idx, recover_idx, resume_idx = coarse_block_map[stage.stage_id]
+
+                # --- Identify continuation stages (go under LABELs, outside BLOCK) ---
+                # These are SubSheet calls between BLOCK and RECOVER that target pages whose
+                # name contains "Exception" or "Completed" (the item-status-update terminal
+                # pages — §B15 worked example: 'Mark Item as Completed' + 'Mark Item as
+                # Exception').  The exception page is the dispatch label; the completed page
+                # goes under its own LABEL first so the happy-path flow can GOTO it directly
+                # and then skip past the exception label (per reference lines 1473–1483).
+                exception_label: str | None = None
+                continuation_indices: set[int] = set()
+                # (label, stage) — ordered: Completed first, Exception second, matching reference
+                continuation_stages: list[tuple[str, BPStage]] = []
+                if process is not None:
+                    for body_idx in range(block_idx + 1, recover_idx):
+                        body_stage = stages[body_idx]
+                        if body_stage.is_subsheet_call and body_stage.processid:
+                            tp = next(
+                                (p for p in process.pages if p.page_id == body_stage.processid),
+                                None,
+                            )
+                            if tp and "exception" in tp.name.lower():
+                                exception_label = tp.name
+                                continuation_indices.add(body_idx)
+                                # Exception stage added last (after Completed) — see ordering
+                            elif tp and "completed" in tp.name.lower():
+                                continuation_indices.add(body_idx)
+                                continuation_stages.append((tp.name, body_stage))
+
+                    # Append exception stage last so LABEL order is: Completed … Exception
+                    if exception_label is not None:
+                        for body_idx in range(block_idx + 1, recover_idx):
+                            body_stage = stages[body_idx]
+                            if body_stage.is_subsheet_call and body_stage.processid:
+                                tp = next(
+                                    (p for p in process.pages if p.page_id == body_stage.processid),
+                                    None,
+                                )
+                                if tp and tp.name == exception_label:
+                                    continuation_stages.append((tp.name, body_stage))
+                                    break
+
+                # The post-block gating IF dispatches to the exception label (§A5 Do-step 2,
+                # §B15 reference line 1469: "IF flg_ErrorOccurred = True THEN GOTO … END").
+                # If no exception continuation page is found, fall back to '<BLOCK_name> recovery'.
+                dispatch_label = (
+                    exception_label if exception_label is not None else f"{stage.name} recovery"
+                )
+
+                # --- Build the coarse BLOCK header (§A5 3-arm dispatch template) ---
+                # Typed handler arms use the §A5 3-tier taxonomy directly — stage.exception_type
+                # is never set on BLOCK stages (only on EXCEPTION/throw stages, per ast/models.py),
+                # so we always emit the full typed arms from the module-level constant (§A5).
+                block_template = self.env.get_template("actions/error_block.robin.j2")
+                typed_handlers: list[dict[str, object]] = [
+                    {"error_code": err_code, "actions": list(actions)}
+                    for err_code, actions in _COARSE_TYPED_HANDLERS
+                ]
+                output_lines.append(
+                    block_template.render(
+                        block_name=stage.name,
+                        typed_handlers=typed_handlers,
+                        catchall_actions=list(_COARSE_CATCHALL_ACTIONS),
+                    )
+                )
+
+                # --- Render the BLOCK body (stages between BLOCK and RECOVER) ---
+                # Continuation stages (Exception, Completed) are excluded — they live
+                # under LABELs after END, not re-executed inside the protected scope.
+                for body_idx in range(block_idx + 1, recover_idx):
+                    if body_idx in continuation_indices:
+                        continue
+                    body_stage = stages[body_idx]
+                    rendered = render_stage_fn(
+                        body_stage, process, process_map, variable_name_mapping
+                    )
+                    if rendered:
+                        output_lines.append(rendered)
+
+                # --- Close the BLOCK body ---
+                output_lines.append("END")
+
+                # --- Post-block gating IF (§A5 Do-step 2, §B15 reference lines 1469–1472) ---
+                # "any branching on what happened belongs in a plain IF placed after the
+                # enclosing scope, checking a flag the handler set" — §A5 hard constraint.
+                # This is the gate that routes between the Completed and Exception paths.
+                # Without it, execution falls through LABEL 'Mark Item as Completed' and
+                # LABEL 'Mark Item as Exception' unconditionally (Robin LABELs are no-ops).
+                output_lines.append(
+                    f"IF {COARSE_BLOCK_ERROR_FLAG} = True THEN"  # §A5, §B15 ref L1469
+                )
+                output_lines.append(
+                    "    SET txt_ItemStatus TO $'''Failed'''"  # §B15 ref L1470
+                )
+                output_lines.append(
+                    f"    GOTO '{dispatch_label}'"  # §B15 ref L1471
+                )
+                output_lines.append("END")
+
+                # --- Render continuation sections under their labels (§B15) ---
+                # Order: LABEL 'Mark Item as Completed' (with skip-GOTO) then
+                #        LABEL 'Mark Item as Exception' — matching reference lines 1473–1483.
+                seen_labels: set[str] = set()
+                for cont_label, cont_stage in continuation_stages:
+                    if cont_label in seen_labels:
+                        continue
+                    seen_labels.add(cont_label)
+                    output_lines.append(
+                        f"LABEL '{cont_label}'"  # §B15
+                    )
+                    rendered = render_stage_fn(
+                        cont_stage, process, process_map, variable_name_mapping
+                    )
+                    if rendered:
+                        output_lines.append(rendered)
+                    # After the Completed section, skip past the Exception label (§B15 ref L1477)
+                    if exception_label is not None and cont_label != exception_label:
+                        output_lines.append(
+                            f"GOTO '{dispatch_label}'"  # ref L1477 skip
+                        )
+
+                # --- Advance past all consumed stages in this group ---
+                # Skip to after the RESUME (or after the RECOVER if no RESUME found).
+                idx = resume_idx + 1 if resume_idx is not None else recover_idx + 1
+                continue
+
+            # Not part of a coarse-BLOCK group — render normally
+            if idx not in consumed_indices:
+                rendered = render_stage_fn(stage, process, process_map, variable_name_mapping)
+                if rendered:
+                    output_lines.append(rendered)
+            idx += 1
+
+        return "\n".join(output_lines)
 
     def _render_structural_stage(self, stage: BPStage) -> str:
         """Render a BLOCK/RECOVER/RESUME stage to its Robin scope construct.

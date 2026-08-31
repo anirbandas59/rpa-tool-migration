@@ -1630,3 +1630,447 @@ def test_main_page_split_routes_calls_by_target_role(tmp_path: Path) -> None:
     assert not performer_dangling, (
         f"Performer has CALLs with no matching FUNCTION: {performer_dangling}"
     )
+
+
+def test_coarse_block_synthetic_page_produces_flat_handler_and_goto_label() -> None:
+    """Task 5c — synthetic Block/Recover/Resume page: one coarse BLOCK, 3-arm handler
+    (no IF), post-block gating IF, GOTO/LABEL dispatch (§A5, §B15).
+
+    Verifies:
+    - 3-arm handler: 2 typed arms (Business/System Unavailable) + 1 catch-all (§A5 template)
+    - Handler sets flg_ErrorOccurred, never IF — §A5 hard constraint
+    - Post-block gating IF: IF flg_ErrorOccurred = True THEN GOTO '<exception>' END (§A5 Do-step 2)
+    - LABEL/CALL for exception continuation outside BLOCK body
+    - Normal body stage inside BLOCK body
+    """
+    import re
+
+    gen = PADGenerator()
+
+    exception_page = BPPage(
+        page_id="EXCEPT_PAGE",
+        name="Item Exception",
+        stages=[make_annotated_stage(stage_id="EX_S1", name="Do Exception Work")],
+        role="performer",
+    )
+    normal_page = BPPage(
+        page_id="NORMAL_PAGE",
+        name="Do Normal Work",
+        stages=[make_annotated_stage(stage_id="NRM_S1", name="Step")],
+        role="performer",
+    )
+
+    block_stage = BPStage(
+        stage_id="BLOCK1",
+        stage_type=StageType.BLOCK,
+        name="Work Block",
+        recover_stage_id="RECOVER1",
+        pa_annotation=PAAnnotation(
+            target_type="BLOCK '<name>' ON BLOCK ERROR ... END <body> END",
+            target_module="System",
+            runtime=Runtime.DESKTOP,
+            params_map={},
+            confidence=0.70,
+            band=ConfidenceBand.SPOT_CHECK,
+            flags=[],
+        ),
+    )
+    normal_call = BPStage(
+        stage_id="NORMAL_CALL",
+        stage_type=StageType.ACTION,
+        name="Do Normal Work",
+        is_subsheet_call=True,
+        processid="NORMAL_PAGE",
+        pa_annotation=PAAnnotation(
+            target_type="RunDesktopFlow",
+            target_module="SubFlow",
+            runtime=Runtime.DESKTOP,
+            params_map={},
+            confidence=0.85,
+            band=ConfidenceBand.SPOT_CHECK,
+            flags=[],
+        ),
+    )
+    exception_call = BPStage(
+        stage_id="EXCEPTION_CALL",
+        stage_type=StageType.ACTION,
+        name="Item Exception",
+        is_subsheet_call=True,
+        processid="EXCEPT_PAGE",
+        pa_annotation=PAAnnotation(
+            target_type="RunDesktopFlow",
+            target_module="SubFlow",
+            runtime=Runtime.DESKTOP,
+            params_map={},
+            confidence=0.85,
+            band=ConfidenceBand.SPOT_CHECK,
+            flags=[],
+        ),
+    )
+    recover_stage = BPStage(
+        stage_id="RECOVER1",
+        stage_type=StageType.RECOVER,
+        name="Recover",
+        pa_annotation=PAAnnotation(
+            target_type="",
+            target_module="System",
+            runtime=Runtime.DESKTOP,
+            params_map={},
+            confidence=0.80,
+            band=ConfidenceBand.SPOT_CHECK,
+            flags=[],
+        ),
+    )
+    resume_stage = BPStage(
+        stage_id="RESUME1",
+        stage_type=StageType.RESUME,
+        name="Resume",
+        pa_annotation=PAAnnotation(
+            target_type="",
+            target_module="System",
+            runtime=Runtime.DESKTOP,
+            params_map={},
+            confidence=0.80,
+            band=ConfidenceBand.SPOT_CHECK,
+            flags=[],
+        ),
+    )
+
+    stages = [block_stage, normal_call, exception_call, recover_stage, resume_stage]
+    process = BPProcess(
+        process_id="TEST",
+        name="TestProcess",
+        version="1.0",
+        source_file="test.bprelease",
+        pages=[
+            BPPage(page_id="MAIN", name="Main Page", stages=stages, is_main=True),
+            exception_page,
+            normal_page,
+        ],
+    )
+
+    result = gen._render_stage_list_with_coarse_blocks(
+        stages, process, process_map={}, variable_name_mapping=None
+    )
+
+    # 1. Exactly one coarse BLOCK opener — not one per inner CALL
+    block_count = len(re.findall(r"^BLOCK '", result, re.MULTILINE))
+    assert block_count == 1, f"Expected 1 coarse BLOCK, got {block_count}"
+
+    # 2. Handler uses 3-arm §A5 dispatch template (typed arms + catch-all)
+    assert "ON BLOCK ERROR 'Business Exception' IsUserDefinedErrorCode: True" in result, (
+        "§A5 typed handler arm for Business Exception missing"
+    )
+    assert "ON BLOCK ERROR 'System Unavailable Exception' IsUserDefinedErrorCode: True" in result, (
+        "§A5 typed handler arm for System Unavailable Exception missing"
+    )
+    assert "ON BLOCK ERROR all" in result, "§A5 catch-all handler arm missing"
+
+    # 3. Handler sets flg_ErrorOccurred — NOT txt_ItemStatus, NOT a GOTO (§A5)
+    assert "SET flg_ErrorOccurred TO True" in result, (
+        "Handler must SET flg_ErrorOccurred (§A5 ref L1389/1394/1398)"
+    )
+    # Hard constraint: no IF anywhere inside the handler body (§A5)
+    handler_section = result[result.index("ON BLOCK ERROR") : result.index("\nEND\n")]
+    assert "IF " not in handler_section, f"IF inside handler violates §A5: {handler_section!r}"
+    # GOTO must NOT be inside the handler — it belongs in the post-block IF (§A5 Do-step 2)
+    assert "GOTO" not in handler_section, (
+        f"GOTO inside handler violates §A5 Do-step 2: {handler_section!r}"
+    )
+
+    # 4. Post-block gating IF dispatches to exception label (§A5 Do-step 2, §B15 ref L1469–1472)
+    assert "IF flg_ErrorOccurred = True THEN" in result, (
+        "Post-block gating IF missing — §A5 requires branching after the enclosing scope"
+    )
+    assert "GOTO 'Item Exception'" in result, "Post-block GOTO to exception label missing (§B15)"
+
+    # 5. LABEL/CALL for exception continuation appears OUTSIDE the BLOCK body
+    # Robin BLOCK structure: handler (ends at first END), body (ends at second END)
+    block_open_pos = result.index("BLOCK 'Work Block'")
+    first_end_pos = result.index("\nEND\n", block_open_pos)  # closes handler section
+    body_end_pos = result.index("\nEND\n", first_end_pos + 1)  # closes body
+    label_pos = result.index("LABEL 'Item Exception'")
+    call_pos = result.index("CALL 'Item Exception'")
+    assert label_pos > body_end_pos, "LABEL must be after BLOCK body END (§B15)"
+    assert call_pos > body_end_pos, "CALL to exception page must be outside BLOCK (§B15)"
+
+    # 6. Normal body stage inside BLOCK body (between handler END and body END)
+    normal_call_pos = result.index("CALL 'Do Normal Work'")
+    assert first_end_pos < normal_call_pos < body_end_pos, "Normal stage must be inside BLOCK body"
+
+
+def test_coarse_block_two_continuation_labels_routes_correctly() -> None:
+    """Task 5c — two continuation labels (Completed + Exception): gating IF prevents
+    fall-through double-execution of both labels on every iteration.
+
+    This is the exact scenario the reverify review (5c-2026-09-01-reverify.md) identified
+    as a real correctness bug: without the post-block gating IF, execution falls through
+    LABEL 'Mark Item as Completed' and LABEL 'Mark Item as Exception' unconditionally,
+    calling both CALL 'Mark Complete' and CALL 'Mark Exception' on every loop iteration.
+
+    The correct structure (§B15 reference lines 1469–1483):
+      END                                 ← closes BLOCK body
+      IF flg_ErrorOccurred = True THEN    ← gating IF (§A5 Do-step 2)
+          SET txt_ItemStatus TO $'''Failed'''
+          GOTO 'Mark Item as Exception'
+      END
+      LABEL 'Mark Item as Completed'      ← happy-path continuation
+      CALL 'Mark Complete'
+      GOTO 'Mark Item as Exception'       ← skip past exception label (§B15 ref L1477)
+      LABEL 'Mark Item as Exception'      ← error-path continuation
+      CALL 'Mark Exception'
+    """
+    gen = PADGenerator()
+
+    exception_page = BPPage(
+        page_id="EXCEPT_PAGE",
+        name="Mark Item As Exception",
+        stages=[make_annotated_stage(stage_id="EX_S1", name="Do Exception Work")],
+        role="performer",
+    )
+    completed_page = BPPage(
+        page_id="COMPLETED_PAGE",
+        name="Mark Item As Completed",
+        stages=[make_annotated_stage(stage_id="COMP_S1", name="Do Complete Work")],
+        role="performer",
+    )
+    normal_page = BPPage(
+        page_id="NORMAL_PAGE",
+        name="Process Items",
+        stages=[make_annotated_stage(stage_id="NRM_S1", name="Step")],
+        role="performer",
+    )
+
+    block_stage = BPStage(
+        stage_id="BLOCK1",
+        stage_type=StageType.BLOCK,
+        name="Work",
+        recover_stage_id="RECOVER1",
+        pa_annotation=PAAnnotation(
+            target_type="BLOCK '<name>' ON BLOCK ERROR ... END <body> END",
+            target_module="System",
+            runtime=Runtime.DESKTOP,
+            params_map={},
+            confidence=0.70,
+            band=ConfidenceBand.SPOT_CHECK,
+            flags=[],
+        ),
+    )
+    normal_call = BPStage(
+        stage_id="NORMAL_CALL",
+        stage_type=StageType.ACTION,
+        name="Process Items",
+        is_subsheet_call=True,
+        processid="NORMAL_PAGE",
+        pa_annotation=PAAnnotation(
+            target_type="RunDesktopFlow",
+            target_module="SubFlow",
+            runtime=Runtime.DESKTOP,
+            params_map={},
+            confidence=0.85,
+            band=ConfidenceBand.SPOT_CHECK,
+            flags=[],
+        ),
+    )
+    # Completed page call (first in body — goes under LABEL first in output)
+    completed_call = BPStage(
+        stage_id="COMPLETED_CALL",
+        stage_type=StageType.ACTION,
+        name="Mark Item As Completed",
+        is_subsheet_call=True,
+        processid="COMPLETED_PAGE",
+        pa_annotation=PAAnnotation(
+            target_type="RunDesktopFlow",
+            target_module="SubFlow",
+            runtime=Runtime.DESKTOP,
+            params_map={},
+            confidence=0.85,
+            band=ConfidenceBand.SPOT_CHECK,
+            flags=[],
+        ),
+    )
+    # Exception page call (second in body — goes under LABEL second in output)
+    exception_call = BPStage(
+        stage_id="EXCEPTION_CALL",
+        stage_type=StageType.ACTION,
+        name="Mark Item As Exception",
+        is_subsheet_call=True,
+        processid="EXCEPT_PAGE",
+        pa_annotation=PAAnnotation(
+            target_type="RunDesktopFlow",
+            target_module="SubFlow",
+            runtime=Runtime.DESKTOP,
+            params_map={},
+            confidence=0.85,
+            band=ConfidenceBand.SPOT_CHECK,
+            flags=[],
+        ),
+    )
+    recover_stage = BPStage(
+        stage_id="RECOVER1",
+        stage_type=StageType.RECOVER,
+        name="Recover",
+        pa_annotation=PAAnnotation(
+            target_type="",
+            target_module="System",
+            runtime=Runtime.DESKTOP,
+            params_map={},
+            confidence=0.80,
+            band=ConfidenceBand.SPOT_CHECK,
+            flags=[],
+        ),
+    )
+    resume_stage = BPStage(
+        stage_id="RESUME1",
+        stage_type=StageType.RESUME,
+        name="Resume",
+        pa_annotation=PAAnnotation(
+            target_type="",
+            target_module="System",
+            runtime=Runtime.DESKTOP,
+            params_map={},
+            confidence=0.80,
+            band=ConfidenceBand.SPOT_CHECK,
+            flags=[],
+        ),
+    )
+
+    stages = [block_stage, normal_call, completed_call, exception_call, recover_stage, resume_stage]
+    process = BPProcess(
+        process_id="TEST2",
+        name="TestProcess2",
+        version="1.0",
+        source_file="test.bprelease",
+        pages=[
+            BPPage(page_id="MAIN2", name="Main Page", stages=stages, is_main=True),
+            exception_page,
+            completed_page,
+            normal_page,
+        ],
+    )
+
+    result = gen._render_stage_list_with_coarse_blocks(
+        stages, process, process_map={}, variable_name_mapping=None
+    )
+
+    # 1. Post-block gating IF present — routes to exception label
+    assert "IF flg_ErrorOccurred = True THEN" in result, (
+        "Post-block gating IF missing — double-execution bug without it (reverify §5c-2026-09-01)"
+    )
+
+    # 2. LABEL order: Completed appears BEFORE Exception (§B15 ref lines 1473, 1479)
+    completed_label_pos = result.index("LABEL 'Mark Item As Completed'")
+    exception_label_pos = result.index("LABEL 'Mark Item As Exception'")
+    assert completed_label_pos < exception_label_pos, (
+        "LABEL 'Mark Item As Completed' must appear before LABEL 'Mark Item As Exception' (§B15)"
+    )
+
+    # 3. A skip-GOTO separates the Completed section from the Exception label (§B15 ref L1477)
+    # This prevents fall-through from the Completed path into the Exception path.
+    between = result[completed_label_pos:exception_label_pos]
+    assert "GOTO 'Mark Item As Exception'" in between, (
+        "Skip-GOTO from Completed section to Exception label missing — "
+        "fall-through would execute both CALL 'Mark Complete' and CALL 'Mark Exception' (§B15)"
+    )
+
+    # 4. Neither continuation CALL is inside the BLOCK body
+    block_open_pos = result.index("BLOCK 'Work'")
+    first_end_pos = result.index("\nEND\n", block_open_pos)
+    body_end_pos = result.index("\nEND\n", first_end_pos + 1)
+    completed_call_pos = result.index("CALL 'Mark Item As Completed'")
+    exception_call_pos = result.index("CALL 'Mark Item As Exception'")
+    assert completed_call_pos > body_end_pos, "CALL 'Mark Complete' must be outside BLOCK body"
+    assert exception_call_pos > body_end_pos, "CALL 'Mark Exception' must be outside BLOCK body"
+
+    # 5. Normal body stage IS inside the BLOCK body
+    normal_call_pos = result.index("CALL 'Process Items'")
+    assert first_end_pos < normal_call_pos < body_end_pos, "Normal stage must be inside BLOCK body"
+
+
+@pytest.mark.integration
+def test_coarse_block_pid171_process_work_queue_items_structure(tmp_path: Path) -> None:
+    """Task 5c — real PID_0171 sample: BLOCK 'Work' structure matches §B15 worked example.
+
+    Verifies:
+    - One outer BLOCK 'Work' (§B15)
+    - 3-arm §A5 handler: flg_ErrorOccurred set, no GOTO inside handler
+    - Post-block gating IF flg_ErrorOccurred dispatches to exception label
+    - LABEL 'Mark Item As Exception' and CALL 'Mark Exception' outside any BLOCK
+    - LABEL 'Mark Item As Completed' appears before LABEL 'Mark Item As Exception'
+    - Skip-GOTO separates the two labels to prevent fall-through
+    """
+    import re
+
+    sample_path = Path("samples/blueprism/PID_0171.bprelease")
+    if not sample_path.exists():
+        pytest.skip("Sample file not found")
+
+    from flowsmith.ast.builder import build_ast
+    from flowsmith.engine import create_annotator
+    from flowsmith.parser import parse_process
+
+    raw = parse_process(sample_path)
+    process = build_ast(raw)
+    create_annotator().annotate_process(process)
+
+    gen = PADGenerator()
+    files = gen.generate_process(process, tmp_path / "robin")
+
+    performer_file = next((f for f in files if "Performer" in f.name), None)
+    assert performer_file is not None, "No Performer file generated"
+    content = performer_file.read_text(encoding="utf-8")
+
+    # 1. One outer BLOCK 'Work' present (§B15 worked example)
+    assert re.search(r"BLOCK 'Work'", content), "BLOCK 'Work' not found in Performer (§B15)"
+
+    # 2. Handler has 3-arm §A5 structure (no GOTO inside handler body)
+    assert "ON BLOCK ERROR 'Business Exception' IsUserDefinedErrorCode: True" in content, (
+        "§A5 typed Business Exception handler arm missing"
+    )
+    assert "SET flg_ErrorOccurred TO True" in content, (
+        "Handler must SET flg_ErrorOccurred (§A5 ref L1389/1394/1398)"
+    )
+
+    # 3. Post-block gating IF dispatches to exception label (§A5 Do-step 2)
+    assert "IF flg_ErrorOccurred = True THEN" in content, (
+        "Post-block gating IF missing — without it every item gets double-marked (§A5)"
+    )
+    assert "GOTO 'Mark Item As Exception'" in content, (
+        "GOTO 'Mark Item As Exception' missing from post-block gating IF (§B15)"
+    )
+
+    # 4. CALL 'Mark Exception' appears OUTSIDE any BLOCK (at depth 0)
+    lines = content.splitlines()
+    depth = 0
+    call_mark_exception_depths: list[int] = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("BLOCK '"):
+            depth += 1
+        if stripped == "END":
+            depth = max(0, depth - 1)
+        if "CALL 'Mark Exception'" in stripped:
+            call_mark_exception_depths.append(depth)
+
+    assert call_mark_exception_depths, "No CALL 'Mark Exception' found in Performer"
+    assert 0 in call_mark_exception_depths, (
+        f"CALL 'Mark Exception' always inside a BLOCK (depths={call_mark_exception_depths}); "
+        "it must appear outside any BLOCK under LABEL 'Mark Item As Exception' (§B15)"
+    )
+
+    # 5. LABEL 'Mark Item As Completed' appears before LABEL 'Mark Item As Exception'
+    assert "LABEL 'Mark Item As Completed'" in content, (
+        "LABEL 'Mark Item As Completed' missing (§B15)"
+    )
+    completed_pos = content.index("LABEL 'Mark Item As Completed'")
+    exception_pos = content.index("LABEL 'Mark Item As Exception'")
+    assert completed_pos < exception_pos, (
+        "LABEL 'Mark Item As Completed' must precede LABEL 'Mark Item As Exception' (§B15)"
+    )
+
+    # 6. Skip-GOTO separates Completed from Exception sections (prevents fall-through)
+    between = content[completed_pos:exception_pos]
+    assert "GOTO 'Mark Item As Exception'" in between, (
+        "Skip-GOTO from Completed section to Exception label missing — "
+        "fall-through would double-execute both CALL 'Mark Complete' and CALL 'Mark Exception'"
+    )
