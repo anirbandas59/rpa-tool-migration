@@ -1,3 +1,11 @@
-FUNCTION '{{ subflow_name }}' GLOBAL
+{% if construct_type | default("function") == "block" -%}
+BLOCK '{{ subflow_name }}'
+
+{{ actions }}
+END
+{%- else -%}
+FUNCTION '{{ subflow_name }}'{% if is_global | default(true) %} GLOBAL{% endif %}
+
 {{ actions }}
 END FUNCTION
+{%- endif %}

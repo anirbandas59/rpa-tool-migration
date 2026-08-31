@@ -1,0 +1,185 @@
+# Page-by-page PAD target mapping for PID_171
+#
+# This file defines how each BP page is rendered in the consolidated PAD output.
+# Mapping is organized by process name to prevent cross-contamination across different automations.
+# Every entry MUST cite its source row from docs/bp-to-pad-architecture-PID171.md §B14.
+#
+# Schema per process entry (process_name → pages):
+#   Each process has its own set of page mappings.
+#   Within each process, page entries follow:
+#   shape: "function" | "inline_block" | "fold" | "split"
+#   target_name: (optional, for function/inline_block) - PAD name if different from BP page name
+#   block_name: (required for inline_block) - the block name in the PAD output
+#   container: (required for inline_block/fold) - which role or FUNCTION to inline/fold into
+#   targets: (required for split) - list of resulting FUNCTION names
+#   stage_counts: (optional, for split) - per-target stage-count boundaries, in the same
+#     order as targets. Falls back to an even division across targets when absent.
+#   global: (optional, for function) - whether to mark FUNCTION as GLOBAL (defaults to false)
+#   citation: (required) - §B14 row number
+#   notes: (optional) - free-text rendered as a comment at the fold/inline_block call site
+#   reason: (optional, for shape "stop") - rendered as a comment at any real call site
+
+PID_171_US_Process_LIMS_Prelude:
+  # Main Page - special case: split across both Loader and Performer
+  # Pre-Get-Next-Item stages route to their target's role; post-Get-Next-Item to Performer
+  Main Page:
+    shape: "split"
+    targets:
+      - "Loader_Main_Body"
+      - "Performer_Main_Body"
+    citation: "§B14 — (Main Page)"
+
+  # Loader pages
+  Get Mails:
+    shape: "function"
+    target_name: "Fetch Emails from Mailbox"
+    global: true
+    citation: "§B14 row 1"
+
+  Populate Queue:
+    shape: "inline_block"
+    block_name: "Add to Queue Block"
+    container: "Loader_Main_Body"
+    citation: "§B14 row 2"
+
+  Save Attachments:
+    shape: "fold"
+    container: "Process Work Queue Items"
+    notes: "Attachment handling per-item, no separate FUNCTION -- real PAD design collapses BP's delete-existing/save/get-files/exists-check sequence to File.ConvertFromBase64 (attachment bytes decrypted directly from the queue payload). Per-stage inlining below is a structural placeholder, not the real semantic collapse (that is Task 5b's BP-expression-translation job)."
+    citation: "§B14 row 3"
+
+  Send mail - No New Mail:
+    shape: "function"
+    target_name: "Send Business Exception Mail"
+    global: false
+    citation: "§B14 row 20 / DF_PID_171_US_Loader.robin.txt L173 (FUNCTION 'Send Business Exception Mail' — no GLOBAL keyword)"
+
+  Read Excel As Collection:
+    shape: "fold"
+    container: "CF_PID_171_US_Read Config File"
+    notes: "Cloud Flow, not Desktop Flow - superseded by config-read in cloud tier"
+    citation: "§B14 row 22"
+
+  ConvertConfigFile As Collection - Copy:
+    shape: "fold"
+    container: "CF_PID_171_US_Read Config File"
+    notes: "Cloud Flow, not Desktop Flow - JSON-building logic now in cloud tier"
+    citation: "§B14 row 24"
+
+  # Performer pages
+  Read Input Data From Excel:
+    shape: "function"
+    target_name: "Fetch Data from Excel file"
+    global: false
+    citation: "§B14 row 4"
+
+  Launch_Sample Manager:
+    shape: "function"
+    target_name: "Launch Application"
+    global: true
+    citation: "§B14 row 5 / DF_PID_171_US_LIMS_Prelude_Main.robin.txt L402 (FUNCTION 'Launch Application' GLOBAL)"
+
+  Result Entry:
+    shape: "split"
+    targets:
+      - "Get Results by Analysis and SampleId"
+      - "Open - Entry By Test window"
+      - "Get Components List"
+      - "Close Results Entry Analysis"
+      - "Close Results Entry"
+      - "Set Results Entry"
+      - "Enter Results in App"
+    # stage_counts: approximate per-target stage-count split, proportional to the
+    # real reference file's per-FUNCTION line-count ratios from architecture doc
+    # §A3's FUNCTION inventory table (L447-497 / L498-531 / L532-581 / L582-605 /
+    # L606-621 / L622-767 / L768-948 -- ~50/33/49/23/15/145/180 lines respectively,
+    # applied to Result Entry's 161 raw stages). This is still an APPROXIMATION,
+    # not a real per-stage boundary derivation (BP stage names in this page do not
+    # correlate cleanly with any of the 7 target functions -- verified by direct
+    # inspection, see Task 5a implementer summary) -- it is a citeable improvement
+    # over even division, not a claim of exact fidelity. A real fix needs manual
+    # tracing of the page's onsuccess-edge flow against each UI window transition.
+    stage_counts: [16, 11, 16, 7, 5, 47, 59]
+    citation: "§B14 row 6 / §A3 FUNCTION inventory table"
+
+  Sample Manager - Explorer:
+    shape: "fold"
+    container: "Open - Entry By Test window"
+    notes: "UI navigation/Explorer block folded into caller"
+    citation: "§B14 row 7"
+
+  Summary_Report:
+    shape: "function"
+    target_name: "Create Summary Report"
+    global: false
+    citation: "§B14 row 8"
+
+  Input File Management:
+    shape: "fold"
+    container: "Process Work Queue Items"
+    notes: "Input-file existence/delete per-item, no separate page"
+    citation: "§B14 row 9"
+
+  Mark as read mail:
+    shape: "function"
+    target_name: "Move Emails"
+    global: false
+    citation: "§B14 row 10"
+
+  Mark as read and move to exception folder:
+    shape: "function"
+    target_name: "Move Emails"
+    global: false
+    citation: "§B14 row 11"
+    notes: "Shares Move Emails FUNCTION with row 10 (parameterized by In_txt_DestinationFolder)"
+
+  Mark Item As Completed:
+    shape: "function"
+    target_name: "Mark Complete"
+    global: false
+    citation: "§B14 row 12"
+
+  Mark Item As Exception:
+    shape: "function"
+    target_name: "Mark Exception"
+    global: false
+    citation: "§B14 row 13"
+
+  DataGateway:
+    shape: "inline_block"
+    block_name: "Data gateway block"
+    container: "Process Work Queue Items"
+    citation: "§B14 row 15"
+
+  Reset Global Data:
+    shape: "fold"
+    container: "Process Work Queue Items"
+    notes: "Variable-reset per-item, no separate FUNCTION"
+    citation: "§B14 row 17"
+
+  Send mail:
+    shape: "function"
+    target_name: "Send Email"
+    global: false
+    citation: "§B14 row 19"
+
+  # Orphan/STOP pages - not rendered, flagged as unreachable
+  Close Down:
+    shape: "stop"
+    citation: "§B14 row 18"
+    reason: "Orphan page - zero callers found, confirm with process owner"
+
+  Mark leftout Items as Exception:
+    shape: "stop"
+    citation: "§B14 row 21"
+    reason: "Orphan page - zero callers found, requires review"
+
+  Send Info to Data Gateways:
+    shape: "stop"
+    citation: "§B14 row 16"
+    reason: "Orphan page - zero callers found, likely legacy/alternate telemetry"
+
+  Completed No Outcome:
+    shape: "stop"
+    citation: "§B14 row 14"
+    reason: "No confirmed PAD counterpart - fuzzy-match rule engine not implemented"
