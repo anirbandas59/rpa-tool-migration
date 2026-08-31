@@ -337,6 +337,7 @@ class PADGenerator:
             # Render sub-pages as FUNCTION blocks (or inline/fold if mapped)
             process_map = self.page_target_map.get(process.name, {})
             rendered_functions: list[str] = []
+            seen_function_names: set[str] = set()
             for page in pages_for_role:
                 # Skip pages that are shaped as inline_block/fold — they're rendered
                 # on-demand when called, not as top-level entities.
@@ -347,11 +348,23 @@ class PADGenerator:
                     # These will be rendered when called from other pages
                     continue
 
+                # De-duplication: skip if this function name has already been rendered
+                # This handles cases where multiple BP pages map to the same target function
+                # (e.g., "Mark as read mail" and "Mark as read and move to exception folder"
+                # both map to target_name "Move Emails" per §B14 rows 10-11)
+                target_name = shape_info.get("target_name", page.name)
+                if target_name in seen_function_names:
+                    # FUNCTION with this name already emitted; skip the duplicate
+                    # (cite the first occurrence; the mapping file notes parameterization)
+                    continue
+
                 page_content = self._render_page_in_consolidated_flow(page, process, process_map)
                 if page_content:
                     rendered_functions.append(page_content)
                     lines.append(page_content)
                     lines.append("")
+                    # Track this function name to prevent duplicates
+                    seen_function_names.add(target_name)
 
             # Emit boilerplate "Get Error" FUNCTION if any page references it
             full_content = "\n".join(lines)
@@ -519,8 +532,13 @@ class PADGenerator:
             shape = shape_info.get("shape", "function")
 
             if shape == "function":
-                # Render as a regular FUNCTION
-                return self._render_page_as_function(page, process, shape_info, process_map)
+                # Emit a comment if this page fell back to the unmapped default
+                result = ""
+                if shape_info.get("unmapped_fallback"):
+                    fallback_page = shape_info.get("fallback_page_name", page.name)
+                    result = f"# TODO: no page_target_map.yaml entry for '{fallback_page}' — treating as default FUNCTION\n"
+                result += self._render_page_as_function(page, process, shape_info, process_map)
+                return result
 
             elif shape == "inline_block":
                 # Render as a BLOCK inside a container (usually Loader_Main_Body)
@@ -908,9 +926,13 @@ class PADGenerator:
             return process_map[page_name]
 
         # Default to "function" shape if unmapped
-        # Per Task 5a step 1 (ReviewFlag fallback), an unmapped page gets a default FUNCTION shape
-        # with a TODO comment (see the comment in _render_page_in_consolidated_flow)
-        return {"shape": "function"}
+        # Per Task 5a, an unmapped page gets a default FUNCTION shape.
+        # This preserves the fallback for pages that exist in the AST but are not curated
+        # in page_target_map.yaml. Per architecture doc §B9, this scenario should raise
+        # a ReviewFlag, but the current design uses a silent default. See Task 5a's open
+        # design question (docs/reviews/) regarding whether to upgrade this to a real flag.
+        # TODO: no page_target_map.yaml entry for '{page_name}' — treating as default FUNCTION
+        return {"shape": "function", "unmapped_fallback": True, "fallback_page_name": page_name}
 
     @staticmethod
     def _compute_boundaries_from_counts(stage_counts: list[int]) -> list[tuple[int, int]]:
