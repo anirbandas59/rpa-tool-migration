@@ -1798,6 +1798,12 @@ def test_coarse_block_synthetic_page_produces_flat_handler_and_goto_label() -> N
     normal_call_pos = result.index("CALL 'Do Normal Work'")
     assert first_end_pos < normal_call_pos < body_end_pos, "Normal stage must be inside BLOCK body"
 
+    # 7. Reset label ('Work Block end') emitted after exception section (§B15 ref L1490)
+    reset_label_pos = result.index("LABEL 'Work Block end'")
+    assert reset_label_pos > label_pos, (
+        "LABEL 'Work Block end' must appear after LABEL 'Item Exception' (§B15 ref L1490)"
+    )
+
 
 def test_coarse_block_two_continuation_labels_routes_correctly() -> None:
     """Task 5c — two continuation labels (Completed + Exception): gating IF prevents
@@ -1966,23 +1972,34 @@ def test_coarse_block_two_continuation_labels_routes_correctly() -> None:
     )
 
     # 3. A skip-GOTO separates the Completed section from the Exception label (§B15 ref L1477)
-    # This prevents fall-through from the Completed path into the Exception path.
+    # The skip-GOTO must jump to the RESET label ('Work end') placed AFTER the exception section —
+    # not to the exception label itself (jumping to the immediately-following label is a no-op).
+    # Reference: L1477 → GOTO 'Reset All' (L1490), NOT GOTO 'Mark Item as Exception' (L1479).
     between = result[completed_label_pos:exception_label_pos]
-    assert "GOTO 'Mark Item As Exception'" in between, (
-        "Skip-GOTO from Completed section to Exception label missing — "
-        "fall-through would execute both CALL 'Mark Complete' and CALL 'Mark Exception' (§B15)"
+    assert "GOTO 'Work end'" in between, (
+        "Skip-GOTO from Completed section must target reset label ('Work end'), not the "
+        "exception label — GOTO to the immediately-following label is a no-op that leaves "
+        "both CALL 'Mark Complete' and CALL 'Mark Exception' executing unconditionally (§B15 L1477)"
     )
 
-    # 4. Neither continuation CALL is inside the BLOCK body
+    # 4. The reset label ('Work end') appears AFTER the exception continuation (§B15 ref L1490)
+    # This is what the skip-GOTO actually jumps past the exception section to reach.
+    reset_label_pos = result.index("LABEL 'Work end'")
+    exception_call_pos = result.index("CALL 'Mark Item As Exception'")
+    assert reset_label_pos > exception_call_pos, (
+        "LABEL 'Work end' must appear after CALL 'Mark Item As Exception' — "
+        "the skip-GOTO must clear the entire exception section (§B15 ref L1490)"
+    )
+
+    # 5. Neither continuation CALL is inside the BLOCK body
     block_open_pos = result.index("BLOCK 'Work'")
     first_end_pos = result.index("\nEND\n", block_open_pos)
     body_end_pos = result.index("\nEND\n", first_end_pos + 1)
     completed_call_pos = result.index("CALL 'Mark Item As Completed'")
-    exception_call_pos = result.index("CALL 'Mark Item As Exception'")
     assert completed_call_pos > body_end_pos, "CALL 'Mark Complete' must be outside BLOCK body"
     assert exception_call_pos > body_end_pos, "CALL 'Mark Exception' must be outside BLOCK body"
 
-    # 5. Normal body stage IS inside the BLOCK body
+    # 6. Normal body stage IS inside the BLOCK body
     normal_call_pos = result.index("CALL 'Process Items'")
     assert first_end_pos < normal_call_pos < body_end_pos, "Normal stage must be inside BLOCK body"
 
@@ -2068,9 +2085,19 @@ def test_coarse_block_pid171_process_work_queue_items_structure(tmp_path: Path) 
         "LABEL 'Mark Item As Completed' must precede LABEL 'Mark Item As Exception' (§B15)"
     )
 
-    # 6. Skip-GOTO separates Completed from Exception sections (prevents fall-through)
+    # 6. Skip-GOTO from Completed section targets the reset label ('Work end'), placed after the
+    # exception section — NOT 'Mark Item As Exception' (jumping there is a no-op since it is the
+    # immediately-following label).  Reference: L1477 → GOTO 'Reset All' (L1490).
     between = content[completed_pos:exception_pos]
-    assert "GOTO 'Mark Item As Exception'" in between, (
-        "Skip-GOTO from Completed section to Exception label missing — "
-        "fall-through would double-execute both CALL 'Mark Complete' and CALL 'Mark Exception'"
+    assert "GOTO 'Work end'" in between, (
+        "Skip-GOTO from Completed section must target 'Work end' (§B15 ref L1477 → 'Reset All'), "
+        "not 'Mark Item As Exception' — GOTO to the immediately-following label is a no-op and "
+        "leaves both CALL 'Mark Complete' and CALL 'Mark Exception' executing unconditionally"
+    )
+
+    # 7. Reset label ('Work end') appears AFTER 'Mark Item As Exception' content (§B15 ref L1490)
+    reset_label_pos = content.index("LABEL 'Work end'")
+    mark_exception_pos = content.index("LABEL 'Mark Item As Exception'")
+    assert reset_label_pos > mark_exception_pos, (
+        "LABEL 'Work end' must appear after LABEL 'Mark Item As Exception' (§B15 ref L1490)"
     )

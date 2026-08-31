@@ -1818,6 +1818,13 @@ class PADGenerator:
                     exception_label if exception_label is not None else f"{stage.name} recovery"
                 )
 
+                # The skip-GOTO from the Completed section must jump PAST the exception section
+                # to a third label placed after all continuation sections — not to the exception
+                # label itself.  In the reference this is 'Reset All' (line 1477→1490).
+                # We synthesize it as '<block_name> end' so it is unique per BLOCK.
+                # (§B15 reference lines 1477, 1490 — GOTO 'Reset All' → LABEL 'Reset All')
+                reset_label = f"{stage.name} end"
+
                 # --- Build the coarse BLOCK header (§A5 3-arm dispatch template) ---
                 # Typed handler arms use the §A5 3-tier taxonomy directly — stage.exception_type
                 # is never set on BLOCK stages (only on EXCEPTION/throw stages, per ast/models.py),
@@ -1884,11 +1891,23 @@ class PADGenerator:
                     )
                     if rendered:
                         output_lines.append(rendered)
-                    # After the Completed section, skip past the Exception label (§B15 ref L1477)
+                    # After the Completed section, skip past the Exception label to the reset
+                    # label — a third label placed after all continuation sections (§B15 ref
+                    # L1477: GOTO 'Reset All').  Jumping to 'exception_label' would be a no-op
+                    # because it is the immediately following label; the GOTO must reach past it.
                     if exception_label is not None and cont_label != exception_label:
                         output_lines.append(
-                            f"GOTO '{dispatch_label}'"  # ref L1477 skip
+                            f"GOTO '{reset_label}'"  # §B15 ref L1477 → 'Reset All'
                         )
+
+                # --- Emit the reset label after all continuation sections (§B15 ref L1490) ---
+                # Happy-path skip-GOTO lands here; exception path falls through to here too.
+                # This label is the per-item "Reset All" equivalent — execution continues with
+                # whatever stages follow (DataGateway block, per-item resets, etc.).
+                if continuation_stages:
+                    output_lines.append(
+                        f"LABEL '{reset_label}'"  # §B15 ref L1490
+                    )
 
                 # --- Advance past all consumed stages in this group ---
                 # Skip to after the RESUME (or after the RECOVER if no RESUME found).
