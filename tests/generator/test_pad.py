@@ -733,22 +733,34 @@ def test_build_variable_name_mapping_scans_data_stages() -> None:
 
     Per Task 5b, the mapping must scan all DATA and COLLECTION stages across all pages
     and create a single source-of-truth for BP name → PAD name translation.
+
+    Fixture shape: DATA/COLLECTION annotation params_map is built by real annotator.
+    Per engine/annotator.py::_annotate_data (lines 239-243):
+      DATA: {"variable_name": stage.name, "variable_type": type, "initial_value": value}
+    Per engine/annotator.py::_annotate_collection (lines 264-267):
+      COLLECTION: {"table_name": stage.name, "variable_type": "DataTable"}
     """
     gen = PADGenerator()
 
-    # Create a process with DATA stages that have pa_annotation params_map
+    # DATA stage with real annotator shape
     data_stage = make_annotated_stage(
         stage_id="D1",
-        name="Initialize Retry Count",
+        name="Retry Count",
         stage_type=StageType.DATA,
-        params_map={"Retry Count": "num_retryCount"},
+        params_map={
+            "variable_name": "Retry Count",
+            "variable_type": "number",
+            "initial_value": "0",
+        },
         data_items=[BPDataItem(name="Retry Count", data_type="number")],
     )
+
+    # COLLECTION stage with real annotator shape
     collection_stage = make_annotated_stage(
         stage_id="C1",
-        name="Create Data Collection",
+        name="FinalProduct_Collection",
         stage_type=StageType.COLLECTION,
-        params_map={"FinalProduct_Collection": "dtb_finalproductCollection"},
+        params_map={"table_name": "FinalProduct_Collection", "variable_type": "DataTable"},
         data_items=[BPDataItem(name="FinalProduct_Collection", data_type="collection")],
     )
 
@@ -757,6 +769,7 @@ def test_build_variable_name_mapping_scans_data_stages() -> None:
 
     mapping = gen._build_variable_name_mapping(process)
 
+    # Verify the mapping produces correctly-prefixed names
     assert "retry count" in mapping
     assert mapping["retry count"] == "num_retryCount"
     assert "finalproduct_collection" in mapping
@@ -893,19 +906,27 @@ def test_split_shape_with_mapping_preserves_variable_consistency() -> None:
     _split_page_into_functions to ensure variable references in split FUNCTIONs
     stay consistent (e.g., Retry Count should be num_retryCount everywhere, not
     txt_retryCount in some places and num_retryCount in others).
+
+    Fixture shape: DATA stages use real annotator shape (from engine/annotator.py::_annotate_data).
+    CALCULATION stages use parser shape (from parser/process.py lines 354-355: {target: expr}).
     """
     gen = PADGenerator()
 
     # Create a page with split-shape targets and CALCULATION stages that reference variables
-    # DATA stage declares "Retry Count" variable
+    # DATA stage declares "Retry Count" variable using real annotator shape
     data_stage = make_annotated_stage(
         stage_id="D1",
-        name="Init Retry Count",
+        name="Retry Count",
         stage_type=StageType.DATA,
-        params_map={"Retry Count": "num_retryCount"},
+        params_map={
+            "variable_name": "Retry Count",
+            "variable_type": "number",
+            "initial_value": "0",
+        },
         data_items=[BPDataItem(name="Retry Count", data_type="number")],
     )
 
+    # CALCULATION stages use stage.params_map (not annotation.params_map) from parser
     calc_stage_1 = make_annotated_stage(
         stage_id="C1",
         name="Increment Retry",

@@ -1065,39 +1065,87 @@ class PADGenerator:
         for page in process.pages:
             for stage in page.stages:
                 # DATA stages declare variables
-                if stage.stage_type == StageType.DATA:
-                    for data_item in stage.data_items:
-                        bp_name_lower = data_item.name.lower()
-                        if bp_name_lower not in mapping and stage.pa_annotation:
-                            # Use the PAD name from params_map if available
-                            pad_name = stage.pa_annotation.params_map.get(
-                                data_item.name, data_item.name
-                            )
-                            mapping[bp_name_lower] = pad_name
+                # Per engine/annotator.py::_annotate_data (lines 239-243), params_map has:
+                # {"variable_name": stage.name, "variable_type": type, "initial_value": value}
+                if stage.stage_type == StageType.DATA and stage.pa_annotation:
+                    var_name = stage.pa_annotation.params_map.get("variable_name", stage.name)
+                    var_type = stage.pa_annotation.params_map.get("variable_type", "text").lower()
+                    bp_name_lower = var_name.lower()
 
-                # COLLECTION stages also declare/reference collection items
-                elif stage.stage_type == StageType.COLLECTION:
-                    for data_item in stage.data_items:
-                        bp_name_lower = data_item.name.lower()
-                        if bp_name_lower not in mapping and stage.pa_annotation:
-                            pad_name = stage.pa_annotation.params_map.get(
-                                data_item.name, data_item.name
-                            )
-                            mapping[bp_name_lower] = pad_name
+                    if bp_name_lower not in mapping:
+                        # Generate the padded name based on type
+                        padded_name = self._apply_type_prefix(var_name, var_type)
+                        mapping[bp_name_lower] = padded_name
+
+                # COLLECTION stages declare data tables
+                # Per engine/annotator.py::_annotate_collection (lines 264-267), params_map has:
+                # {"table_name": stage.name, "variable_type": "DataTable"}
+                elif stage.stage_type == StageType.COLLECTION and stage.pa_annotation:
+                    table_name = stage.pa_annotation.params_map.get("table_name", stage.name)
+                    var_type = stage.pa_annotation.params_map.get(
+                        "variable_type", "collection"
+                    ).lower()
+                    bp_name_lower = table_name.lower()
+
+                    if bp_name_lower not in mapping:
+                        # Generate the padded name for collections (dtb_)
+                        padded_name = self._apply_type_prefix(table_name, var_type)
+                        mapping[bp_name_lower] = padded_name
 
                 # CALCULATION stages can also reference collections in dotted notation
-                elif stage.stage_type == StageType.CALCULATION and stage.pa_annotation:
-                    for target_name in stage.pa_annotation.params_map:
+                # For CALCULATION stages, params_map is set by parser (lines 354-355 of process.py)
+                # with {calc_stage: calc_expr} shape, NOT by annotator which returns params_map={}
+                elif stage.stage_type == StageType.CALCULATION and stage.params_map:
+                    for target_name in stage.params_map:
                         if "." in target_name:
                             # Extract the base collection name
                             base_name = target_name.split(".")[0]
                             base_lower = base_name.lower()
                             if base_lower not in mapping:
-                                # Try to find the mapped name
-                                pad_name = stage.pa_annotation.params_map.get(base_name, base_name)
-                                mapping[base_lower] = pad_name
+                                # Try to find the mapped name via a lookup
+                                # (may have been declared in a DATA/COLLECTION stage)
+                                # If not found, use default collection prefix
+                                padded_name = self._apply_type_prefix(base_name, "collection")
+                                mapping[base_lower] = padded_name
 
         return mapping
+
+    def _apply_type_prefix(self, name: str, pad_type: str) -> str:
+        """Apply the appropriate type prefix to a variable name per architecture doc §A4.
+
+        Args:
+            name: The base variable name (e.g., "Retry Count" or "FinalProduct_Collection").
+            pad_type: The variable type (e.g., "number", "text", "datatable").
+
+        Returns:
+            The prefixed name (e.g., "num_retryCount", "dtb_finalproductCollection").
+        """
+        # Normalize the type string
+        type_lower = pad_type.lower().strip()
+
+        # Determine prefix based on type
+        if type_lower in ("number", "integer", "decimal"):
+            prefix = "num_"
+        elif type_lower in ("collection", "datatable", "table"):
+            prefix = "dtb_"
+        elif type_lower in ("boolean", "bool", "true/false"):
+            prefix = "bool_"
+        else:  # text, string, or unknown
+            prefix = "txt_"
+
+        # Convert name to camelCase: handle both spaces and underscores as word separators
+        # Split by both spaces and underscores, then reconstruct in camelCase
+        # E.g., "Retry Count" → "retryCount", "FinalProduct_Collection" → "finalproductCollection"
+        # First, normalize underscores to spaces for uniform handling
+        name_normalized = name.replace("_", " ")
+        parts = name_normalized.split()
+
+        if not parts:
+            return prefix + name
+
+        # First part is lowercase, rest keep their casing (usually title case)
+        camel_case = parts[0].lower() + "".join(parts[1:])
+        return prefix + camel_case
 
     def _resolve_dotted_reference(
         self,
@@ -1167,6 +1215,11 @@ class PADGenerator:
         separate_actions: list[str] = []
         result = expr
 
+        # Counter for deterministic temp variable naming (replaces non-deterministic id(match))
+        # Using a counter ensures that identical expressions produce identical temp var names
+        # across different runs and processes, per project's offline/deterministic constraint
+        temp_var_counter = 0
+
         # Extract and replace Trim(...) and Lower(...) calls
         # These must become separate action lines, not be inlined
         trim_pattern = r"Trim\s*\(\s*([^)]+)\s*\)"
@@ -1177,12 +1230,13 @@ class PADGenerator:
                 inner_expr, variable_name_mapping
             )
             separate_actions.extend(inner_actions)
-            # Create a temporary variable for the Trim result
-            temp_var = f"txt_trimmed_{id(match)}"
+            # Create a temporary variable for the Trim result using deterministic counter
+            temp_var = f"txt_trimmed_{temp_var_counter}"
             action = f"Text.Trim '{translated_inner}' => {temp_var}"
             separate_actions.append(action)
             # Replace the Trim call with the temp var
             result = result.replace(match.group(0), temp_var)
+            temp_var_counter += 1
 
         lower_pattern = r"Lower\s*\(\s*([^)]+)\s*\)"
         for match in re.finditer(lower_pattern, result):
@@ -1191,11 +1245,12 @@ class PADGenerator:
                 inner_expr, variable_name_mapping
             )
             separate_actions.extend(inner_actions)
-            # Create a temporary variable for the Lower result
-            temp_var = f"txt_lowered_{id(match)}"
+            # Create a temporary variable for the Lower result using deterministic counter
+            temp_var = f"txt_lowered_{temp_var_counter}"
             action = f"Text.ChangeCase '{translated_inner}' 'To lowercase' => {temp_var}"
             separate_actions.append(action)
             result = result.replace(match.group(0), temp_var)
+            temp_var_counter += 1
 
         # Translate [Data Item] references
         # Pattern: [ClassName] or [ClassName.PropertyName]
@@ -1309,8 +1364,9 @@ class PADGenerator:
             lines.append(rendered)
 
         elif target_type == "SetVariable":
-            # SetVariable is a CALCULATION stage setting a BP expression to a variable.
-            # Per architecture doc §B10 point 3, translate the BP expression to PAD syntax.
+            # SetVariable handling differs by stage type:
+            # - DATA: variable declaration (target_type="SetVariable" from _annotate_data)
+            # - CALCULATION: assignment stage (stage_type=CALCULATION, params_map={target: expr})
             set_template = self.env.get_template("actions/set_variable.robin.j2")
             verify_comment = (
                 f"{stage.name} (confidence {annotation.confidence:.2f})"
@@ -1318,9 +1374,33 @@ class PADGenerator:
                 else None
             )
 
-            # Get the target variable name and the BP expression
-            target_var_name = next(iter(annotation.params_map.keys()), stage.name)
-            bp_expr = next(iter(annotation.params_map.values()), "")
+            # Branch based on stage type and annotation structure
+            if stage.stage_type == StageType.DATA:
+                # DATA stage: declaration with type and optional initial value
+                # Per engine/annotator.py::_annotate_data (lines 239-243):
+                # params_map = {"variable_name": stage.name, "variable_type": type, "initial_value": value}
+                target_var_name = annotation.params_map.get("variable_name", stage.name)
+                bp_expr = annotation.params_map.get("initial_value", "")
+
+            elif stage.stage_type == StageType.COLLECTION:
+                # COLLECTION stage: data table declaration
+                # Per engine/annotator.py::_annotate_collection (lines 264-267):
+                # params_map = {"table_name": stage.name, "variable_type": "DataTable"}
+                target_var_name = annotation.params_map.get("table_name", stage.name)
+                bp_expr = ""  # Will be set to DataTable.Create() below
+
+            else:
+                # CALCULATION stage: assignment of expression to variable
+                # Stage type is CALCULATION; params_map comes from parser (lines 354-355)
+                # with {calc_stage: calc_expr} shape, attached to stage.params_map not annotation
+                if stage.params_map:
+                    # Use the first (typically only) entry from params_map
+                    target_var_name = next(iter(stage.params_map.keys()), stage.name)
+                    bp_expr = next(iter(stage.params_map.values()), "")
+                else:
+                    # Fallback: use stage name as target, empty expression
+                    target_var_name = stage.name
+                    bp_expr = ""
 
             # Map target variable name using dotted reference resolution if needed
             if variable_name_mapping and "." in target_var_name:
@@ -1342,18 +1422,37 @@ class PADGenerator:
             for action in separate_actions:
                 lines.append(action)
 
+            # Determine the final value to assign
+            if stage.stage_type == StageType.COLLECTION:
+                final_value = "DataTable.Create()"
+            elif translated_expr:
+                final_value = translated_expr
+            else:
+                # For empty expressions or DATA stages with no initial value
+                final_value = "%SomeVar%"
+
             # Add the SET variable line
             rendered = set_template.render(
                 var_name=mapped_target,
-                value=translated_expr if translated_expr else "%SomeVar%",
+                value=final_value,
                 verify_comment=verify_comment,
             )
             lines.append(rendered)
 
         elif target_type == "CreateNewDataTable":
+            # COLLECTION stage: create new data table (legacy, now handled in SetVariable branch above)
+            # Use the variable_name_mapping to apply proper prefixes per architecture doc §A4
             set_template = self.env.get_template("actions/set_variable.robin.j2")
+
+            target_var_name = stage.name
+            if variable_name_mapping:
+                target_lower = target_var_name.lower()
+                mapped_target = variable_name_mapping.get(target_lower, target_var_name)
+            else:
+                mapped_target = target_var_name
+
             rendered = set_template.render(
-                var_name=stage.name,
+                var_name=mapped_target,
                 value="DataTable.Create()",
                 verify_comment=None,
             )
