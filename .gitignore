@@ -42,4 +42,5 @@ Thumbs.db
 
 # Claude (local)
 .claude/
+.bob/
 graphify-out/cache/

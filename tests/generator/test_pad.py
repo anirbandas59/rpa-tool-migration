@@ -771,9 +771,9 @@ def test_build_variable_name_mapping_scans_data_stages() -> None:
 
     # Verify the mapping produces correctly-prefixed names
     assert "retry count" in mapping
-    assert mapping["retry count"] == "num_retryCount"
+    assert mapping["retry count"] == "num_RetryCount"
     assert "finalproduct_collection" in mapping
-    assert mapping["finalproduct_collection"] == "dtb_finalproductCollection"
+    assert mapping["finalproduct_collection"] == "dtb_FinalProductCollection"
 
 
 def test_resolve_dotted_reference_translates_collection_field() -> None:
@@ -783,11 +783,11 @@ def test_resolve_dotted_reference_translates_collection_field() -> None:
     resolved using the base collection name from the mapping.
     """
     gen = PADGenerator()
-    mapping = {"finalproduct_collection": "dtb_finalproductCollection"}
+    mapping = {"finalproduct_collection": "dtb_FinalProductCollection"}
 
     result = gen._resolve_dotted_reference("FinalProduct_Collection.Column8", mapping)
 
-    assert result == "dtb_finalproductCollection.Column8"
+    assert result == "dtb_FinalProductCollection.Column8"
 
 
 def test_translate_bp_expression_converts_brackets_to_variables() -> None:
@@ -797,7 +797,7 @@ def test_translate_bp_expression_converts_brackets_to_variables() -> None:
     translated to PAD variable references.
     """
     gen = PADGenerator()
-    mapping = {"exception type": "txt_ExceptionType", "retry count": "num_retryCount"}
+    mapping = {"exception type": "txt_ExceptionType", "retry count": "num_RetryCount"}
 
     expr = "[Exception Type]"
     result, actions = gen._translate_bp_expression(expr, mapping)
@@ -852,13 +852,13 @@ def test_translate_bp_expression_handles_dotted_collection_references() -> None:
     through the variable name mapping to get the correctly prefixed name.
     """
     gen = PADGenerator()
-    mapping = {"finalproduct_collection": "dtb_finalproductCollection"}
+    mapping = {"finalproduct_collection": "dtb_FinalProductCollection"}
 
     expr = "[FinalProduct_Collection.Identity]"
     result, actions = gen._translate_bp_expression(expr, mapping)
 
     # Should resolve to the mapped base name with field preserved
-    assert "dtb_finalproductCollection.Identity" in result
+    assert "dtb_FinalProductCollection.Identity" in result
 
 
 def test_calculation_stage_uses_variable_name_mapping_for_target() -> None:
@@ -887,14 +887,14 @@ def test_calculation_stage_uses_variable_name_mapping_for_target() -> None:
     # Build variable name mapping
     mapping = gen._build_variable_name_mapping(process)
     # Manually add the collection mapping (in real flow, would come from COLLECTION stage)
-    mapping["finalproduct_collection"] = "dtb_finalproductCollection"
+    mapping["finalproduct_collection"] = "dtb_FinalProductCollection"
 
     # Render the stage with the mapping
     result = gen._render_stage(calc_stage, process, {}, mapping)
 
     # The rendered result should have the mapped name, not the raw BP name
     assert (
-        "dtb_finalproductCollection.Column8" in result
+        "dtb_FinalProductCollection.Column8" in result
         or "FinalProduct_Collection.Column8" not in result
     )
 
@@ -954,12 +954,12 @@ def test_split_shape_with_mapping_preserves_variable_consistency() -> None:
     result = gen._split_page_into_functions(page, process, shape_info, {}, mapping)
 
     # Count occurrences of the correct vs incorrect spellings
-    # Should have num_retryCount (correct) and NOT txt_retryCount (wrong)
+    # Should have num_RetryCount (correct) and NOT txt_RetryCount (wrong)
     # The result should show that the mapping is being used (at least in the translated expressions)
     assert (
-        "num_retryCount" in result or "Retry Count" not in result
+        "num_RetryCount" in result or "Retry Count" not in result
     )  # Either mapped or no raw BP name
-    assert "txt_retryCount" not in result
+    assert "txt_RetryCount" not in result
 
 
 # ── Integration Tests ──────────────────────────────────────────────────────
@@ -1514,6 +1514,55 @@ def test_fold_and_inline_block_targets_are_never_silently_dropped(
     # The mapping maps them to specific block names
     found = "BLOCK '" in full_content  # At least one BLOCK should exist (loose check)
     assert found, "No inline_block pages rendered (no BLOCK declarations found)"
+
+
+@pytest.mark.integration
+def test_fold_page_variable_names_are_legal_identifiers(tmp_path: Path) -> None:
+    """Test that all variable names in generated files are legal identifiers.
+
+    Specifically, ensures no spaces, hyphens, or other illegal non-alphanumeric chars
+    leak into SET targets, even in fold or inline_block pages.
+    """
+    sample_path = Path("samples/blueprism/PID_0171.bprelease")
+    if not sample_path.exists():
+        pytest.skip("Sample file not found")
+
+    from flowsmith.ast.builder import build_ast
+    from flowsmith.engine import create_annotator
+    from flowsmith.parser import parse_process
+
+    raw = parse_process(sample_path)
+    process = build_ast(raw)
+    create_annotator().annotate_process(process)
+
+    gen = PADGenerator()
+    files = gen.generate_process(process, tmp_path / "robin")
+
+    # Combine all generated content
+    full_content = "\n".join(f.read_text(encoding="utf-8") for f in files)
+
+    import re
+
+    # Match lines like "SET target TO value"
+    # Allow dotted targets, e.g. GLOBAL.num_Var or dtb_Col.Field
+    set_pattern = re.compile(r"^\s*SET\s+([A-Za-z0-9_\.-]+)\s+TO", re.MULTILINE)
+    targets = set_pattern.findall(full_content)
+
+    assert len(targets) > 0, "No SET statements found in generated output!"
+
+    legal_id_pattern = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+    for target in targets:
+        # Split dotted references like GLOBAL.num_Var or dtb_Col.Field
+        parts = target.split(".")
+        for part in parts:
+            assert legal_id_pattern.match(part), (
+                f"Illegal identifier/part '{part}' found in SET target '{target}'"
+            )
+
+    # Assert that PascalCase is used (e.g., RetryCount or ConsecutiveExceptionCount exists)
+    has_pascal_case = any("RetryCount" in t or "ConsecutiveExceptionCount" in t for t in targets)
+    assert has_pascal_case, "PascalCase variables (e.g. RetryCount) not found in SET targets"
 
 
 @pytest.mark.integration

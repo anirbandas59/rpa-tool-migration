@@ -1171,19 +1171,25 @@ class PADGenerator:
                 name_to_process = name[len(existing_prefix) :]
                 break
 
-        # Convert name to camelCase: handle both spaces and underscores as word separators
-        # Split by both spaces and underscores, then reconstruct in camelCase
-        # E.g., "Retry Count" → "retryCount", "FinalProduct_Collection" → "finalproductCollection"
+        # Convert name to PascalCase: handle both spaces and underscores as word separators
+        # Split by both spaces and underscores, then reconstruct in PascalCase
+        # E.g., "Retry Count" → "RetryCount", "FinalProduct_Collection" → "FinalProductCollection"
         # First, normalize underscores to spaces for uniform handling
         name_normalized = name_to_process.replace("_", " ")
         parts = name_normalized.split()
 
         if not parts:
-            return prefix + name_to_process
+            pascal_name = name_to_process
+        else:
+            # Capitalize the first letter of each part, preserving the rest of its casing as-is
+            pascal_name = "".join(p[0].upper() + p[1:] if p else "" for p in parts)
 
-        # First part is lowercase, rest keep their casing (usually title case)
-        camel_case = parts[0].lower() + "".join(parts[1:])
-        return prefix + camel_case
+        # Sanitize any remaining non-alphanumeric/non-underscore characters from the name (e.g. hyphens in Sleep-2s)
+        import re
+
+        sanitized_name = re.sub(r"[^A-Za-z0-9_]", "", pascal_name)
+
+        return prefix + sanitized_name
 
     def _resolve_dotted_reference(
         self,
