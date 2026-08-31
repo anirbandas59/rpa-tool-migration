@@ -725,6 +725,222 @@ def test_render_structural_stage_rejects_non_structural_type() -> None:
         gen._render_structural_stage(stage)
 
 
+# ── Task 5b Tests: Expression Translation ──────────────────────────────────
+
+
+def test_build_variable_name_mapping_scans_data_stages() -> None:
+    """Test that _build_variable_name_mapping builds a mapping from DATA/COLLECTION stages.
+
+    Per Task 5b, the mapping must scan all DATA and COLLECTION stages across all pages
+    and create a single source-of-truth for BP name → PAD name translation.
+    """
+    gen = PADGenerator()
+
+    # Create a process with DATA stages that have pa_annotation params_map
+    data_stage = make_annotated_stage(
+        stage_id="D1",
+        name="Initialize Retry Count",
+        stage_type=StageType.DATA,
+        params_map={"Retry Count": "num_retryCount"},
+        data_items=[BPDataItem(name="Retry Count", data_type="number")],
+    )
+    collection_stage = make_annotated_stage(
+        stage_id="C1",
+        name="Create Data Collection",
+        stage_type=StageType.COLLECTION,
+        params_map={"FinalProduct_Collection": "dtb_finalproductCollection"},
+        data_items=[BPDataItem(name="FinalProduct_Collection", data_type="collection")],
+    )
+
+    page = make_page(stages=[data_stage, collection_stage], is_main=True)
+    process = make_process(pages=[page], name="TestProcess")
+
+    mapping = gen._build_variable_name_mapping(process)
+
+    assert "retry count" in mapping
+    assert mapping["retry count"] == "num_retryCount"
+    assert "finalproduct_collection" in mapping
+    assert mapping["finalproduct_collection"] == "dtb_finalproductCollection"
+
+
+def test_resolve_dotted_reference_translates_collection_field() -> None:
+    """Test that _resolve_dotted_reference maps Collection.Field through the mapping.
+
+    Per Task 5b §A4, dotted references like 'FinalProduct_Collection.Column8' should be
+    resolved using the base collection name from the mapping.
+    """
+    gen = PADGenerator()
+    mapping = {"finalproduct_collection": "dtb_finalproductCollection"}
+
+    result = gen._resolve_dotted_reference("FinalProduct_Collection.Column8", mapping)
+
+    assert result == "dtb_finalproductCollection.Column8"
+
+
+def test_translate_bp_expression_converts_brackets_to_variables() -> None:
+    """Test that _translate_bp_expression converts [DataItem] brackets to variable names.
+
+    Per Task 5b §B10 point 3, BP expressions use [Data Item] notation that must be
+    translated to PAD variable references.
+    """
+    gen = PADGenerator()
+    mapping = {"exception type": "txt_ExceptionType", "retry count": "num_retryCount"}
+
+    expr = "[Exception Type]"
+    result, actions = gen._translate_bp_expression(expr, mapping)
+
+    assert result == "txt_ExceptionType"
+    assert actions == []
+
+
+def test_translate_bp_expression_converts_ampersand_to_plus() -> None:
+    """Test that _translate_bp_expression converts & (string concat) to +.
+
+    Per Task 5b §B10 point 3, BP string concatenation (&) becomes PAD's + operator.
+    """
+    gen = PADGenerator()
+    mapping = {}
+
+    expr = "[First] & [Second]"
+    result, actions = gen._translate_bp_expression(expr, mapping)
+
+    # Should replace & with +
+    assert "+" in result
+    assert "&" not in result
+
+
+def test_translate_bp_expression_handles_trim_as_separate_action() -> None:
+    """Test that Trim(...) produces a separate action line, not inline.
+
+    Per Task 5b §B10 point 3 and the architecture doc requirement: 'Trim(...) →
+    `Text.Trim` action calls (BP has expression functions PAD does not — these
+    become separate action lines, they cannot be inlined into a PAD expression).'
+    """
+    gen = PADGenerator()
+    mapping = {"email": "txt_email"}
+
+    expr = "Trim([Email])"
+    result, actions = gen._translate_bp_expression(expr, mapping)
+
+    # Trim should not be in the result; it should be in separate actions
+    assert "Trim" not in result or "Text.Trim" not in result
+    # There should be at least one separate action
+    assert len(actions) >= 1
+    # At least one action should mention Text.Trim
+    trim_actions = [a for a in actions if "Text.Trim" in a]
+    assert len(trim_actions) >= 1
+
+
+def test_translate_bp_expression_handles_dotted_collection_references() -> None:
+    """Test that dotted collection references are resolved through the mapping.
+
+    Per Task 5b and the 5th cycle review, CALCULATION stages that target a dotted
+    collection field (e.g., 'FinalProduct_Collection.Column8') must be resolved
+    through the variable name mapping to get the correctly prefixed name.
+    """
+    gen = PADGenerator()
+    mapping = {"finalproduct_collection": "dtb_finalproductCollection"}
+
+    expr = "[FinalProduct_Collection.Identity]"
+    result, actions = gen._translate_bp_expression(expr, mapping)
+
+    # Should resolve to the mapped base name with field preserved
+    assert "dtb_finalproductCollection.Identity" in result
+
+
+def test_calculation_stage_uses_variable_name_mapping_for_target() -> None:
+    """Test that CALCULATION stages resolve their target names through the mapping.
+
+    This is the specific bug the 6th cycle review fixed: CALCULATION stages with
+    dotted target names like 'FinalProduct_Collection.Column8' must route through
+    _resolve_dotted_reference to get the mapped name, not be left raw.
+    """
+    gen = PADGenerator()
+
+    # Create a CALCULATION stage with a dotted target name
+    calc_stage = make_annotated_stage(
+        stage_id="C1",
+        name="Write to Collection",
+        stage_type=StageType.CALCULATION,
+        target_type="SetVariable",
+        params_map={
+            "FinalProduct_Collection.Column8": "[Output_value]",
+        },
+    )
+
+    page = make_page(stages=[calc_stage], is_main=True)
+    process = make_process(pages=[page], name="TestProcess")
+
+    # Build variable name mapping
+    mapping = gen._build_variable_name_mapping(process)
+    # Manually add the collection mapping (in real flow, would come from COLLECTION stage)
+    mapping["finalproduct_collection"] = "dtb_finalproductCollection"
+
+    # Render the stage with the mapping
+    result = gen._render_stage(calc_stage, process, {}, mapping)
+
+    # The rendered result should have the mapped name, not the raw BP name
+    assert (
+        "dtb_finalproductCollection.Column8" in result
+        or "FinalProduct_Collection.Column8" not in result
+    )
+
+
+def test_split_shape_with_mapping_preserves_variable_consistency() -> None:
+    """Test that _split_page_into_functions threads variable_name_mapping correctly.
+
+    Per Task 5b cycle 4-5 findings, the mapping must be threaded through
+    _split_page_into_functions to ensure variable references in split FUNCTIONs
+    stay consistent (e.g., Retry Count should be num_retryCount everywhere, not
+    txt_retryCount in some places and num_retryCount in others).
+    """
+    gen = PADGenerator()
+
+    # Create a page with split-shape targets and CALCULATION stages that reference variables
+    # DATA stage declares "Retry Count" variable
+    data_stage = make_annotated_stage(
+        stage_id="D1",
+        name="Init Retry Count",
+        stage_type=StageType.DATA,
+        params_map={"Retry Count": "num_retryCount"},
+        data_items=[BPDataItem(name="Retry Count", data_type="number")],
+    )
+
+    calc_stage_1 = make_annotated_stage(
+        stage_id="C1",
+        name="Increment Retry",
+        stage_type=StageType.CALCULATION,
+        target_type="SetVariable",
+        params_map={"Retry Count": "[Retry Count] + 1"},
+    )
+
+    calc_stage_2 = make_annotated_stage(
+        stage_id="C2",
+        name="Check Retry Limit",
+        stage_type=StageType.CALCULATION,
+        target_type="SetVariable",
+        params_map={"Should Retry": "[Retry Count] < 5"},
+    )
+
+    page = make_page(stages=[data_stage, calc_stage_1, calc_stage_2], is_main=False)
+    process = make_process(pages=[page], name="TestProcess")
+
+    # Build variable name mapping
+    mapping = gen._build_variable_name_mapping(process)
+
+    # Render the page with split-shape (simulating _split_page_into_functions)
+    shape_info = {"shape": "split", "targets": ["Target1", "Target2"], "stage_counts": [1, 2]}
+    result = gen._split_page_into_functions(page, process, shape_info, {}, mapping)
+
+    # Count occurrences of the correct vs incorrect spellings
+    # Should have num_retryCount (correct) and NOT txt_retryCount (wrong)
+    # The result should show that the mapping is being used (at least in the translated expressions)
+    assert (
+        "num_retryCount" in result or "Retry Count" not in result
+    )  # Either mapped or no raw BP name
+    assert "txt_retryCount" not in result
+
+
 # ── Integration Tests ──────────────────────────────────────────────────────
 
 

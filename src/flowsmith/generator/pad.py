@@ -10,6 +10,7 @@ Sub-pages rendered based on page-shape mapping (function/inline_block/fold/split
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -327,9 +328,14 @@ class PADGenerator:
             lines.append(f"# Role: {role.capitalize()}")
             lines.append("")
 
+            # Build variable name mapping for Task 5b expression translation (per §A4, §B10)
+            variable_name_mapping = self._build_variable_name_mapping(process)
+
             # Render main page content (split by role)
             if main_page:
-                main_content = self._render_main_page_for_role(main_page, process, role)
+                main_content = self._render_main_page_for_role(
+                    main_page, process, role, variable_name_mapping
+                )
                 if main_content:
                     lines.append(main_content)
                     lines.append("")
@@ -358,7 +364,9 @@ class PADGenerator:
                     # (cite the first occurrence; the mapping file notes parameterization)
                     continue
 
-                page_content = self._render_page_in_consolidated_flow(page, process, process_map)
+                page_content = self._render_page_in_consolidated_flow(
+                    page, process, process_map, variable_name_mapping
+                )
                 if page_content:
                     rendered_functions.append(page_content)
                     lines.append(page_content)
@@ -389,6 +397,7 @@ class PADGenerator:
         main_page: Any,
         process: BPProcess,
         role: str,
+        variable_name_mapping: dict[str, str] | None = None,
     ) -> str:
         """Render Main Page stages split by role (Get Next Item boundary).
 
@@ -400,6 +409,7 @@ class PADGenerator:
             main_page: The main BPPage.
             process: The BPProcess.
             role: Either "loader" or "performer".
+            variable_name_mapping: Optional dict mapping lowercase BP names to PAD names (Task 5b).
 
         Returns:
             Rendered Robin content for Main Page's role-appropriate stages (no FUNCTION wrapper).
@@ -459,7 +469,9 @@ class PADGenerator:
 
             # Render each stage, but resolve CALL targets by their own role
             for stage in stages_to_render:
-                rendered = self._render_stage_in_main_page(stage, process, process_map, role)
+                rendered = self._render_stage_in_main_page(
+                    stage, process, process_map, role, variable_name_mapping
+                )
                 if rendered:
                     action_lines.append(rendered)
 
@@ -479,6 +491,7 @@ class PADGenerator:
         process: BPProcess,
         process_map: dict[str, Any],
         role: str,
+        variable_name_mapping: dict[str, str] | None = None,
     ) -> str:
         """Render a Main Page stage, resolving CALL targets by target's role.
 
@@ -490,6 +503,7 @@ class PADGenerator:
             process: The BPProcess (to look up target pages).
             process_map: The process entry from page_target_map.yaml.
             role: The current role being rendered.
+            variable_name_mapping: Optional dict mapping lowercase BP names to PAD names (Task 5b).
 
         Returns:
             Rendered Robin content, or empty string if not applicable to this role.
@@ -508,13 +522,14 @@ class PADGenerator:
 
         # Non-call stages are rendered normally
         # Pass process and process_map for SubSheet call resolution
-        return self._render_stage(stage, process, process_map)
+        return self._render_stage(stage, process, process_map, variable_name_mapping)
 
     def _render_page_in_consolidated_flow(
         self,
         page: Any,
         process: BPProcess,
         process_map: dict[str, Any],
+        variable_name_mapping: dict[str, str] | None = None,
     ) -> str:
         """Render a sub-page according to its shape mapping (function/inline_block/fold/split).
 
@@ -522,6 +537,7 @@ class PADGenerator:
             page: The BPPage.
             process: The BPProcess.
             process_map: The process entry from page_target_map.yaml.
+            variable_name_mapping: Optional dict mapping lowercase BP names to PAD names (Task 5b).
 
         Returns:
             Rendered Robin content for this page.
@@ -537,20 +553,28 @@ class PADGenerator:
                 if shape_info.get("unmapped_fallback"):
                     fallback_page = shape_info.get("fallback_page_name", page.name)
                     result = f"# TODO: no page_target_map.yaml entry for '{fallback_page}' — treating as default FUNCTION\n"
-                result += self._render_page_as_function(page, process, shape_info, process_map)
+                result += self._render_page_as_function(
+                    page, process, shape_info, process_map, variable_name_mapping
+                )
                 return result
 
             elif shape == "inline_block":
                 # Render as a BLOCK inside a container (usually Loader_Main_Body)
-                return self._render_inline_block(page, shape_info, process, process_map)
+                return self._render_inline_block(
+                    page, shape_info, process, process_map, variable_name_mapping
+                )
 
             elif shape == "fold":
                 # Render stages directly into container with no wrapper
-                return self._render_fold(page, shape_info, process, process_map)
+                return self._render_fold(
+                    page, shape_info, process, process_map, variable_name_mapping
+                )
 
             elif shape == "split":
                 # Render as multiple FUNCTIONs
-                return self._split_page_into_functions(page, process, shape_info, process_map)
+                return self._split_page_into_functions(
+                    page, process, shape_info, process_map, variable_name_mapping
+                )
 
             elif shape == "stop":
                 # Unreachable/orphan page — just emit a comment
@@ -706,6 +730,7 @@ class PADGenerator:
         process: BPProcess,
         shape_info: dict[str, Any],
         process_map: dict[str, Any] | None = None,
+        variable_name_mapping: dict[str, str] | None = None,
     ) -> str:
         """Render a page as a single FUNCTION block.
 
@@ -714,6 +739,7 @@ class PADGenerator:
             process: The BPProcess.
             shape_info: The shape mapping entry for this page.
             process_map: Optional process entry from page_target_map.yaml.
+            variable_name_mapping: Optional dict mapping lowercase BP names to PAD names (Task 5b).
 
         Returns:
             Rendered FUNCTION block.
@@ -728,7 +754,7 @@ class PADGenerator:
             # Render all stages in the page
             action_lines: list[str] = []
             for stage in page.stages:
-                rendered = self._render_stage(stage, process, process_map)
+                rendered = self._render_stage(stage, process, process_map, variable_name_mapping)
                 if rendered:
                     action_lines.append(rendered)
 
@@ -755,6 +781,7 @@ class PADGenerator:
         shape_info: dict[str, Any],
         process: BPProcess | None = None,
         process_map: dict[str, Any] | None = None,
+        variable_name_mapping: dict[str, str] | None = None,
     ) -> str:
         """Render a page as an inline BLOCK (not a separate FUNCTION).
 
@@ -763,6 +790,7 @@ class PADGenerator:
             shape_info: The shape mapping entry for this page.
             process: Optional BPProcess (used for SubSheet call resolution).
             process_map: Optional process entry from page_target_map.yaml.
+            variable_name_mapping: Optional dict mapping lowercase BP names to PAD names (Task 5b).
 
         Returns:
             Rendered BLOCK content.
@@ -775,7 +803,7 @@ class PADGenerator:
         # Render all stages
         action_lines: list[str] = []
         for stage in page.stages:
-            rendered = self._render_stage(stage, process, process_map)
+            rendered = self._render_stage(stage, process, process_map, variable_name_mapping)
             if rendered:
                 action_lines.append(rendered)
 
@@ -808,6 +836,7 @@ class PADGenerator:
         shape_info: dict[str, Any],
         process: BPProcess | None = None,
         process_map: dict[str, Any] | None = None,
+        variable_name_mapping: dict[str, str] | None = None,
     ) -> str:
         """Render a page's stages directly into container with no wrapper (fold).
 
@@ -816,6 +845,7 @@ class PADGenerator:
             shape_info: The shape mapping entry for this page.
             process: Optional BPProcess (used for SubSheet call resolution).
             process_map: Optional process entry from page_target_map.yaml.
+            variable_name_mapping: Optional dict mapping lowercase BP names to PAD names (Task 5b).
 
         Returns:
             Rendered content with fold markers.
@@ -827,7 +857,7 @@ class PADGenerator:
         # Render all stages
         action_lines: list[str] = []
         for stage in page.stages:
-            rendered = self._render_stage(stage, process, process_map)
+            rendered = self._render_stage(stage, process, process_map, variable_name_mapping)
             if rendered:
                 action_lines.append(rendered)
 
@@ -849,6 +879,7 @@ class PADGenerator:
         process: BPProcess,
         shape_info: dict[str, Any],
         process_map: dict[str, Any] | None = None,
+        variable_name_mapping: dict[str, str] | None = None,
     ) -> str:
         """Render a split-shape page into multiple FUNCTIONs.
 
@@ -857,6 +888,7 @@ class PADGenerator:
             process: The BPProcess.
             shape_info: The shape mapping entry for this page (contains targets and stage_counts).
             process_map: Optional process entry from page_target_map.yaml.
+            variable_name_mapping: Optional dict mapping lowercase BP names to PAD names (Task 5b).
 
         Returns:
             All rendered FUNCTION blocks concatenated.
@@ -866,7 +898,9 @@ class PADGenerator:
 
         if not targets:
             # No targets specified — render as single FUNCTION
-            return self._render_page_as_function(page, process, {"shape": "function"}, process_map)
+            return self._render_page_as_function(
+                page, process, {"shape": "function"}, process_map, variable_name_mapping
+            )
 
         # Compute stage boundaries
         num_stages = len(page.stages)
@@ -886,7 +920,7 @@ class PADGenerator:
             # Render stages for this target
             action_lines: list[str] = []
             for stage in stages_for_target:
-                rendered = self._render_stage(stage, process, process_map)
+                rendered = self._render_stage(stage, process, process_map, variable_name_mapping)
                 if rendered:
                     action_lines.append(rendered)
 
@@ -1005,11 +1039,207 @@ class PADGenerator:
             needs_end=needs_end,
         ).strip("\n")
 
+    def _build_variable_name_mapping(self, process: BPProcess) -> dict[str, str]:
+        """Build a mapping of BP variable names to PAD-prefixed names.
+
+        Scans all DATA and COLLECTION stages across all pages in the process and builds
+        a single source-of-truth mapping for BP name → PAD name. This ensures consistent
+        variable naming across all references to the same BP data item, whether they appear
+        as declarations, reads, or writes.
+
+        Per architecture doc §A4, BP data item names with spaces are prefixed based on type:
+        - text → txt_
+        - number → num_
+        - collection/collection_data → dtb_ (DataTable)
+        etc.
+
+        Args:
+            process: The BPProcess to scan.
+
+        Returns:
+            Dict mapping lowercase BP names to their PAD-prefixed equivalents.
+            Examples: {'retry_count': 'num_retryCount', 'exception_type': 'txt_ExceptionType'}.
+        """
+        mapping: dict[str, str] = {}
+
+        for page in process.pages:
+            for stage in page.stages:
+                # DATA stages declare variables
+                if stage.stage_type == StageType.DATA:
+                    for data_item in stage.data_items:
+                        bp_name_lower = data_item.name.lower()
+                        if bp_name_lower not in mapping and stage.pa_annotation:
+                            # Use the PAD name from params_map if available
+                            pad_name = stage.pa_annotation.params_map.get(
+                                data_item.name, data_item.name
+                            )
+                            mapping[bp_name_lower] = pad_name
+
+                # COLLECTION stages also declare/reference collection items
+                elif stage.stage_type == StageType.COLLECTION:
+                    for data_item in stage.data_items:
+                        bp_name_lower = data_item.name.lower()
+                        if bp_name_lower not in mapping and stage.pa_annotation:
+                            pad_name = stage.pa_annotation.params_map.get(
+                                data_item.name, data_item.name
+                            )
+                            mapping[bp_name_lower] = pad_name
+
+                # CALCULATION stages can also reference collections in dotted notation
+                elif stage.stage_type == StageType.CALCULATION and stage.pa_annotation:
+                    for target_name in stage.pa_annotation.params_map:
+                        if "." in target_name:
+                            # Extract the base collection name
+                            base_name = target_name.split(".")[0]
+                            base_lower = base_name.lower()
+                            if base_lower not in mapping:
+                                # Try to find the mapped name
+                                pad_name = stage.pa_annotation.params_map.get(base_name, base_name)
+                                mapping[base_lower] = pad_name
+
+        return mapping
+
+    def _resolve_dotted_reference(
+        self,
+        reference: str,
+        variable_name_mapping: dict[str, str] | None = None,
+    ) -> str:
+        """Resolve a dotted reference (Collection.Field) through the variable name mapping.
+
+        Handles references like 'FinalProduct_Collection.Column8' where the base collection
+        name needs to be looked up in the mapping (e.g., FinalProduct_Collection → dtb_finalproductCollection)
+        but the field suffix (.Column8) is preserved.
+
+        Args:
+            reference: The dotted reference string (e.g., 'FinalProduct_Collection.Column8').
+            variable_name_mapping: Optional dict mapping lowercase BP names to PAD names.
+                                   If None, the reference is returned unchanged.
+
+        Returns:
+            The resolved reference with mapped base name, or the original reference if no mapping found.
+            Examples: 'FinalProduct_Collection.Column8' → 'dtb_finalproductCollection.Column8'
+        """
+        if not variable_name_mapping or "." not in reference:
+            return reference
+
+        parts = reference.split(".", 1)
+        base_name = parts[0].strip()
+        field_suffix = parts[1] if len(parts) > 1 else ""
+
+        base_lower = base_name.lower()
+        if base_lower in variable_name_mapping:
+            mapped_base = variable_name_mapping[base_lower]
+            return f"{mapped_base}.{field_suffix}" if field_suffix else mapped_base
+
+        # No mapping found; return original
+        return reference
+
+    def _translate_bp_expression(
+        self,
+        expr: str,
+        variable_name_mapping: dict[str, str] | None = None,
+    ) -> tuple[str, list[str]]:
+        """Translate a BP expression to PAD syntax.
+
+        Handles:
+        - [Data Item] references → variable references (prefixed per §A4)
+        - String concatenation & → +
+        - Trim(...) / Lower(...) → separate action lines returned in the 2nd tuple element
+
+        Per architecture doc §B10 point 3: `Trim(...)`/`Lower(...)` become separate action lines
+        (PAD cannot inline them into expressions).
+
+        Args:
+            expr: The BP expression string.
+            variable_name_mapping: Optional dict mapping lowercase BP names to PAD names.
+
+        Returns:
+            Tuple of (translated_expression, separate_action_lines).
+            The expression has data items and operators translated; separate_action_lines
+            contains any Trim/Lower action lines that must be emitted separately (can be empty).
+
+        Raises:
+            GenerationError: If expression translation fails critically.
+        """
+        if not expr or not expr.strip():
+            return "", []
+
+        separate_actions: list[str] = []
+        result = expr
+
+        # Extract and replace Trim(...) and Lower(...) calls
+        # These must become separate action lines, not be inlined
+        trim_pattern = r"Trim\s*\(\s*([^)]+)\s*\)"
+        for match in re.finditer(trim_pattern, result):
+            inner_expr = match.group(1).strip()
+            # Recursively translate the inner expression
+            translated_inner, inner_actions = self._translate_bp_expression(
+                inner_expr, variable_name_mapping
+            )
+            separate_actions.extend(inner_actions)
+            # Create a temporary variable for the Trim result
+            temp_var = f"txt_trimmed_{id(match)}"
+            action = f"Text.Trim '{translated_inner}' => {temp_var}"
+            separate_actions.append(action)
+            # Replace the Trim call with the temp var
+            result = result.replace(match.group(0), temp_var)
+
+        lower_pattern = r"Lower\s*\(\s*([^)]+)\s*\)"
+        for match in re.finditer(lower_pattern, result):
+            inner_expr = match.group(1).strip()
+            translated_inner, inner_actions = self._translate_bp_expression(
+                inner_expr, variable_name_mapping
+            )
+            separate_actions.extend(inner_actions)
+            # Create a temporary variable for the Lower result
+            temp_var = f"txt_lowered_{id(match)}"
+            action = f"Text.ChangeCase '{translated_inner}' 'To lowercase' => {temp_var}"
+            separate_actions.append(action)
+            result = result.replace(match.group(0), temp_var)
+
+        # Translate [Data Item] references
+        # Pattern: [ClassName] or [ClassName.PropertyName]
+        bracket_pattern = r"\[([^\]]+)\]"
+
+        def replace_bracket_ref(match):
+            ref = match.group(1).strip()
+            if variable_name_mapping and "." in ref:
+                # Dotted reference like [Collection.Field]
+                return self._resolve_dotted_reference(ref, variable_name_mapping)
+            elif variable_name_mapping:
+                # Simple reference like [DataItem]
+                ref_lower = ref.lower()
+                if ref_lower in variable_name_mapping:
+                    return variable_name_mapping[ref_lower]
+            return ref
+
+        result = re.sub(bracket_pattern, replace_bracket_ref, result)
+
+        # Handle bare dotted references (without brackets)
+        bare_dotted_pattern = r"\b([A-Za-z_]\w*)\.\s*([A-Za-z_]\w*)\b"
+
+        def replace_bare_dotted(match):
+            base_name = match.group(1)
+            field_name = match.group(2)
+            base_lower = base_name.lower()
+            if variable_name_mapping and base_lower in variable_name_mapping:
+                mapped_base = variable_name_mapping[base_lower]
+                return f"{mapped_base}.{field_name}"
+            return match.group(0)
+
+        result = re.sub(bare_dotted_pattern, replace_bare_dotted, result)
+
+        # Translate operators: & → +
+        result = result.replace("&", "+")
+
+        return result, separate_actions
+
     def _render_stage(
         self,
         stage: BPStage,
         process: BPProcess | None = None,
         process_map: dict[str, Any] | None = None,
+        variable_name_mapping: dict[str, str] | None = None,
     ) -> str:
         """Render a single stage to Robin action line(s).
 
@@ -1025,9 +1255,11 @@ class PADGenerator:
             stage: An annotated BPStage.
             process: Optional BPProcess (used for SubSheet call resolution).
             process_map: Optional process entry from page_target_map.yaml.
+            variable_name_mapping: Optional dict mapping lowercase BP names to PAD names (Task 5b).
+                                   Used for CALCULATION, DATA, and DECISION stages.
 
         Returns:
-            One or more Robin lines as a string.
+            One or more Robin lines as a string (may include separate Trim/Lower action lines).
 
         Raises:
             GenerationError: If pa_annotation is None.
@@ -1077,15 +1309,43 @@ class PADGenerator:
             lines.append(rendered)
 
         elif target_type == "SetVariable":
+            # SetVariable is a CALCULATION stage setting a BP expression to a variable.
+            # Per architecture doc §B10 point 3, translate the BP expression to PAD syntax.
             set_template = self.env.get_template("actions/set_variable.robin.j2")
             verify_comment = (
                 f"{stage.name} (confidence {annotation.confidence:.2f})"
                 if band == ConfidenceBand.SPOT_CHECK
                 else None
             )
+
+            # Get the target variable name and the BP expression
+            target_var_name = next(iter(annotation.params_map.keys()), stage.name)
+            bp_expr = next(iter(annotation.params_map.values()), "")
+
+            # Map target variable name using dotted reference resolution if needed
+            if variable_name_mapping and "." in target_var_name:
+                mapped_target = self._resolve_dotted_reference(
+                    target_var_name, variable_name_mapping
+                )
+            elif variable_name_mapping:
+                target_lower = target_var_name.lower()
+                mapped_target = variable_name_mapping.get(target_lower, target_var_name)
+            else:
+                mapped_target = target_var_name
+
+            # Translate the BP expression
+            translated_expr, separate_actions = self._translate_bp_expression(
+                bp_expr, variable_name_mapping
+            )
+
+            # Add any separate Trim/Lower action lines
+            for action in separate_actions:
+                lines.append(action)
+
+            # Add the SET variable line
             rendered = set_template.render(
-                var_name=stage.name,
-                value="%SomeVar%",  # Placeholder
+                var_name=mapped_target,
+                value=translated_expr if translated_expr else "%SomeVar%",
                 verify_comment=verify_comment,
             )
             lines.append(rendered)
@@ -1108,9 +1368,23 @@ class PADGenerator:
             lines.append(rendered)
 
         elif target_type == "Condition":
+            # DECISION stage: translate the BP condition expression to PAD syntax.
             cond_template = self.env.get_template("actions/condition.robin.j2")
+
+            # Get the BP condition expression
+            bp_condition = annotation.params_map.get("condition", "[SomeCondition]")
+
+            # Translate the BP expression
+            translated_cond, separate_actions = self._translate_bp_expression(
+                bp_condition, variable_name_mapping
+            )
+
+            # Add any separate Trim/Lower action lines
+            for action in separate_actions:
+                lines.append(action)
+
             rendered = cond_template.render(
-                condition="%SomeVar% = True",  # Placeholder
+                condition=translated_cond if translated_cond else "%SomeVar% = True",
                 band=band.value,
             )
             lines.append(rendered)
