@@ -518,7 +518,7 @@ class PADGenerator:
                 return ""
 
             # Call targets the same role, render it
-            return self._render_call_or_inline(stage, process, process_map)
+            return self._render_call_or_inline(stage, process, process_map, variable_name_mapping)
 
         # Non-call stages are rendered normally
         # Pass process and process_map for SubSheet call resolution
@@ -593,6 +593,7 @@ class PADGenerator:
         stage: BPStage,
         process: BPProcess,
         process_map: dict[str, Any],
+        variable_name_mapping: dict[str, str] | None = None,
     ) -> str:
         """Render a CALL to a target page, or inline its content if mapped as inline_block/fold.
 
@@ -607,6 +608,9 @@ class PADGenerator:
             stage: The SubSheet/Process call stage.
             process: The BPProcess.
             process_map: The process entry from page_target_map.yaml.
+            variable_name_mapping: Optional dict mapping lowercase BP names to PAD names.
+                                   Used for inline_block and fold branches to apply naming
+                                   conventions to DATA/CALCULATION stages within those pages.
 
         Returns:
             Rendered Robin content (CALL, inlined content, or citing comment).
@@ -651,7 +655,7 @@ class PADGenerator:
             # Render the target page's stages
             action_lines: list[str] = []
             for s in target_page.stages:
-                rendered = self._render_stage(s, process, process_map)
+                rendered = self._render_stage(s, process, process_map, variable_name_mapping)
                 if rendered:
                     action_lines.append(rendered)
 
@@ -685,7 +689,7 @@ class PADGenerator:
             # Render the target page's stages
             action_lines: list[str] = []
             for s in target_page.stages:
-                rendered = self._render_stage(s, process, process_map)
+                rendered = self._render_stage(s, process, process_map, variable_name_mapping)
                 if rendered:
                     action_lines.append(rendered)
 
@@ -1113,35 +1117,69 @@ class PADGenerator:
     def _apply_type_prefix(self, name: str, pad_type: str) -> str:
         """Apply the appropriate type prefix to a variable name per architecture doc §A4.
 
+        Strips any pre-existing BP-author-supplied prefix before applying the new one,
+        to avoid doubled prefixes like "bool_flgSendDatatoDataGateways".
+
         Args:
             name: The base variable name (e.g., "Retry Count" or "FinalProduct_Collection").
-            pad_type: The variable type (e.g., "number", "text", "datatable").
+            pad_type: The variable type (e.g., "number", "text", "datatable", "datetime").
 
         Returns:
-            The prefixed name (e.g., "num_retryCount", "dtb_finalproductCollection").
+            The prefixed name (e.g., "num_retryCount", "dtb_finalproductCollection", "dt_currentDateTime").
         """
         # Normalize the type string
         type_lower = pad_type.lower().strip()
 
-        # Determine prefix based on type
+        # Determine prefix based on type per architecture doc §A4
         if type_lower in ("number", "integer", "decimal"):
             prefix = "num_"
         elif type_lower in ("collection", "datatable", "table"):
             prefix = "dtb_"
+        elif type_lower in ("datatabletrow", "tablerow", "row"):
+            prefix = "dtr_"
+        elif type_lower in ("datetime", "date", "time"):
+            prefix = "dt_"
         elif type_lower in ("boolean", "bool", "true/false"):
-            prefix = "bool_"
+            prefix = "flg_"  # Fixed: was "bool_", correct per §A4 is "flg_"
+        elif type_lower in ("customobject", "object"):
+            prefix = "obj_"
+        elif type_lower in ("list", "array"):
+            prefix = "lst_"
         else:  # text, string, or unknown
             prefix = "txt_"
+
+        # Strip any pre-existing BP-author-supplied prefix to avoid doubling
+        # Known prefixes from §A4 + legacy variants (datetm_, bool_)
+        existing_prefixes = {
+            "txt_",
+            "num_",
+            "flg_",
+            "obj_",
+            "lst_",
+            "dtb_",
+            "dtr_",
+            "dt_",
+            "ins_",
+            "bool_",
+            "datetm_",  # legacy variants
+        }
+
+        name_to_process = name
+        for existing_prefix in existing_prefixes:
+            if name.lower().startswith(existing_prefix.lower()):
+                # Found a pre-existing prefix, strip it
+                name_to_process = name[len(existing_prefix) :]
+                break
 
         # Convert name to camelCase: handle both spaces and underscores as word separators
         # Split by both spaces and underscores, then reconstruct in camelCase
         # E.g., "Retry Count" → "retryCount", "FinalProduct_Collection" → "finalproductCollection"
         # First, normalize underscores to spaces for uniform handling
-        name_normalized = name.replace("_", " ")
+        name_normalized = name_to_process.replace("_", " ")
         parts = name_normalized.split()
 
         if not parts:
-            return prefix + name
+            return prefix + name_to_process
 
         # First part is lowercase, rest keep their casing (usually title case)
         camel_case = parts[0].lower() + "".join(parts[1:])
@@ -1336,7 +1374,7 @@ class PADGenerator:
 
         # SubSheet/Process calls: route through mapping (if context available)
         if stage.is_subsheet_call and process and process_map is not None:
-            return self._render_call_or_inline(stage, process, process_map)
+            return self._render_call_or_inline(stage, process, process_map, variable_name_mapping)
 
         # MANUAL band: always render stub
         if band == ConfidenceBand.MANUAL:
