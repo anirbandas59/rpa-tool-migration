@@ -1333,7 +1333,12 @@ class TestOrchestratorCloudFlow:
         cloudflow_dir: Path,
         tmp_path: Path,
     ) -> None:
-        """uiFlowId values are real generated WorkflowIds, not placeholders."""
+        """uiFlowId values are real generated WorkflowIds, not placeholders.
+
+        Task 6a2 introduced nested If conditions for cloud/desktop and attended/unattended
+        branching. The test must navigate through this structure to find the actual
+        RunUIFlow_V2 actions containing the uiFlowIds.
+        """
         output_path = tmp_path / "solution.zip"
         packager.package(
             two_desktop_page_process,
@@ -1345,12 +1350,38 @@ class TestOrchestratorCloudFlow:
 
         data = self._orchestrator(output_path)
         actions = data["properties"]["definition"]["actions"]
-        loader_id = actions["Try:_Loader"]["actions"]["If_Loader_flag_=_yes"]["actions"][
-            "Desktop_Flow_-_Loader"
-        ]["inputs"]["parameters"]["uiFlowId"]
-        performer_id = actions["Try:_Performer"]["actions"]["If_Performer_flag_=_yes"]["actions"][
-            "If_Work_Queue_Items_present"
-        ]["actions"]["Desktop_Flow_-_Performer"]["inputs"]["parameters"]["uiFlowId"]
+
+        # Loader path: Try:_Loader -> If_Loader_flag_=_yes -> If_Loader_type_=_Cloud (else)
+        # -> If_Desktop_run_=_Unattended -> Desktop_Flow_-_Loader_-_Unattended/Attended
+        loader_if_flag = actions["Try:_Loader"]["actions"]["If_Loader_flag_=_yes"]["actions"]
+        loader_if_type = loader_if_flag["If_Loader_type_=_Cloud"]["else"]["actions"]
+        loader_if_unattended = loader_if_type["If_Desktop_run_=_Unattended"]["actions"]
+        loader_id = loader_if_unattended["Desktop_Flow_-_Loader_-_Unattended"]["inputs"][
+            "parameters"
+        ]["uiFlowId"]
+
+        # Also verify the attended path exists
+        loader_if_attended = loader_if_type["If_Desktop_run_=_Unattended"]["else"]["actions"]
+        assert "Desktop_Flow_-_Loader_-_Attended" in loader_if_attended
+
+        # Performer path: Try:_Performer -> If_Performer_flag_=_yes -> If_Work_Queue_Items_present
+        # -> If_Performer_type_=_desktop -> If_performer_run_=_Unattended
+        # -> Desktop_Flow_-_Performer_-_Unattended/Attended
+        performer_if_flag = actions["Try:_Performer"]["actions"]["If_Performer_flag_=_yes"][
+            "actions"
+        ]
+        performer_if_queue = performer_if_flag["If_Work_Queue_Items_present"]["actions"]
+        performer_if_type = performer_if_queue["If_Performer_type_=_desktop"]["actions"]
+        performer_if_unattended = performer_if_type["If_performer_run_=_Unattended"]["actions"]
+        performer_id = performer_if_unattended["Desktop_Flow_-_Performer_-_Unattended"]["inputs"][
+            "parameters"
+        ]["uiFlowId"]
+
+        # Also verify the attended path exists
+        performer_if_attended = performer_if_type["If_performer_run_=_Unattended"]["else"][
+            "actions"
+        ]
+        assert "Desktop_Flow_-_Performer_-_Attended" in performer_if_attended
 
         with zipfile.ZipFile(output_path) as zf:
             root = etree.fromstring(zf.read("customizations.xml"))

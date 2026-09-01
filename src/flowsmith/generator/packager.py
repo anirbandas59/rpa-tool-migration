@@ -110,37 +110,61 @@ class SolutionPackager:
             robin_files = sorted(robin_dir.glob("*.robin"))
             cf_files = sorted(cloudflow_dir.glob("*.json"))
 
-            # Pass 1 — pre-allocate every WorkflowId.
-            #
-            # The Cloud Flow orchestrator references desktop flow WorkflowIds
-            # via `uiFlowId`, but those GUIDs used to be minted inside
-            # build_workflow(), i.e. after the CF JSON would have to exist.
-            # Allocating them up front resolves that forward reference without
-            # changing the CLI's generate-then-package ordering.
             builder = WorkflowBuilder(publisher_prefix=publisher_prefix)
+            cloudflow_generator = CloudFlowGenerator()
 
-            packaged_pages = [
-                (page, robin_file, self._find_cloudflow_file(page, cf_files))
-                for page in process.pages
-                if (robin_file := self._find_robin_file(page, robin_files)) is not None
+            # Detect if we have consolidated output (Task 5a/6a).
+            # Consolidated flows use exactly 2 files: *_Loader.robin, *_Performer.robin.
+            # Per-page flows use individual page names (flow1.robin, flow2.robin, etc.).
+            consolidated_files = [
+                f for f in robin_files if "_Loader.robin" in f.name or "_Performer.robin" in f.name
             ]
-            pages = [page for page, _robin, _cf in packaged_pages]
-            builder.prepare_workflow_ids(pages)
-            desktop_flow_ids = builder.desktop_flow_ids(pages)
 
-            # Orchestrator Cloud Flow — only meaningful when the solution
-            # actually contains desktop flows to invoke.
-            orchestrator_json: str | None = None
-            if desktop_flow_ids:
-                orchestrator_json = CloudFlowGenerator().generate_orchestrator(
-                    process, desktop_flow_ids, publisher_prefix
+            if len(consolidated_files) >= 2:
+                # Task 6a consolidated path: use build_all_workflows_consolidated()
+                # This generates exactly 2 Desktop Flows + 1 orchestrator (3 total).
+                # The orchestrator is already included in builder.workflows, so we
+                # don't generate it separately. Set orchestrator_json to None to
+                # skip the redundant write below.
+                workflows = builder.build_all_workflows_consolidated(
+                    process=process,
+                    robin_files=consolidated_files,
+                    cloudflow_generator=cloudflow_generator,
                 )
+                workflow_ids = [w["workflow_id"] for w in workflows]
+                orchestrator_json = None  # Already in builder.workflows from consolidated build
+            else:
+                # Fallback: per-page path (for backward compatibility or processes with only 1 page)
+                # Pass 1 — pre-allocate every WorkflowId.
+                #
+                # The Cloud Flow orchestrator references desktop flow WorkflowIds
+                # via `uiFlowId`, but those GUIDs used to be minted inside
+                # build_workflow(), i.e. after the CF JSON would have to exist.
+                # Allocating them up front resolves that forward reference without
+                # changing the CLI's generate-then-package ordering.
 
-            # Pass 2 — build the Workflow elements using the allocated GUIDs.
-            workflow_ids = []
-            for page, robin_file, cf_file in packaged_pages:
-                workflow = builder.build_workflow(page, process, robin_file, cf_file)
-                workflow_ids.append(workflow["workflow_id"])
+                packaged_pages = [
+                    (page, robin_file, self._find_cloudflow_file(page, cf_files))
+                    for page in process.pages
+                    if (robin_file := self._find_robin_file(page, robin_files)) is not None
+                ]
+                pages = [page for page, _robin, _cf in packaged_pages]
+                builder.prepare_workflow_ids(pages)
+                desktop_flow_ids = builder.desktop_flow_ids(pages)
+
+                # Orchestrator Cloud Flow — only meaningful when the solution
+                # actually contains desktop flows to invoke.
+                orchestrator_json: str | None = None
+                if desktop_flow_ids:
+                    orchestrator_json = cloudflow_generator.generate_orchestrator(
+                        process, desktop_flow_ids, publisher_prefix
+                    )
+
+                # Pass 2 — build the Workflow elements using the allocated GUIDs.
+                workflow_ids = []
+                for page, robin_file, cf_file in packaged_pages:
+                    workflow = builder.build_workflow(page, process, robin_file, cf_file)
+                    workflow_ids.append(workflow["workflow_id"])
 
             # Prepare template variables
             solution_name = self._sanitise_filename(process.name)
