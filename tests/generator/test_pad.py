@@ -52,6 +52,7 @@ def make_annotated_stage(
     pair_id: str | None = None,
     exception_type: str | None = None,
     params_map: dict[str, str] | None = None,
+    stage_params_map: dict[str, str] | None = None,
     data_items: list[BPDataItem] | None = None,
 ) -> BPStage:
     """Create a BPStage with full PAAnnotation.
@@ -67,7 +68,8 @@ def make_annotated_stage(
         is_subsheet_call: Whether this is a subsheet call.
         pair_id: Partner stage ID for paired stages (BLOCK/WAIT/LOOP).
         exception_type: Exception type string for EXCEPTION/BLOCK stages.
-        params_map: Annotation params_map contents.
+        params_map: Annotation params_map contents (for DATA/COLLECTION stages).
+        stage_params_map: Stage-level params_map contents (for CALCULATION stages, parser shape {target: expr}).
         data_items: Data items declared on the stage.
 
     Returns:
@@ -78,13 +80,14 @@ def make_annotated_stage(
 
     band = ConfidenceBand.from_score(confidence)
 
-    return BPStage(
+    stage = BPStage(
         stage_id=stage_id,
         stage_type=stage_type,
         name=name,
         data_items=data_items or [],
         pair_id=pair_id,
         exception_type=exception_type,
+        params_map=stage_params_map or {},
         pa_annotation=PAAnnotation(
             target_type=target_type,
             target_module=target_module,
@@ -96,6 +99,7 @@ def make_annotated_stage(
         ),
         is_subsheet_call=is_subsheet_call,
     )
+    return stage
 
 
 def make_page(
@@ -892,16 +896,20 @@ def test_calculation_stage_uses_variable_name_mapping_for_target() -> None:
     This is the specific bug the 6th cycle review fixed: CALCULATION stages with
     dotted target names like 'FinalProduct_Collection.Column8' must route through
     _resolve_dotted_reference to get the mapped name, not be left raw.
+
+    Per the 5b re-review, this test's assertion must be a strict positive check,
+    not a weak disjunction that can't fail.
     """
     gen = PADGenerator()
 
     # Create a CALCULATION stage with a dotted target name
+    # Note: stage_params_map contains {target: expression} per parser shape
     calc_stage = make_annotated_stage(
         stage_id="C1",
         name="Write to Collection",
         stage_type=StageType.CALCULATION,
         target_type="SetVariable",
-        params_map={
+        stage_params_map={
             "FinalProduct_Collection.Column8": "[Output_value]",
         },
     )
@@ -913,14 +921,61 @@ def test_calculation_stage_uses_variable_name_mapping_for_target() -> None:
     mapping = gen._build_variable_name_mapping(process)
     # Manually add the collection mapping (in real flow, would come from COLLECTION stage)
     mapping["finalproduct_collection"] = "dtb_FinalProductCollection"
+    mapping["output_value"] = "txt_OutputValue"
 
     # Render the stage with the mapping
     result = gen._render_stage(calc_stage, process, {}, mapping)
 
-    # The rendered result should have the mapped name, not the raw BP name
-    assert (
-        "dtb_FinalProductCollection.Column8" in result
-        or "FinalProduct_Collection.Column8" not in result
+    # The rendered result should have the mapped target name, not the raw BP name
+    # This is a strict positive assertion that will fail if the mapping is not applied
+    assert "dtb_FinalProductCollection.Column8" in result
+
+
+def test_calculation_stage_renders_real_expression_not_placeholder() -> None:
+    """Test that a CALCULATION stage with a known BP expression produces exact expected SET line.
+
+    This is the specific Done-when criterion for Task 5b (per 5b-2026-09-01-rereview.md):
+    'a new test asserts that generating a Calculation stage with a known BP expression
+    produces the exact expected SET txt_ExceptionType TO ... line, not a placeholder.'
+
+    The test verifies:
+    1. A CALCULATION stage with params_map = {"Exception Type": "[Exception Type]"}
+    2. Rendered with variable_name_mapping {"exception type": "txt_ExceptionType"}
+    3. Produces the exact line "SET txt_ExceptionType TO txt_ExceptionType" in output
+    4. Does NOT produce a placeholder line like "SET txt_ExceptionType TO %SomeVar%"
+    """
+    gen = PADGenerator()
+
+    # Create a CALCULATION stage with Exception Type assignment, matching the real corpus
+    calc_stage = make_annotated_stage(
+        stage_id="C1",
+        name="Set Exception Type",
+        stage_type=StageType.CALCULATION,
+        target_type="SetVariable",
+        stage_params_map={
+            "Exception Type": "[Exception Type]",
+        },
+    )
+
+    page = make_page(stages=[calc_stage], is_main=True)
+    process = make_process(pages=[page], name="TestProcess")
+
+    # Build variable name mapping with the known translation
+    mapping = {"exception type": "txt_ExceptionType"}
+
+    # Render the stage through the full pipeline with the mapping
+    result = gen._render_stage(calc_stage, process, {}, mapping)
+
+    # Positive assertion: the exact real translation must appear
+    assert "SET txt_ExceptionType TO txt_ExceptionType" in result, (
+        f"Expected 'SET txt_ExceptionType TO txt_ExceptionType' in rendered output, "
+        f"but got:\n{result}"
+    )
+
+    # Negative assertion: the placeholder must NOT appear
+    assert "%SomeVar%" not in result, (
+        f"Placeholder '%SomeVar%' found in rendered output, indicating expression "
+        f"was not translated:\n{result}"
     )
 
 
