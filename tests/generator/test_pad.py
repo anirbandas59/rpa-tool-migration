@@ -372,18 +372,43 @@ def test_generate_process_creates_files(tmp_path: Path) -> None:
     assert all(f.exists() for f in files)
 
 
-def test_generate_process_one_file_per_page(tmp_path: Path) -> None:
-    """Test that process with N pages generates N files."""
+def test_generate_process_consolidates_by_role_not_one_file_per_page(tmp_path: Path) -> None:
+    """Test that generate_process consolidates pages into 2 role-based files, not N-per-page.
+
+    Stale-baseline fix (was ``test_generate_process_one_file_per_page``, asserted 3 files
+    for 3 pages — the pre-Task-5a per-page architecture). Task 5a replaced that with a
+    2-file consolidation by Loader/Performer role (architecture doc §A3): one file per
+    role, each role's reachable pages folded/inlined into that role's single Desktop Flow
+    body rather than emitted as their own file. A process with pages tagged
+    ``role="loader"``/``role="performer"`` now always produces exactly 2 files regardless
+    of page count — verified against the real samples too
+    (``test_real_sample_generates_2_consolidated_files`` below): both PID_0171 (24 pages)
+    and PID_0127 produce exactly 2 files under this architecture.
+    """
     gen = PADGenerator()
-    page1 = make_page(name="Page1", is_main=True)
-    page2 = make_page(name="Page2", is_main=False)
-    page3 = make_page(name="Page3", is_main=False)
-    process = make_process(pages=[page1, page2, page3])
+    main_page = make_page(name="Main Page", is_main=True)
+    loader_page = BPPage(
+        page_id="LOADER_PAGE",
+        name="Loader Sub-Page",
+        stages=[make_annotated_stage(stage_id="L1", name="Loader Step")],
+        role="loader",
+    )
+    performer_page = BPPage(
+        page_id="PERFORMER_PAGE",
+        name="Performer Sub-Page",
+        stages=[make_annotated_stage(stage_id="P1", name="Performer Step")],
+        role="performer",
+    )
+    process = make_process(pages=[main_page, loader_page, performer_page])
 
     output_dir = tmp_path / "output"
     files = gen.generate_process(process, output_dir)
 
-    assert len(files) == 3
+    assert len(files) == 2, (
+        f"Expected 2 role-consolidated files (Loader, Performer), got {len(files)}: {[f.name for f in files]}"
+    )
+    assert any("Loader" in f.name for f in files)
+    assert any("Performer" in f.name for f in files)
 
 
 def test_generate_process_returns_path_list(tmp_path: Path) -> None:
@@ -966,14 +991,22 @@ def test_split_shape_with_mapping_preserves_variable_consistency() -> None:
 
 
 @pytest.mark.integration
-def test_real_sample_generates_399_files(tmp_path: Path) -> None:
-    """Test that full pipeline generates expected .robin files.
+def test_real_sample_generates_2_consolidated_files(tmp_path: Path) -> None:
+    """Test that full pipeline generates the 2 role-consolidated .robin files.
 
     This test requires the real sample to be present and the full
     pipeline (parser → AST → engine → generator) to work.
 
-    Baseline updated per Task 3a artefact-isolation shrink (docs/reviews/3a-2026-08-30-isolation-fixpass.md):
-    Task 3a's per-artefact page isolation reduced output page count from 399 to 19 files for PID_0127.
+    Stale-baseline fix (was ``test_real_sample_generates_399_files``, most recently
+    asserting 19 — the pre-Task-5a per-page architecture, updated once already per Task 3a's
+    artefact-isolation shrink from 399→19). Task 5a's 2-file role-consolidation
+    (architecture doc §A3 — one Desktop Flow per Loader/Performer role, reachable pages
+    folded/inlined/split into that role's single file rather than emitted as their own file)
+    made the per-page count irrelevant to the output file count. Traced directly: running
+    the real pipeline against ``PID_0127.bprelease`` now produces exactly 2 files
+    (``PID_0127_Process_US_BulkUnlock_Loader.robin``, ``..._Performer.robin``) — confirmed
+    by direct execution, not assumed; also independently confirmed for PID_0171 across
+    multiple Task 5a review cycles (e.g. docs/reviews/5a-2026-08-31-rebuild-fixpass.md).
     """
     sample_path = Path("samples/blueprism/PID_0127.bprelease")
     if not sample_path.exists():
@@ -991,7 +1024,11 @@ def test_real_sample_generates_399_files(tmp_path: Path) -> None:
     gen = PADGenerator()
     files = gen.generate_process(process, tmp_path / "robin")
 
-    assert len(files) == 19
+    assert len(files) == 2, (
+        f"Expected 2 role-consolidated files (Loader, Performer), got {len(files)}: {[f.name for f in files]}"
+    )
+    assert any("Loader" in f.name for f in files)
+    assert any("Performer" in f.name for f in files)
 
 
 @pytest.mark.integration
