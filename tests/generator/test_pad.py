@@ -2140,6 +2140,125 @@ def test_coarse_block_pid171_process_work_queue_items_structure(tmp_path: Path) 
     )
 
 
+def test_coarse_block_fallback_to_error_block_when_no_exception_page() -> None:
+    """Task 5c fix — coarse BLOCK with no exception continuation page uses 'Error Block' dispatch.
+
+    When a coarse BLOCK's body contains no SubSheet call to a page whose name contains
+    "exception", the dispatch-label falls back to the generic 'Error Block' label (which
+    is always present in the epilogue) instead of inventing a synthetic '<block_name> recovery'
+    label that has no matching LABEL definition. This test verifies the fallback path
+    closes the dangling-GOTO bug found in Task 5c's verification pass.
+
+    See: docs/reviews/5c-2026-09-01-head-verify.md (dangling GOTO targets for 6 real
+    BLOCK stages in PID_0171 output).
+    """
+    import re
+
+    gen = PADGenerator()
+
+    # No exception continuation page — only a normal page
+    normal_page = BPPage(
+        page_id="NORMAL_PAGE",
+        name="Process Items",
+        stages=[make_annotated_stage(stage_id="NRM_S1", name="Step")],
+        role="performer",
+    )
+
+    block_stage = BPStage(
+        stage_id="BLOCK1",
+        stage_type=StageType.BLOCK,
+        name="Input Block",  # Name without "exception" in it
+        recover_stage_id="RECOVER1",
+        pa_annotation=PAAnnotation(
+            target_type="BLOCK '<name>' ON BLOCK ERROR ... END <body> END",
+            target_module="System",
+            runtime=Runtime.DESKTOP,
+            params_map={},
+            confidence=0.70,
+            band=ConfidenceBand.SPOT_CHECK,
+            flags=[],
+        ),
+    )
+    normal_call = BPStage(
+        stage_id="NORMAL_CALL",
+        stage_type=StageType.ACTION,
+        name="Process Items",
+        is_subsheet_call=True,
+        processid="NORMAL_PAGE",
+        pa_annotation=PAAnnotation(
+            target_type="RunDesktopFlow",
+            target_module="SubFlow",
+            runtime=Runtime.DESKTOP,
+            params_map={},
+            confidence=0.85,
+            band=ConfidenceBand.SPOT_CHECK,
+            flags=[],
+        ),
+    )
+    recover_stage = BPStage(
+        stage_id="RECOVER1",
+        stage_type=StageType.RECOVER,
+        name="Recover",
+        pa_annotation=PAAnnotation(
+            target_type="",
+            target_module="System",
+            runtime=Runtime.DESKTOP,
+            params_map={},
+            confidence=0.80,
+            band=ConfidenceBand.SPOT_CHECK,
+            flags=[],
+        ),
+    )
+    resume_stage = BPStage(
+        stage_id="RESUME1",
+        stage_type=StageType.RESUME,
+        name="Resume",
+        pa_annotation=PAAnnotation(
+            target_type="",
+            target_module="System",
+            runtime=Runtime.DESKTOP,
+            params_map={},
+            confidence=0.80,
+            band=ConfidenceBand.SPOT_CHECK,
+            flags=[],
+        ),
+    )
+
+    stages = [block_stage, normal_call, recover_stage, resume_stage]
+    process = BPProcess(
+        process_id="TEST",
+        name="TestProcess",
+        version="1.0",
+        source_file="test.bprelease",
+        pages=[
+            BPPage(page_id="MAIN", name="Main Page", stages=stages, is_main=True),
+            normal_page,
+        ],
+    )
+
+    result = gen._render_stage_list_with_coarse_blocks(
+        stages, process, process_map={}, variable_name_mapping=None
+    )
+
+    # 1. Post-block gating IF should route to 'Error Block' (not a synthetic label)
+    assert "IF flg_ErrorOccurred = True THEN" in result, "Post-block gating IF missing"
+    assert "GOTO 'Error Block'" in result, (
+        "Post-block GOTO should dispatch to 'Error Block' when no exception page exists (§A5 fix)"
+    )
+
+    # 2. No synthetic recovery label should be invented (the old buggy behavior)
+    # We should never see "GOTO 'Input Block recovery'" or similar
+    assert "recovery" not in result.lower(), (
+        "Synthetic recovery labels must not be created; use 'Error Block' instead (§A5 fix)"
+    )
+
+    # 3. Verify the GOTO 'Error Block' is correct (not going to a non-existent label)
+    # The LABEL itself is added by _render_goto_epilogue at the page level, but we
+    # verify here that we're using a well-known label name, not inventing one.
+    gotos = set(re.findall(r"GOTO '([^']+)'", result))
+    assert "Error Block" in gotos, "Must GOTO 'Error Block' (a standard label added by epilogue)"
+
+
 def test_accidental_function_name_collision_disambiguation(tmp_path: Path) -> None:
     """Task 6b2: Accidental collisions get disambiguated, not silently dropped.
 

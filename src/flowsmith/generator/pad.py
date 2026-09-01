@@ -1934,10 +1934,10 @@ class PADGenerator:
 
                 # The post-block gating IF dispatches to the exception label (§A5 Do-step 2,
                 # §B15 reference line 1469: "IF flg_ErrorOccurred = True THEN GOTO … END").
-                # If no exception continuation page is found, fall back to '<BLOCK_name> recovery'.
-                dispatch_label = (
-                    exception_label if exception_label is not None else f"{stage.name} recovery"
-                )
+                # If no exception continuation page is found, fall back to 'Error Block', which
+                # is always present in the epilogue (via _render_goto_epilogue) when any GOTO
+                # appears in the body (§A5 architecture doc).
+                dispatch_label = exception_label if exception_label is not None else "Error Block"
 
                 # The skip-GOTO from the Completed section must jump PAST the exception section
                 # to a third label placed after all continuation sections — not to the exception
