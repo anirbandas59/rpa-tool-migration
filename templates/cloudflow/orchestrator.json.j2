@@ -110,27 +110,66 @@
                 "and": [{ "equals": ["@triggerBody()?['boolean']", true] }]
               },
               "actions": {
-                "Desktop_Flow_-_Loader": {
-                  "type": "OpenApiConnection",
-                  "inputs": {
-                    "parameters": {
-                      "uiFlowId": "{{ loader_uiflow_id }}",
-                      "runMode": "attended",
-                      "item/In_txt_Config": "@string(variables('var'))"
-                    },
-                    "host": {
-                      "apiId": "/providers/Microsoft.PowerApps/apis/shared_uiflow",
-                      "operationId": "RunUIFlow_V2",
-                      "connectionName": "shared_uiflow"
-                    },
-                    "authentication": "@parameters('$authentication')"
+                {# Cloud-native loader is a config-selectable option with no PAD implementation yet (architecture doc §A2 lines 88-89). STOP if a real BP process ever needs this path. #}
+                "If_Loader_type_=_Cloud": {
+                  "type": "If",
+                  "expression": {
+                    "and": [{ "equals": ["@toLower(variables('var')?['Ctrl_LoaderType'])", "cloud"] }]
                   },
-                  "runAfter": {}
-                },
-                "Loader_Flow_Success": {
-                  "type": "SetVariable",
-                  "inputs": { "name": "Flow_Status", "value": true },
-                  "runAfter": { "Desktop_Flow_-_Loader": ["Succeeded"] }
+                  "actions": {},
+                  "else": {
+                    "actions": {
+                      "If_Desktop_run_=_Unattended": {
+                        "type": "If",
+                        "expression": {
+                          "and": [{ "equals": ["@toLower(variables('var')?['Ctrl_LoaderUnattendedRun'])", "yes"] }]
+                        },
+                        "actions": {
+                          "Desktop_Flow_-_Loader_-_Unattended": {
+                            "type": "OpenApiConnection",
+                            "inputs": {
+                              "parameters": {
+                                "uiFlowId": "{{ loader_uiflow_id }}",
+                                "runMode": "unattended",
+                                "item/In_txt_Config": "@string(variables('var'))"
+                              },
+                              "host": {
+                                "apiId": "/providers/Microsoft.PowerApps/apis/shared_uiflow",
+                                "operationId": "RunUIFlow_V2",
+                                "connectionName": "shared_uiflow"
+                              },
+                              "authentication": "@parameters('$authentication')"
+                            }
+                          }
+                        },
+                        "else": {
+                          "actions": {
+                            "Desktop_Flow_-_Loader_-_Attended": {
+                              "type": "OpenApiConnection",
+                              "inputs": {
+                                "parameters": {
+                                  "uiFlowId": "{{ loader_uiflow_id }}",
+                                  "runMode": "attended",
+                                  "item/In_txt_Config": "@string(variables('var'))"
+                                },
+                                "host": {
+                                  "apiId": "/providers/Microsoft.PowerApps/apis/shared_uiflow",
+                                  "operationId": "RunUIFlow_V2",
+                                  "connectionName": "shared_uiflow"
+                                },
+                                "authentication": "@parameters('$authentication')"
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "Loader_Flow_Success": {
+                        "type": "SetVariable",
+                        "inputs": { "name": "Flow_Status", "value": true },
+                        "runAfter": { "If_Desktop_run_=_Unattended": ["Succeeded"] }
+                      }
+                    }
+                  }
                 }
               },
               "else": { "actions": {} },
@@ -175,27 +214,64 @@
                     "and": [{ "greater": ["@outputs('Total_Queue_Items')", 0] }]
                   },
                   "actions": {
-                    "Desktop_Flow_-_Performer": {
-                      "type": "OpenApiConnection",
-                      "inputs": {
-                        "parameters": {
-                          "uiFlowId": "{{ performer_uiflow_id }}",
-                          "runMode": "attended",
-                          "item/In_txt_Config": "@string(variables('var'))"
-                        },
-                        "host": {
-                          "apiId": "/providers/Microsoft.PowerApps/apis/shared_uiflow",
-                          "operationId": "RunUIFlow_V2",
-                          "connectionName": "shared_uiflow"
-                        },
-                        "authentication": "@parameters('$authentication')"
+                    "If_Performer_type_=_desktop": {
+                      "type": "If",
+                      "expression": {
+                        "and": [{ "equals": ["@toLower(variables('var')?['Ctrl_PerfomerType'])", "desktop"] }]
                       },
-                      "runAfter": {}
-                    },
-                    "Performer_Flow_Success": {
-                      "type": "SetVariable",
-                      "inputs": { "name": "Flow_Status", "value": true },
-                      "runAfter": { "Desktop_Flow_-_Performer": ["Succeeded"] }
+                      "actions": {
+                        "If_performer_run_=_Unattended": {
+                          "type": "If",
+                          "expression": {
+                            "and": [{ "equals": ["@toLower(variables('var')?['Ctrl_PerfomerUnattendedRun'])", "yes"] }]
+                          },
+                          "actions": {
+                            "Desktop_Flow_-_Performer_-_Unattended": {
+                              "type": "OpenApiConnection",
+                              "inputs": {
+                                "parameters": {
+                                  "uiFlowId": "{{ performer_uiflow_id }}",
+                                  "runMode": "unattended",
+                                  "item/In_txt_Config": "@string(variables('var'))"
+                                },
+                                "host": {
+                                  "apiId": "/providers/Microsoft.PowerApps/apis/shared_uiflow",
+                                  "operationId": "RunUIFlow_V2",
+                                  "connectionName": "shared_uiflow"
+                                },
+                                "authentication": "@parameters('$authentication')"
+                              }
+                            }
+                          },
+                          "else": {
+                            "actions": {
+                              "Desktop_Flow_-_Performer_-_Attended": {
+                                "type": "OpenApiConnection",
+                                "inputs": {
+                                  "parameters": {
+                                    "uiFlowId": "{{ performer_uiflow_id }}",
+                                    "runMode": "attended",
+                                    "item/In_txt_Config": "@string(variables('var'))"
+                                  },
+                                  "host": {
+                                    "apiId": "/providers/Microsoft.PowerApps/apis/shared_uiflow",
+                                    "operationId": "RunUIFlow_V2",
+                                    "connectionName": "shared_uiflow"
+                                  },
+                                  "authentication": "@parameters('$authentication')"
+                                }
+                              }
+                            }
+                          }
+                        },
+                        "Performer_Flow_Success": {
+                          "type": "SetVariable",
+                          "inputs": { "name": "Flow_Status", "value": true },
+                          "runAfter": { "If_performer_run_=_Unattended": ["Succeeded"] }
+                        }
+                      },
+                      {# Non-desktop performer type has no PAD implementation yet (architecture doc §A2 line 107). STOP if a real BP process ever needs this path. #}
+                      "else": { "actions": {} }
                     }
                   },
                   "else": { "actions": {} },
@@ -204,9 +280,253 @@
               },
               "else": { "actions": {} },
               "runAfter": {}
+            },
+            "Respond_to_a_Power_App_or_flow_-_Success": {
+              "type": "Response",
+              "kind": "PowerApp",
+              "inputs": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "out_txt_mainflow_status": {
+                      "title": "Out_txt_MainFlow_Status",
+                      "type": "string",
+                      "x-ms-content-hint": "TEXT",
+                      "x-ms-dynamically-added": true
+                    }
+                  },
+                  "additionalProperties": {}
+                },
+                "statusCode": 200,
+                "body": { "out_txt_mainflow_status": "Success" }
+              },
+              "runAfter": { "If_Performer_flag_=_yes": ["Succeeded"] },
+              "operationOptions": "Asynchronous"
             }
           },
           "runAfter": { "Try:_Loader": ["Succeeded"] }
+        },
+        "Catch:_Init": {
+          "type": "Scope",
+          "actions": {
+            "Get_CurrentDateTime_-_Init": {
+              "type": "Compose",
+              "inputs": "@formatDateTime(utcNow(), 'MM/dd/yyyy hh:mm:ss tt')"
+            },
+            "Init_Flow_Exception": {
+              "type": "SetVariable",
+              "inputs": {
+                "name": "Exception_Message",
+                "value": "{{ init_failure_email_expr }}"
+              },
+              "runAfter": { "Get_CurrentDateTime_-_Init": ["Succeeded"] }
+            },
+            "Get_Current_workflow_Details_-_Init_failure": {
+              "type": "Compose",
+              "inputs": "@workflow()",
+              "runAfter": { "Init_Flow_Exception": ["Succeeded"] }
+            },
+            "Send_an_email_(V2)_-_Init_Flow_Failure": {
+              "type": "OpenApiConnection",
+              "inputs": {
+                "parameters": {
+                  "emailMessage/To": "{{ init_email_recipient }}",
+                  "emailMessage/Subject": "@{workflow()?['tags']['flowDisplayName']} - Init System Exception - @{outputs('Get_CurrentDateTime_-_Init')}",
+                  "emailMessage/Body": "<p>An exception occurred during initialization in the Power Automate flow.</p><p>Flow name: @{workflow()?['tags']['flowDisplayName']}</p><p>Error message: @{variables('Exception_Message')}</p>",
+                  "emailMessage/Importance": "Normal"
+                },
+                "host": {
+                  "apiId": "/providers/Microsoft.PowerApps/apis/shared_office365",
+                  "operationId": "SendEmailV2",
+                  "connectionName": "shared_office365-1"
+                },
+                "authentication": "@parameters('$authentication')"
+              },
+              "runAfter": { "Get_Current_workflow_Details_-_Init_failure": ["Succeeded"] }
+            },
+            "Terminate_Flow_-_Init": {
+              "type": "Terminate",
+              "inputs": {
+                "runStatus": "Failed",
+                "runError": {
+                  "code": "Run a flow built with Power Automate for desktop Failed",
+                  "message": "@variables('Exception_Message')"
+                }
+              },
+              "runAfter": { "Respond_to_a_Power_App_or_flow_-_Init_fail": ["Succeeded"] }
+            },
+            "Respond_to_a_Power_App_or_flow_-_Init_fail": {
+              "type": "Response",
+              "kind": "PowerApp",
+              "inputs": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "out_txt_mainflow_status": {
+                      "title": "Out_txt_MainFlow_Status",
+                      "type": "string",
+                      "x-ms-content-hint": "TEXT",
+                      "x-ms-dynamically-added": true
+                    }
+                  },
+                  "additionalProperties": {}
+                },
+                "statusCode": 200,
+                "body": { "out_txt_mainflow_status": "@{variables('Exception_Message')}" }
+              },
+              "runAfter": { "Send_an_email_(V2)_-_Init_Flow_Failure": ["Succeeded"] },
+              "operationOptions": "Asynchronous"
+            }
+          },
+          "runAfter": { "Try:_Init": ["Failed", "TimedOut"] }
+        },
+        "Catch:_Loader": {
+          "type": "Scope",
+          "actions": {
+            "Get_CurrentDateTime_-_Loader": {
+              "type": "Compose",
+              "inputs": "@formatDateTime(utcNow(), 'MM/dd/yyyy hh:mm:ss tt')"
+            },
+            "Loader_Flow_Exception": {
+              "type": "SetVariable",
+              "inputs": {
+                "name": "Exception_Message",
+                "value": "@coalesce(outputs('Desktop_Flow_-_Loader_-_Attended')?['body']?['error']?['message'], outputs('Desktop_Flow_-_Loader_-_Unattended')?['body']?['error']?['message'], 'Unknown error')"
+              },
+              "runAfter": { "Get_CurrentDateTime_-_Loader": ["Succeeded"] }
+            },
+            "Get_Current_workflow_Details_-_Loader_failure": {
+              "type": "Compose",
+              "inputs": "@workflow()",
+              "runAfter": { "Loader_Flow_Exception": ["Succeeded"] }
+            },
+            "Send_an_email_(V2)_-_Loader_Flow_Failure": {
+              "type": "OpenApiConnection",
+              "inputs": {
+                "parameters": {
+                  "emailMessage/To": "@variables('var')?['Mail_SystemExceptionTo']",
+                  "emailMessage/Subject": "@{workflow()?['tags']['flowDisplayName']} - Loader System Exception - @{outputs('Get_CurrentDateTime_-_Loader')}",
+                  "emailMessage/Body": "<p>An exception occurred in the Loader phase of the Power Automate flow.</p><p>Flow name: @{workflow()?['tags']['flowDisplayName']}</p><p>Error message: @{variables('Exception_Message')}</p>",
+                  "emailMessage/Importance": "Normal"
+                },
+                "host": {
+                  "apiId": "/providers/Microsoft.PowerApps/apis/shared_office365",
+                  "operationId": "SendEmailV2",
+                  "connectionName": "shared_office365-1"
+                },
+                "authentication": "@parameters('$authentication')"
+              },
+              "runAfter": { "Get_Current_workflow_Details_-_Loader_failure": ["Succeeded"] }
+            },
+            "Terminate_Flow_-_Loader": {
+              "type": "Terminate",
+              "inputs": {
+                "runStatus": "Failed",
+                "runError": {
+                  "code": "Run a flow built with Power Automate for desktop Failed",
+                  "message": "@variables('Exception_Message')"
+                }
+              },
+              "runAfter": { "Respond_to_a_Power_App_or_flow_-_Loader_fail": ["Succeeded"] }
+            },
+            "Respond_to_a_Power_App_or_flow_-_Loader_fail": {
+              "type": "Response",
+              "kind": "PowerApp",
+              "inputs": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "out_txt_mainflow_status": {
+                      "title": "Out_txt_MainFlow_Status",
+                      "type": "string",
+                      "x-ms-content-hint": "TEXT",
+                      "x-ms-dynamically-added": true
+                    }
+                  },
+                  "additionalProperties": {}
+                },
+                "statusCode": 200,
+                "body": { "out_txt_mainflow_status": "@{variables('Exception_Message')}" }
+              },
+              "runAfter": { "Send_an_email_(V2)_-_Loader_Flow_Failure": ["Succeeded"] },
+              "operationOptions": "Asynchronous"
+            }
+          },
+          "runAfter": { "Try:_Loader": ["Failed", "TimedOut"] }
+        },
+        "Catch:_Performer": {
+          "type": "Scope",
+          "actions": {
+            "Get_CurrentDateTime_-_Performer": {
+              "type": "Compose",
+              "inputs": "@formatDateTime(utcNow(), 'MM/dd/yyyy hh:mm:ss tt')"
+            },
+            "Performer_Flow_Exception": {
+              "type": "SetVariable",
+              "inputs": {
+                "name": "Exception_Message",
+                "value": "@coalesce(outputs('Desktop_Flow_-_Performer_-_Attended')?['body']?['error']?['message'], outputs('Desktop_Flow_-_Performer_-_Unattended')?['body']?['error']?['message'], 'Unknown error')"
+              },
+              "runAfter": { "Get_CurrentDateTime_-_Performer": ["Succeeded"] }
+            },
+            "Get_Current_workflow_Details_-_Performer_failure": {
+              "type": "Compose",
+              "inputs": "@workflow()",
+              "runAfter": { "Performer_Flow_Exception": ["Succeeded"] }
+            },
+            "Send_an_email_(V2)_-_Performer_Flow_Failure": {
+              "type": "OpenApiConnection",
+              "inputs": {
+                "parameters": {
+                  "emailMessage/To": "@variables('var')?['Mail_SystemExceptionTo']",
+                  "emailMessage/Subject": "@{workflow()?['tags']['flowDisplayName']} - Performer System Exception - @{outputs('Get_CurrentDateTime_-_Performer')}",
+                  "emailMessage/Body": "<p>An exception occurred in the Performer phase of the Power Automate flow.</p><p>Flow name: @{workflow()?['tags']['flowDisplayName']}</p><p>Error message: @{variables('Exception_Message')}</p>",
+                  "emailMessage/Importance": "Normal"
+                },
+                "host": {
+                  "apiId": "/providers/Microsoft.PowerApps/apis/shared_office365",
+                  "operationId": "SendEmailV2",
+                  "connectionName": "shared_office365-1"
+                },
+                "authentication": "@parameters('$authentication')"
+              },
+              "runAfter": { "Get_Current_workflow_Details_-_Performer_failure": ["Succeeded"] }
+            },
+            "Terminate_Flow_-_Performer": {
+              "type": "Terminate",
+              "inputs": {
+                "runStatus": "Failed",
+                "runError": {
+                  "code": "Run a flow built with Power Automate for desktop Failed",
+                  "message": "@variables('Exception_Message')"
+                }
+              },
+              "runAfter": { "Respond_to_a_Power_App_or_flow_-_Performer_fail": ["Succeeded"] }
+            },
+            "Respond_to_a_Power_App_or_flow_-_Performer_fail": {
+              "type": "Response",
+              "kind": "PowerApp",
+              "inputs": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "out_txt_mainflow_status": {
+                      "title": "Out_txt_MainFlow_Status",
+                      "type": "string",
+                      "x-ms-content-hint": "TEXT",
+                      "x-ms-dynamically-added": true
+                    }
+                  },
+                  "additionalProperties": {}
+                },
+                "statusCode": 200,
+                "body": { "out_txt_mainflow_status": "@{variables('Exception_Message')}" }
+              },
+              "runAfter": { "Send_an_email_(V2)_-_Performer_Flow_Failure": ["Succeeded"] },
+              "operationOptions": "Asynchronous"
+            }
+          },
+          "runAfter": { "Try:_Performer": ["Failed", "TimedOut"] }
         },
         "Catch:_Global_Error_Handler": {
           "type": "Scope",
@@ -249,12 +569,34 @@
                 "authentication": "@parameters('$authentication')"
               },
               "runAfter": { "Get_workflow_details": ["Succeeded"] }
+            },
+            "Respond_to_a_Power_App_or_flow_-_Global_fail": {
+              "type": "Response",
+              "kind": "PowerApp",
+              "inputs": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "out_txt_mainflow_status": {
+                      "title": "Out_txt_MainFlow_Status",
+                      "type": "string",
+                      "x-ms-content-hint": "TEXT",
+                      "x-ms-dynamically-added": true
+                    }
+                  },
+                  "additionalProperties": {}
+                },
+                "statusCode": 200,
+                "body": { "out_txt_mainflow_status": "@{variables('Exception_Message')}" }
+              },
+              "runAfter": { "Send_an_email_(V2)": ["Succeeded"] },
+              "operationOptions": "Asynchronous"
             }
           },
           "runAfter": {
-            "Try:_Init": ["Failed", "TimedOut"],
-            "Try:_Loader": ["Failed", "TimedOut"],
-            "Try:_Performer": ["Failed", "TimedOut"]
+            "Catch:_Performer": ["Succeeded", "Failed", "TimedOut"],
+            "Catch:_Init": ["Succeeded", "TimedOut", "Failed"],
+            "Catch:_Loader": ["Succeeded", "TimedOut", "Failed"]
           }
         }
       }

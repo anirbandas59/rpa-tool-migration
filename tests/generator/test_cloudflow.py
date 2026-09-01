@@ -541,9 +541,14 @@ def test_orchestrator_trigger_is_button() -> None:
 
 
 def test_orchestrator_top_level_scopes() -> None:
-    """All four Try/Catch scopes are present at the top level."""
+    """All four Try/Catch scopes and individual Catch scopes are present."""
     actions = orchestrator_json()["properties"]["definition"]["actions"]
-    for name in ("Try:_Init", "Try:_Loader", "Try:_Performer", "Catch:_Global_Error_Handler"):
+    # Try scopes
+    for name in ("Try:_Init", "Try:_Loader", "Try:_Performer"):
+        assert name in actions
+        assert actions[name]["type"] == "Scope"
+    # Catch scopes
+    for name in ("Catch:_Init", "Catch:_Loader", "Catch:_Performer", "Catch:_Global_Error_Handler"):
         assert name in actions
         assert actions[name]["type"] == "Scope"
 
@@ -551,13 +556,24 @@ def test_orchestrator_top_level_scopes() -> None:
 def test_orchestrator_loader_invokes_real_desktop_flow_id() -> None:
     """Try:_Loader invokes RunUIFlow_V2 with the generated Loader WorkflowId."""
     actions = orchestrator_json()["properties"]["definition"]["actions"]
+    # Navigate through nested If statements to find the unattended desktop flow
     invocation = actions["Try:_Loader"]["actions"]["If_Loader_flag_=_yes"]["actions"][
-        "Desktop_Flow_-_Loader"
+        "If_Loader_type_=_Cloud"
+    ]["else"]["actions"]["If_Desktop_run_=_Unattended"]["actions"][
+        "Desktop_Flow_-_Loader_-_Unattended"
     ]
     assert invocation["type"] == "OpenApiConnection"
     assert invocation["inputs"]["host"]["operationId"] == "RunUIFlow_V2"
     assert invocation["inputs"]["host"]["connectionName"] == "shared_uiflow"
     assert invocation["inputs"]["parameters"]["uiFlowId"] == DESKTOP_FLOW_IDS["Loader"]
+    # Also check attended version
+    attended = actions["Try:_Loader"]["actions"]["If_Loader_flag_=_yes"]["actions"][
+        "If_Loader_type_=_Cloud"
+    ]["else"]["actions"]["If_Desktop_run_=_Unattended"]["else"]["actions"][
+        "Desktop_Flow_-_Loader_-_Attended"
+    ]
+    assert attended["inputs"]["parameters"]["uiFlowId"] == DESKTOP_FLOW_IDS["Loader"]
+    assert attended["inputs"]["parameters"]["runMode"] == "attended"
 
 
 def test_orchestrator_performer_invokes_real_desktop_flow_id() -> None:
@@ -565,16 +581,23 @@ def test_orchestrator_performer_invokes_real_desktop_flow_id() -> None:
     actions = orchestrator_json()["properties"]["definition"]["actions"]
     performer = actions["Try:_Performer"]["actions"]["If_Performer_flag_=_yes"]["actions"][
         "If_Work_Queue_Items_present"
-    ]["actions"]["Desktop_Flow_-_Performer"]
+    ]["actions"]["If_Performer_type_=_desktop"]["actions"]["If_performer_run_=_Unattended"][
+        "actions"
+    ]["Desktop_Flow_-_Performer_-_Unattended"]
     assert performer["inputs"]["parameters"]["uiFlowId"] == DESKTOP_FLOW_IDS["Performer"]
+    assert performer["inputs"]["parameters"]["runMode"] == "unattended"
 
 
 def test_orchestrator_catch_runs_after_all_try_scopes() -> None:
-    """The global error handler runs after every Try scope fails or times out."""
+    """Catch:_Global_Error_Handler is the outer safety net running after all other catches."""
     actions = orchestrator_json()["properties"]["definition"]["actions"]
     run_after = actions["Catch:_Global_Error_Handler"]["runAfter"]
-    assert set(run_after) == {"Try:_Init", "Try:_Loader", "Try:_Performer"}
-    assert run_after["Try:_Loader"] == ["Failed", "TimedOut"]
+    # Catch:_Global_Error_Handler waits on all three Catch scopes (which themselves gate the Try scopes)
+    assert set(run_after) == {"Catch:_Init", "Catch:_Loader", "Catch:_Performer"}
+    # Each catch should run after all three statuses
+    assert set(run_after["Catch:_Init"]) == {"Succeeded", "TimedOut", "Failed"}
+    assert set(run_after["Catch:_Loader"]) == {"Succeeded", "TimedOut", "Failed"}
+    assert set(run_after["Catch:_Performer"]) == {"Succeeded", "Failed", "TimedOut"}
 
 
 def test_orchestrator_single_desktop_flow_fills_both_roles() -> None:
@@ -582,11 +605,15 @@ def test_orchestrator_single_desktop_flow_fills_both_roles() -> None:
     data = orchestrator_json(desktop_flow_ids={"Main": "ONLY-ONE-ID"})
     actions = data["properties"]["definition"]["actions"]
     loader = actions["Try:_Loader"]["actions"]["If_Loader_flag_=_yes"]["actions"][
-        "Desktop_Flow_-_Loader"
+        "If_Loader_type_=_Cloud"
+    ]["else"]["actions"]["If_Desktop_run_=_Unattended"]["actions"][
+        "Desktop_Flow_-_Loader_-_Unattended"
     ]
     performer = actions["Try:_Performer"]["actions"]["If_Performer_flag_=_yes"]["actions"][
         "If_Work_Queue_Items_present"
-    ]["actions"]["Desktop_Flow_-_Performer"]
+    ]["actions"]["If_Performer_type_=_desktop"]["actions"]["If_performer_run_=_Unattended"][
+        "actions"
+    ]["Desktop_Flow_-_Performer_-_Unattended"]
     assert loader["inputs"]["parameters"]["uiFlowId"] == "ONLY-ONE-ID"
     assert performer["inputs"]["parameters"]["uiFlowId"] == "ONLY-ONE-ID"
 
@@ -596,6 +623,127 @@ def test_orchestrator_without_desktop_flows_raises() -> None:
     gen = CloudFlowGenerator()
     with pytest.raises(GenerationError):
         gen.generate_orchestrator(make_process(), {}, publisher_prefix="cr3ac")
+
+
+def test_orchestrator_has_success_response() -> None:
+    """Try:_Performer contains a success Response with out_txt_mainflow_status == Success."""
+    actions = orchestrator_json()["properties"]["definition"]["actions"]
+    response = actions["Try:_Performer"]["actions"]["Respond_to_a_Power_App_or_flow_-_Success"]
+    assert response["type"] == "Response"
+    assert response["kind"] == "PowerApp"
+    assert response["inputs"]["statusCode"] == 200
+    assert response["inputs"]["body"]["out_txt_mainflow_status"] == "Success"
+    assert response["runAfter"]["If_Performer_flag_=_yes"] == ["Succeeded"]
+    assert response["operationOptions"] == "Asynchronous"
+
+
+def test_orchestrator_has_four_catch_scopes() -> None:
+    """Exactly 4 Catch scopes exist with correct dependencies."""
+    actions = orchestrator_json()["properties"]["definition"]["actions"]
+    catch_names = {
+        "Catch:_Init",
+        "Catch:_Loader",
+        "Catch:_Performer",
+        "Catch:_Global_Error_Handler",
+    }
+    actual_catches = {n for n in actions if n.startswith("Catch:")}
+    assert actual_catches == catch_names
+
+    # Verify Catch:_Init runs after Try:_Init
+    assert actions["Catch:_Init"]["runAfter"] == {"Try:_Init": ["Failed", "TimedOut"]}
+
+    # Verify Catch:_Loader runs after Try:_Loader
+    assert actions["Catch:_Loader"]["runAfter"] == {"Try:_Loader": ["Failed", "TimedOut"]}
+
+    # Verify Catch:_Performer runs after Try:_Performer
+    assert actions["Catch:_Performer"]["runAfter"] == {"Try:_Performer": ["Failed", "TimedOut"]}
+
+
+def test_orchestrator_catch_init_exception_message_from_try_init_errors() -> None:
+    """Catch:_Init's Exception_Message coalesces from Try:_Init action error outputs, not email recipient."""
+    actions = orchestrator_json()["properties"]["definition"]["actions"]
+    catch_init = actions["Catch:_Init"]["actions"]
+
+    # Verify the SetVariable action for Exception_Message
+    init_flow_exception = catch_init["Init_Flow_Exception"]
+    assert init_flow_exception["type"] == "SetVariable"
+    assert init_flow_exception["inputs"]["name"] == "Exception_Message"
+
+    # Verify the value is a coalesce of Try:_Init action outputs
+    exception_value = init_flow_exception["inputs"]["value"]
+    assert "outputs('Compose:_Config')" in exception_value
+    assert "outputs('Set_Config_value')" in exception_value
+    assert "@coalesce(" in exception_value
+    # Ensure it references actual Try:_Init actions, not the email parameter
+    assert "Generic_SupportTeam_EmailID" not in exception_value
+    assert "Mail_SystemExceptionTo" not in exception_value
+
+
+def test_orchestrator_catch_scopes_have_response_actions() -> None:
+    """Each individual Catch:_* scope contains a Terminate and Response action."""
+    actions = orchestrator_json()["properties"]["definition"]["actions"]
+    # Check individual catch scopes (not Global_Error_Handler, which is an outer safety net)
+    for catch_name in ["Catch:_Init", "Catch:_Loader", "Catch:_Performer"]:
+        catch = actions[catch_name]["actions"]
+        # Each individual catch has a Terminate
+        terminate_actions = [n for n in catch if catch[n]["type"] == "Terminate"]
+        assert len(terminate_actions) >= 1, f"{catch_name} has no Terminate action"
+        # Each individual catch has a Response
+        response_actions = [n for n in catch if catch[n]["type"] == "Response"]
+        assert len(response_actions) >= 1, f"{catch_name} has no Response action"
+
+    # Global Error Handler has only Response (no Terminate, it's an outer wrapper)
+    global_catch = actions["Catch:_Global_Error_Handler"]["actions"]
+    response_actions = [n for n in global_catch if global_catch[n]["type"] == "Response"]
+    assert len(response_actions) >= 1, "Catch:_Global_Error_Handler has no Response action"
+
+
+def test_orchestrator_loader_has_attended_unattended_branches() -> None:
+    """Try:_Loader branches on Ctrl_LoaderUnattendedRun for attended/unattended modes."""
+    actions = orchestrator_json()["properties"]["definition"]["actions"]
+    loader_ifs = actions["Try:_Loader"]["actions"]["If_Loader_flag_=_yes"]["actions"]
+    # Check cloud/desktop branching
+    cloud_if = loader_ifs["If_Loader_type_=_Cloud"]
+    assert "@toLower(variables('var')?['Ctrl_LoaderType'])" in str(cloud_if["expression"])
+
+    # Check attended/unattended branching in else branch
+    unattended_if = cloud_if["else"]["actions"]["If_Desktop_run_=_Unattended"]
+    assert "@toLower(variables('var')?['Ctrl_LoaderUnattendedRun'])" in str(
+        unattended_if["expression"]
+    )
+
+    # Check unattended call
+    unattended_call = unattended_if["actions"]["Desktop_Flow_-_Loader_-_Unattended"]
+    assert unattended_call["inputs"]["parameters"]["runMode"] == "unattended"
+
+    # Check attended call
+    attended_call = unattended_if["else"]["actions"]["Desktop_Flow_-_Loader_-_Attended"]
+    assert attended_call["inputs"]["parameters"]["runMode"] == "attended"
+
+
+def test_orchestrator_performer_has_desktop_type_branches() -> None:
+    """Try:_Performer branches on Ctrl_PerfomerType and Ctrl_PerfomerUnattendedRun."""
+    actions = orchestrator_json()["properties"]["definition"]["actions"]
+    performer_if = actions["Try:_Performer"]["actions"]["If_Performer_flag_=_yes"]["actions"][
+        "If_Work_Queue_Items_present"
+    ]["actions"]["If_Performer_type_=_desktop"]
+
+    # Check desktop type branching
+    assert "@toLower(variables('var')?['Ctrl_PerfomerType'])" in str(performer_if["expression"])
+
+    # Check attended/unattended branching
+    unattended_if = performer_if["actions"]["If_performer_run_=_Unattended"]
+    assert "@toLower(variables('var')?['Ctrl_PerfomerUnattendedRun'])" in str(
+        unattended_if["expression"]
+    )
+
+    # Check unattended call
+    unattended_call = unattended_if["actions"]["Desktop_Flow_-_Performer_-_Unattended"]
+    assert unattended_call["inputs"]["parameters"]["runMode"] == "unattended"
+
+    # Check attended call
+    attended_call = unattended_if["else"]["actions"]["Desktop_Flow_-_Performer_-_Attended"]
+    assert attended_call["inputs"]["parameters"]["runMode"] == "attended"
 
 
 def test_page_flow_has_connection_references() -> None:

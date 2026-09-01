@@ -310,7 +310,7 @@ class CloudFlowGenerator:
             GenerationError: If `desktop_flow_ids` is empty, template rendering
                 fails, or the rendered result is not valid JSON.
         """
-        loader_id, performer_id = self._resolve_role_ids(desktop_flow_ids)
+        loader_id, performer_id = self._resolve_role_ids(process, desktop_flow_ids)
 
         modules = [
             stage.pa_annotation.target_module
@@ -326,6 +326,11 @@ class CloudFlowGenerator:
         parameters = self._build_parameters(process, publisher_prefix)
         config_compose = self._build_config_compose(process, publisher_prefix)
 
+        # Resolve the Catch:_Init email recipient from environment variables
+        init_email_recipient, init_failure_email_expr = self._resolve_init_email_recipient(
+            process, publisher_prefix
+        )
+
         try:
             template = self.env.get_template("orchestrator.json.j2")
             rendered = template.render(
@@ -334,6 +339,8 @@ class CloudFlowGenerator:
                 config_compose_json=json.dumps(config_compose, indent=2),
                 loader_uiflow_id=loader_id,
                 performer_uiflow_id=performer_id,
+                init_email_recipient=init_email_recipient,
+                init_failure_email_expr=init_failure_email_expr,
             )
         except Exception as e:
             raise GenerationError(
@@ -349,17 +356,20 @@ class CloudFlowGenerator:
 
         return json.dumps(parsed, indent=2)
 
-    @staticmethod
-    def _resolve_role_ids(desktop_flow_ids: dict[str, str]) -> tuple[str, str]:
-        """Pick the Loader and Performer WorkflowIds from the desktop flow map.
+    def _resolve_role_ids(
+        self, process: BPProcess, desktop_flow_ids: dict[str, str]
+    ) -> tuple[str, str]:
+        """Pick the Loader and Performer WorkflowIds using structural role tagging.
 
-        Matches on page name first ("loader" / "performer" or "main"), and
-        falls back to positional order. When only one desktop flow exists it
-        fills both roles, so the generated CF JSON still references a real
-        WorkflowId rather than a placeholder.
+        Task 4b introduced structural role tagging on BPPage objects. This method
+        uses the AST's role field instead of heuristic page-name guessing.
+
+        Falls back to positional ordering if no role-tagged pages exist (for
+        backward compatibility with test fixtures).
 
         Args:
-            desktop_flow_ids: Map of desktop flow page name → WorkflowId GUID.
+            process: The BPProcess whose pages carry role tagging.
+            desktop_flow_ids: Map of desktop flow page/role name → WorkflowId GUID.
 
         Returns:
             Tuple of (loader_workflow_id, performer_workflow_id).
@@ -373,8 +383,23 @@ class CloudFlowGenerator:
                 "WorkflowIds were supplied."
             )
 
-        names = list(desktop_flow_ids)
+        # Try to find role-tagged pages first (Task 4b)
+        loader_id = None
+        performer_id = None
 
+        for page in process.pages:
+            role = getattr(page, "role", None)
+            if role and role.lower() == "loader" and loader_id is None:
+                loader_id = desktop_flow_ids.get(page.name)
+            elif role and role.lower() == "performer" and performer_id is None:
+                performer_id = desktop_flow_ids.get(page.name)
+
+        # If role-tagged pages found both roles, use them
+        if loader_id and performer_id:
+            return loader_id, performer_id
+
+        # Fallback: guess by desktop_flow_ids names (for backward compatibility)
+        names = list(desktop_flow_ids)
         loader_name = next((n for n in names if "loader" in n.lower()), names[0])
         performer_name = next(
             (n for n in names if n != loader_name and "performer" in n.lower()),
@@ -385,6 +410,50 @@ class CloudFlowGenerator:
         )
 
         return desktop_flow_ids[loader_name], desktop_flow_ids[performer_name]
+
+    def _resolve_init_email_recipient(
+        self,
+        process: BPProcess,
+        publisher_prefix: str,
+    ) -> tuple[str, str]:
+        """Resolve email recipient and error message expression for Catch:_Init.
+
+        Looks for the `Generic_SupportTeam_EmailID` environment variable to use
+        as the config-load-failure notification recipient (email To field).
+        Separately, produces a coalesce expression to extract error details from
+        Try:_Init's actual action outputs.
+
+        Args:
+            process: The BPProcess whose environment variables to search.
+            publisher_prefix: Publisher customisation prefix for schema names.
+
+        Returns:
+            A tuple of (init_email_recipient, init_failure_email_expr):
+            - init_email_recipient: Email recipient expression or TODO placeholder
+            - init_failure_email_expr: Coalesce of Try:_Init error outputs for Exception_Message
+        """
+        # Resolve email recipient from environment variable
+        email_recipient = (
+            "# TODO: Generic_SupportTeam_EmailID env var not found — provide recipient"
+        )
+        for env_var in process.environment_variables:
+            if env_var.name == "Generic_SupportTeam_EmailID":
+                schema_name = env_var_schema_name(publisher_prefix, env_var.name)
+                param_key = env_var_parameter_key(env_var.name, schema_name)
+                email_recipient = f"@parameters('{param_key}')"
+                break
+
+        # Build error message expression by coalescing from Try:_Init's actual actions.
+        # The template's Try:_Init currently has Compose:_Config and Set_Config_value;
+        # mirror the reference pattern with these actual action names.
+        failure_email_expr = (
+            "@coalesce("
+            "outputs('Compose:_Config')?['body']?['error']?['message'], "
+            "outputs('Set_Config_value')?['body']?['error']?['message'], "
+            "'Configuration initialization failed')"
+        )
+
+        return email_recipient, failure_email_expr
 
     def _build_parameters(
         self,

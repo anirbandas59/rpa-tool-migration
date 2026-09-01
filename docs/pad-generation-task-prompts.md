@@ -866,6 +866,130 @@ registered orchestrator Cloud Flow `<Workflow>` element for `PID_0171.bprelease`
 
 ---
 
+## Task 6a2 — `templates/cloudflow/orchestrator.json.j2`: close the §A2 structural gaps
+
+**Depends on:** Task 6a
+**Files in scope:** `templates/cloudflow/orchestrator.json.j2`, `src/flowsmith/generator/cloudflow.py`,
+`tests/generator/test_cloudflow.py`
+**Required reading:**
+- `docs/bp-to-pad-architecture-PID171.md` §A2 (lines 59-152) — the narrative description of the
+  4-catch-scope, `Respond`, and attended/unattended/cloud-desktop branching shape.
+- `samples/pad/Shell_PP_PID_US_171_US_PreludeLIMS_V12_1_0_0_11_managed/Workflows/CF_PID_171_US_LIMS_Prelude_Cloud_Main-695D7A31-C74D-F111-BEC7-000D3ABE3BC4.json`
+  — the **ground-truth JSON** for every structure named below. Every action name, `type`, and
+  `runAfter` wiring below is copied directly from this file (verified 2026-09-01) — treat it as
+  the literal source of truth over the narrative doc if the two ever seem to disagree on a detail.
+- `docs/reviews/6a-2026-09-01-rereview-2.md` — the review that identified this gap (VBO/action
+  fidelity 55%, "Do step 2 was never actually performed" across all 3 passes of Task 6a).
+
+**Why this task exists:** Task 6a wired the orchestrator into the registration path but left the
+orchestrator's own internal JSON structure as it was — a single generic `Catch:_Global_Error_Handler`
+scope, no `Respond` action, and hardcoded `"runMode": "attended"` with no branching. The real
+reference package's orchestrator has 4 separate catch scopes, a success `Respond`, and real
+attended/unattended + cloud/desktop routing logic. This task closes that gap in the template only —
+Task 6a's registration/consolidation logic is not touched here.
+
+**Do:**
+
+1. **Split the single `Catch:_Global_Error_Handler` into 4 scopes**, matching the reference file
+   exactly:
+   - `Catch:_Init` — `runAfter: {"Try:_Init": ["Failed", "TimedOut"]}`. Actions (in order): a
+     `Compose` of the current datetime (`@formatDateTime(utcNow(), 'MM/dd/yyyy hh:mm:ss tt')`), a
+     `SetVariable` on `Exception_Message` (coalesce the error message from `Try:_Init`'s own inner
+     action outputs — reference uses
+     `@coalesce(outputs('Run:_Load_Config_Data')?['body']?['error']?['message'], outputs('Parse_Run:_Load_Config_result_as_JSON')?['body']?['error']?['message'])`;
+     adapt the referenced action names to whatever this template's own `Try:_Init` actions are
+     named — `Compose:_Config`/`Set_Config_value` today), a `Compose` of `@workflow()`, a
+     `Send_an_email_(V2)` (`shared_office365`/`SendEmailV2`), a `Terminate` action
+     (`runStatus: "Failed"`, `runError: {"code": "Run a flow built with Power Automate for desktop Failed", "message": "@variables('Exception_Message')"}`),
+     and a `Respond` action (`type: "Response"`, `kind: "PowerApp"`, `statusCode: 200`,
+     `body: {"out_txt_mainflow_status": "@{variables('Exception_Message')}"}`,
+     `operationOptions: "Asynchronous"`). For the email recipient: see step 4 below — do not
+     hardcode a PID_171-specific parameter name.
+   - `Catch:_Loader` — same shape, `runAfter: {"Try:_Loader": ["TimedOut", "Failed"]}`, action
+     names suffixed `_Loader`/`Loader_Flow_Failure` per the reference file, email recipient
+     `@variables('var')?['Mail_SystemExceptionTo']` (this one **is** already available in `var` by
+     this point, unlike `Catch:_Init`).
+   - `Catch:_Performer` — same shape, `runAfter: {"Try:_Performer": ["TimedOut", "Failed"]}`,
+     action names suffixed `_Performer`/`Performer_Flow_Failure`, same email recipient pattern as
+     `Catch:_Loader`.
+   - `Catch:_Global_Error_Handler` — keep this scope, but it becomes the **outer safety net**,
+     `runAfter: {"Catch:_Performer": ["Succeeded", "Failed", "TimedOut"], "Catch:_Init": ["Succeeded", "TimedOut", "Failed"], "Catch:_Loader": ["Succeeded", "TimedOut", "Failed"]}`
+     (i.e. it always runs after the other three, regardless of their outcome — it's the final
+     unconditional wrap, not itself gated on `Try:*` directly). Keep its existing
+     `Filter_array`/`Set_Exception_Message`/`Get_workflow_details`/`Send_an_email_(V2)` actions as
+     they are today (the reference adds a `Respond_to_a_Power_App_or_flow_-_Global_fail` here too
+     — add one for parity, same `Response`/`kind: PowerApp` shape as the others).
+
+2. **Add the success `Respond`**: inside `Try:_Performer`, after the existing
+   `If_Performer_flag_=_yes`/`If_Work_Queue_Items_present` structure, add
+   `Respond_to_a_Power_App_or_flow_-_Success` — `type: "Response"`, `kind: "PowerApp"`,
+   `statusCode: 200`, `body: {"out_txt_mainflow_status": "Success"}`,
+   `runAfter: {"If_Performer_flag_=_yes": ["Succeeded"]}` (adjust the referenced action name to
+   whatever this template names its top-level Performer-flag `If` today), `operationOptions:
+   "Asynchronous"`.
+
+3. **Add attended/unattended and cloud/desktop branching**, replacing the current hardcoded
+   `"runMode": "attended"` calls:
+   - In `Try:_Loader`'s `If_Loader_flag_=_yes` true branch, nest an `If_Loader_type_=_Cloud`
+     (`toLower(variables('var')?['Ctrl_LoaderType']) == 'cloud'`) — **true branch stays empty**
+     (`"actions": {}`) with a comment explaining this is a config-selectable path with no PAD
+     implementation yet (per architecture doc line 88-89 — "STOP if a real BP process ever needs
+     this path"); **else branch** nests `If_Desktop_run_=_Unattended`
+     (`toLower(variables('var')?['Ctrl_LoaderUnattendedRun']) == 'yes'`) → true branch calls
+     `RunUIFlow_V2` with `runMode: "unattended"`, else branch calls it with `runMode: "attended"` —
+     both branches otherwise identical to today's single hardcoded call (`uiFlowId`,
+     `item/In_txt_Config`). Keep the existing `SetVariable Flow_Status = true` after the nested
+     `If`s resolve.
+   - In `Try:_Performer`'s `If_Work_Queue_Items_present` true branch, nest an
+     `If_Performer_type_=_desktop` (`toLower(variables('var')?['Ctrl_PerfomerType']) == 'desktop'`)
+     — true branch nests `If_performer_run_=_Unattended`
+     (`toLower(variables('var')?['Ctrl_PerfomerUnattendedRun']) == 'yes'`) with the same
+     unattended/attended `RunUIFlow_V2` split as the Loader; **else branch stays empty** with a
+     comment (per architecture doc line 107 — non-desktop performer type has no PAD implementation
+     yet, same placeholder pattern as the Loader's cloud path). Note: `Ctrl_PerfomerType` and
+     `Ctrl_PerfomerUnattendedRun` are spelled exactly this way (missing the second "r" in
+     "Performer") in the real reference JSON — preserve that spelling exactly, it is not a typo to
+     fix.
+
+4. **`Catch:_Init`'s email recipient**: the reference JSON hardcodes a PID_171-specific parameter
+   (`parameters('EV_PID_171_US_LIMS_Prelude_Exception_Email (...)')`). Since this generator must
+   stay generic across ~200 automations (not just PID_171), do not hardcode that literal name.
+   Instead, in `cloudflow.py`, add logic that looks for an environment variable named
+   `Generic_SupportTeam_EmailID` in `process.environment_variables` (this is exactly the variable
+   architecture doc §A2 point 5's table describes as "Config-load-failure notification address" —
+   the right semantic match for `Catch:_Init`, which fires before `var` is populated so
+   `variables('var')?['Mail_SystemExceptionTo']` isn't available yet). If found, pass its resolved
+   `parameters('<schema_name>')` expression to the template as a new render variable (e.g.
+   `init_failure_email_expr`); if not found, fall back to a hardcoded placeholder string with a
+   `# TODO` noting the automation has no config-load-failure notification env var and someone must
+   supply a recipient before this flow is usable — do not silently emit an empty/broken `To` field.
+
+5. Leave `Try:_Init`, the connection references, `parameters`, and `config_compose` sections
+   unchanged — this task only touches catch/respond/branching structure.
+
+**Done when:** `uv run pytest tests/generator/test_cloudflow.py -v` passes, and new tests assert,
+against the rendered orchestrator JSON:
+- exactly 4 top-level `Catch:*` `Scope` actions exist, each with the `runAfter` wiring specified
+  above (in particular: `Catch:_Global_Error_Handler` depends on all 3 other catches, not on
+  `Try:*` directly);
+- `Try:_Performer` contains a `Response`-type action with `body.out_txt_mainflow_status ==
+  "Success"`;
+- `Try:_Loader` contains a nested `If` referencing `Ctrl_LoaderType` and another referencing
+  `Ctrl_LoaderUnattendedRun`, with both an `unattended` and an `attended` `RunUIFlow_V2` call
+  present;
+- `Try:_Performer` contains a nested `If` referencing `Ctrl_PerfomerType` and another referencing
+  `Ctrl_PerfomerUnattendedRun`, with both `unattended` and `attended` `RunUIFlow_V2` calls present;
+- each of `Catch:_Init`/`Catch:_Loader`/`Catch:_Performer` contains one `Terminate`-type action and
+  one `Response`-type action.
+
+**Out of scope:** Task 6a's registration/consolidation wiring (already done); `packager.py` (Task
+6b); replicating the reference file's exact branded email HTML bodies verbatim (structural
+correctness — action types, names, wiring, and the dynamic expressions named above — is what's
+graded; keep email bodies simple and non-branded, referencing `variables('Exception_Message')` and
+`workflow()?['tags']['flowDisplayName']` as the reference does, but no HTML/CSS polish required).
+
+---
+
 ## Task 6b — `generator/packager.py`: wire consolidated output into the `.zip`
 
 **Depends on:** Task 6a, Task 3b
