@@ -2138,3 +2138,198 @@ def test_coarse_block_pid171_process_work_queue_items_structure(tmp_path: Path) 
     assert reset_label_pos > mark_exception_pos, (
         "LABEL 'Work end' must appear after LABEL 'Mark Item As Exception' (§B15 ref L1490)"
     )
+
+
+def test_accidental_function_name_collision_disambiguation(tmp_path: Path) -> None:
+    """Task 6b2: Accidental collisions get disambiguated, not silently dropped.
+
+    When two unrelated pages both fallback to their own name (no `page_target_map.yaml`
+    `target_name` entry for either), and the names happen to collide (e.g., after
+    sanitisation), they should render as distinct FUNCTIONs with disambiguation suffixes
+    (_2, _3, ...), not as a silent drop of the second one.
+
+    First occurrence renders bare (no suffix), second+ get suffixes.
+
+    Citation: Task 6b2 Do-step 1, docs/reviews/6b-2026-09-01-rereview.md gap Finding 2.
+    """
+    # Build a minimal process with two pages that collide on fallback name
+    process = BPProcess(
+        process_id="test-proc",
+        name="TestProcess",
+        version="1.0",
+        source_file="test.bprelease",
+        description="Test accidental collision",
+        pages=[
+            BPPage(
+                page_id="page1",
+                name="Copy",  # First "Copy" (fallback, will render as bare "Copy")
+                role="performer",
+                stages=[
+                    BPStage(
+                        stage_id="s1",
+                        name="Action1",
+                        stage_type=StageType.ACTION,
+                        is_subsheet_call=False,
+                        data_items=[],
+                        pa_annotation=PAAnnotation(
+                            target_type=StageType.ACTION,
+                            target_module="System",
+                            runtime=Runtime.DESKTOP,
+                            params_map={},
+                            pa_target_action="# Test action 1",
+                            confidence=0.9,
+                            band=ConfidenceBand.AUTO,
+                        ),
+                    ),
+                ],
+            ),
+            BPPage(
+                page_id="page2",
+                name="Copy",  # Second "Copy" (fallback, will render as "Copy_2")
+                role="performer",
+                stages=[
+                    BPStage(
+                        stage_id="s2",
+                        name="Action2",
+                        stage_type=StageType.ACTION,
+                        is_subsheet_call=False,
+                        data_items=[],
+                        pa_annotation=PAAnnotation(
+                            target_type=StageType.ACTION,
+                            target_module="System",
+                            runtime=Runtime.DESKTOP,
+                            params_map={},
+                            pa_target_action="# Test action 2",
+                            confidence=0.9,
+                            band=ConfidenceBand.AUTO,
+                        ),
+                    ),
+                ],
+            ),
+            BPPage(
+                page_id="page3",
+                name="Caller",  # Calls the first Copy page
+                role="performer",
+                stages=[
+                    BPStage(
+                        stage_id="s3",
+                        name="CallFirstCopy",
+                        stage_type=StageType.ACTION,
+                        is_subsheet_call=True,
+                        processid="page1",  # Calls Copy (first one)
+                        data_items=[],
+                        pa_annotation=PAAnnotation(
+                            target_type=StageType.ACTION,
+                            target_module="System",
+                            runtime=Runtime.DESKTOP,
+                            params_map={},
+                            pa_target_action="CALL 'placeholder'",
+                            confidence=0.9,
+                            band=ConfidenceBand.AUTO,
+                        ),
+                    ),
+                    BPStage(
+                        stage_id="s4",
+                        name="CallSecondCopy",
+                        stage_type=StageType.ACTION,
+                        is_subsheet_call=True,
+                        processid="page2",  # Calls Copy_2 (second one)
+                        data_items=[],
+                        pa_annotation=PAAnnotation(
+                            target_type=StageType.ACTION,
+                            target_module="System",
+                            runtime=Runtime.DESKTOP,
+                            params_map={},
+                            pa_target_action="CALL 'placeholder'",
+                            confidence=0.9,
+                            band=ConfidenceBand.AUTO,
+                        ),
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    # Generate
+    generator = PADGenerator()
+    generator.generate_process(process, tmp_path)
+
+    # Read the generated Performer file
+    performer_files = list(tmp_path.glob("*Performer*.robin"))
+    assert performer_files, "No Performer .robin file generated"
+    content = performer_files[0].read_text()
+
+    # Verify: both "Copy" pages render as distinct FUNCTIONs
+    assert "FUNCTION 'Copy'" in content, (
+        "Accidental collision: first 'Copy' should render as bare 'Copy'"
+    )
+    assert "FUNCTION 'Copy_2'" in content, (
+        "Accidental collision: second 'Copy' should render as 'Copy_2'"
+    )
+
+    # Verify: CALL sites use the correct (resolved) names
+    assert "CALL 'Copy'" in content, (
+        "Accidental collision: CALL to first Copy page should use bare 'Copy'"
+    )
+    assert "CALL 'Copy_2'" in content, (
+        "Accidental collision: CALL to second Copy page should use 'Copy_2'"
+    )
+
+    # Verify: no silent drop — both pages rendered
+    copy_count = content.count("FUNCTION 'Copy")
+    assert copy_count == 2, (
+        f"Accidental collision: expected 2 'Copy' FUNCTION declarations, got {copy_count}"
+    )
+
+
+def test_intentional_fold_mapping_no_disambiguation(tmp_path: Path) -> None:
+    """Task 6b2: Intentional folds (explicit mapping) render once with no suffix.
+
+    When `page_target_map.yaml` gives two pages the same `target_name` (intentional
+    fold, like "Mark as read mail" → "Move Emails" and "Mark as read and move..."
+    → "Move Emails"), the second occurrence should be skipped silently with no suffix.
+
+    This is a regression test that verifies the `test_no_duplicate_function_declarations`
+    behavior is maintained for intentional mapping-declared folds.
+
+    Citation: Task 6b2 Do-step 1, mapping/page_target_map.yaml lines 123-134.
+    """
+    # Use the real PID_171 sample which has the "Move Emails" intentional fold
+    sample = Path("samples/blueprism/PID_0171.bprelease")
+    if not sample.exists():
+        pytest.skip(f"Sample {sample} not found")
+
+    from flowsmith.ast import build_ast
+    from flowsmith.engine import create_annotator
+    from flowsmith.parser import parse_process
+
+    process = build_ast(parse_process(sample))
+    create_annotator().annotate_process(process)
+
+    # Generate
+    generator = PADGenerator()
+    generator.generate_process(process, tmp_path)
+
+    # Read the generated Performer file
+    performer_files = list(tmp_path.glob("*Performer*.robin"))
+    assert performer_files, "No Performer .robin file generated"
+    content = performer_files[0].read_text()
+
+    # Verify: "Move Emails" FUNCTION appears exactly once (intentional fold)
+    # The two pages ("Mark as read mail" and "Mark as read and move to exception folder")
+    # both map to "Move Emails" via explicit page_target_map.yaml entries.
+    move_emails_count = content.count("FUNCTION 'Move Emails'")
+    assert move_emails_count == 1, (
+        f"Intentional fold: 'Move Emails' FUNCTION should appear exactly once, "
+        f"got {move_emails_count} times"
+    )
+
+    # Verify: No disambiguation suffix on "Move Emails" (stays bare, not "Move Emails_2")
+    assert "FUNCTION 'Move Emails_2'" not in content, (
+        "Intentional fold: 'Move Emails' should NOT get a disambiguation suffix"
+    )
+
+    # Verify: Both source pages map to the same FUNCTION (implicit via only one rendering)
+    # We can't directly assert both pages' original names are referenced as calls
+    # (they might be inlined), but the presence of exactly one "Move Emails" FUNCTION
+    # with no suffix is the litmus test for intentional fold behavior.

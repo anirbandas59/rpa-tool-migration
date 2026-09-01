@@ -167,44 +167,91 @@ class TestDefinitionContent:
 
     @staticmethod
     def _definitions(solution_zip: Path) -> list[str]:
-        """Decode every Workflow's <Definition> back to PAD script text."""
+        """Decode every Desktop Flow (Category 6) Workflow's <Definition> to PAD script text.
+
+        Filters to Desktop Flows only (Category == 6 in workflow_builder.py) because Cloud Flows
+        have Category == 5 and their <Definition> is Logic App JSON, not PAD script.
+        """
         with zipfile.ZipFile(solution_zip) as zf:
             cust = etree.fromstring(zf.read("customizations.xml"))
-        return [json.loads(w.findtext("Definition")) for w in cust.findall(".//{*}Workflow")]
+        # Filter to workflows with Category=6 (Desktop Flows, PAD script)
+        pad_workflows = [
+            w for w in cust.findall(".//{*}Workflow") if w.findtext("{*}Category") == "6"
+        ]
+        return [json.loads(w.findtext("Definition")) for w in pad_workflows]
+
+    @staticmethod
+    def _cloud_flow_definitions(solution_zip: Path) -> list[dict]:
+        """Decode every Cloud Flow (Category 5) Workflow's <Definition> to Logic App JSON dict.
+
+        Used for Cloud Flow (orchestrator) well-formedness checks.
+
+        Note: the definition is double-JSON-encoded in the XML (the JSON string is itself
+        a JSON value), so we need to json.loads() twice to get the actual object.
+        """
+        with zipfile.ZipFile(solution_zip) as zf:
+            cust = etree.fromstring(zf.read("customizations.xml"))
+        # Filter to workflows with Category=5 (Cloud Flows, Logic App JSON)
+        cloud_workflows = [
+            w for w in cust.findall(".//{*}Workflow") if w.findtext("{*}Category") == "5"
+        ]
+        result = []
+        for w in cloud_workflows:
+            def_text = w.findtext("Definition")
+            if def_text:
+                # Double-encoded: json.loads twice
+                once_parsed = json.loads(def_text)
+                twice_parsed = (
+                    json.loads(once_parsed) if isinstance(once_parsed, str) else once_parsed
+                )
+                result.append(twice_parsed)
+        return result
 
     def test_definitions_are_non_empty(self, solution_zip: Path) -> None:
-        """Every Workflow carries embedded PAD script."""
+        """Every Desktop Flow carries embedded PAD script."""
         definitions = self._definitions(solution_zip)
-        assert definitions
+        assert definitions, "At least one Desktop Flow (PAD script) should exist"
         assert all(d.strip() for d in definitions)
 
     def test_definitions_start_with_connection_string(self, solution_zip: Path) -> None:
-        """PAD's @@ directives lead every script, as in the reference."""
-        assert all(d.startswith("@@ConnectionString:") for d in self._definitions(solution_zip))
+        """PAD's @@ directives lead every Desktop Flow script, as in the reference."""
+        pad_scripts = self._definitions(solution_zip)
+        assert pad_scripts, "No Desktop Flow PAD scripts found to check"
+        assert all(d.startswith("@@ConnectionString:") for d in pad_scripts)
 
     def test_definitions_carry_import_statements(self, solution_zip: Path) -> None:
-        """Both repo IMPORT lines the reference uses are present."""
+        """Both repo IMPORT lines the reference uses are present in Desktop Flow scripts."""
         for definition in self._definitions(solution_zip):
             assert "IMPORT 'controlRepo.appmask' AS appmask" in definition
             assert "IMPORT 'imageRepo.imgrepo' AS imgrepo" in definition
 
     def test_definitions_wrap_body_in_a_function(self, solution_zip: Path) -> None:
-        """Each script declares exactly one FUNCTION ... END FUNCTION."""
+        """Each Desktop Flow script declares exactly one FUNCTION ... END FUNCTION."""
         for definition in self._definitions(solution_zip):
             assert "FUNCTION " in definition
             assert "END FUNCTION" in definition
 
     def test_block_structure_is_generated(self, solution_zip: Path) -> None:
-        """BLOCK stages produce BLOCK / ON BLOCK ERROR / END scopes."""
+        """BLOCK stages produce BLOCK / ON BLOCK ERROR / END scopes in Desktop Flows."""
         definitions = self._definitions(solution_zip)
         with_blocks = [d for d in definitions if "BLOCK '" in d]
-        assert with_blocks
+        assert with_blocks, "At least one Desktop Flow should contain BLOCK stages"
         for definition in with_blocks:
             assert "ON BLOCK ERROR" in definition
 
     def test_no_goto_dangles(self, solution_zip: Path) -> None:
-        """Every GOTO target has a matching LABEL in the same script."""
+        """Every GOTO target has a matching LABEL in the same Desktop Flow script."""
         for definition in self._definitions(solution_zip):
             for target in ("Error Block", "End"):
                 if f"GOTO '{target}'" in definition:
                     assert f"LABEL '{target}'" in definition
+
+    def test_cloud_flow_definitions_are_well_formed_json(self, solution_zip: Path) -> None:
+        """Every Cloud Flow definition is valid JSON (orchestrator well-formedness check)."""
+        cloud_defs = self._cloud_flow_definitions(solution_zip)
+        assert cloud_defs, "At least one Cloud Flow (orchestrator) should exist"
+        for definition in cloud_defs:
+            # Validate that it's well-formed JSON (already parsed from json.loads calls)
+            assert isinstance(definition, dict), (
+                f"Cloud Flow definition should be a dict after JSON parsing, got {type(definition)}"
+            )

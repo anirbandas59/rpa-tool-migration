@@ -1026,6 +1026,75 @@ when" runs the CLI as a smoke check, Task 7 is the full formal pass).
 
 ---
 
+## Task 6b2 — `generator/pad.py` disambiguation + `tests/e2e/test_pid171_pipeline.py` Category filter
+
+**Depends on:** Task 6b
+**Files in scope:** `src/flowsmith/generator/pad.py`, `tests/e2e/test_pid171_pipeline.py`
+**Required reading:**
+- `docs/reviews/6b-2026-09-01.md` and `docs/reviews/6b-2026-09-01-rereview.md` — the two gaps this
+  task exists to close were identified and root-caused there; read both before starting.
+- `mapping/page_target_map.yaml` lines ~123-134 — the real `target_name: "Move Emails"` entries
+  that both "Mark as read mail" and "Mark as read and move to exception folder" carry, confirming
+  that case is an *intentional*, mapping-declared fold, not a collision to disambiguate.
+
+**Why this task exists:** Task 6b's own declared file scope (`packager.py`/`test_packager.py`)
+could not reach either gap below — both live in files outside that scope. Same pattern as Task
+6a → 6a2.
+
+**Do:**
+
+1. **`pad.py`'s duplicate-`FUNCTION`-name handling (lines 380-409)**: `seen_function_names` is a
+   single flat set that silently `continue`s past *any* second page whose resolved `target_name`
+   already appears — with no distinction between two different reasons a collision can happen:
+   - **Intentional, mapping-declared fold** — `page_target_map.yaml` explicitly gives two (or
+     more) BP pages the *same* `target_name` (e.g. the "Move Emails" case at lines 123-134,
+     parameterized by `In_txt_DestinationFolder` per its own `notes:` field). This is correct,
+     desired behavior — keep skipping the duplicate here, no suffix, no flag. Do not change this
+     path.
+   - **Accidental/undeclared collision** — `shape_info.get("target_name", page.name)` falls back
+     to the raw (or `naming.py`-sanitised) page name because no `page_target_map.yaml` entry set
+     `target_name` for that page, and it happens to coincide with another page's resolved name.
+     This is the case documented as U2 in `SUBTASK8_VALIDATION_REPORT.md`, and the case Task 6b's
+     Do-step 4 asked to fix: **do not silently skip** — append a disambiguation suffix (e.g.
+     `'<name>_2'`, `'<name>_3'`, ...) so both pages' content is rendered as distinct `FUNCTION`s,
+     and update any `CALL` sites that referenced the now-suffixed page's original name so they
+     still resolve. Distinguish the two cases by checking whether the collision's `target_name`
+     came from an explicit `page_target_map.yaml` entry (intentional fold — skip) or from the
+     `page.name` fallback (accidental — disambiguate); do not use the "does it have a `notes:`
+     field" heuristic, use the actual source of the `target_name` value.
+   - Add a test (real PID_0171 data if it naturally reproduces an accidental collision after
+     `naming.py` sanitisation; a small synthetic AST fixture otherwise) confirming: (a) the
+     intentional "Move Emails" fold still renders exactly once with no suffix, and (b) an
+     accidental collision renders both `FUNCTION`s with distinct suffixed names, not a silent
+     drop.
+
+2. **`tests/e2e/test_pid171_pipeline.py`'s `TestDefinitionContent._definitions()` (lines 168-173)**:
+   decodes every registered `<Workflow>`'s `<Definition>` and hands it to assertions that are
+   PAD-`.robin`-script-specific (`test_definitions_start_with_connection_string` line 183 —
+   `@@ConnectionString:` prefix; `test_definitions_carry_import_statements` lines 185-189 —
+   `IMPORT` lines; `test_definitions_wrap_body_in_a_function` lines 191-195 — `FUNCTION`/`END
+   FUNCTION`). Since Task 6a2 the orchestrator is correctly registered as a `<Workflow>` too, but
+   its `<Definition>` is Cloud Flow JSON, not PAD script, so these assertions fail against it.
+   `workflow_builder.py` already sets `Category` to `6` for Desktop Flows (PAD script) and `5` for
+   Cloud Flows (JSON) (confirmed at `workflow_builder.py` lines 182/196/293/919) — use that
+   discriminator. Fix `_definitions()` (or add a parallel PAD-script-only variant, whichever reads
+   more clearly given the rest of the test file's structure) to filter to `Category == "6"` before
+   running these three PAD-specific assertions. Do not weaken or remove the assertions themselves
+   — the goal is to stop applying them to the wrong workflow type, not to reduce what they check.
+   Consider whether an equivalent Cloud-Flow-specific well-formedness check (e.g. the orchestrator's
+   `<Definition>` JSON-decodes and contains a `"definition"` key) belongs alongside these, since the
+   orchestrator's own well-formedness is currently unchecked by this test class.
+
+**Done when:** `uv run pytest tests/generator/test_pad.py -v` and `uv run pytest
+tests/e2e/test_pid171_pipeline.py -v` both pass with zero failures (the 3 previously-failing
+`TestDefinitionContent` tests included), and a new `pad.py` test demonstrates both the
+intentional-fold and accidental-collision paths behave differently as described above.
+
+**Out of scope:** any other gap `tests/e2e/test_pid171_pipeline.py` surfaces beyond the 3 named
+here (report it, don't fix it, if you find something new); Task 7's full formal acceptance pass.
+
+---
+
 ## Task 7 — End-to-end run against `PID_0171.bprelease` → `outputs/generated/PID_0171/`
 
 **Depends on:** all previous tasks

@@ -122,6 +122,13 @@ class PADGenerator:
             except Exception as e:
                 raise GenerationError(f"Failed to load page_target_map.yaml: {e}") from e
 
+        # Instance variable to hold the current page name resolution map (built during
+        # role-based generation to handle collision disambiguation — Task 6b2).
+        # Used by _render_page_as_function and _render_call_or_inline to ensure both
+        # FUNCTION definitions and CALL sites use consistent resolved names (with
+        # suffixes for accidental collisions, not intentional folds).
+        self._current_page_name_map: dict[str, str] = {}
+
     def generate_process(
         self,
         process: BPProcess,
@@ -377,6 +384,16 @@ class PADGenerator:
             # Render sub-pages as FUNCTION blocks (or inline/fold if mapped)
             process_map = self.page_target_map.get(process.name, {})
             rendered_functions: list[str] = []
+
+            # Build the page name resolution mapping (handles collisions with disambiguation)
+            # This maps each page to its final resolved target name, distinguishing between
+            # intentional folds (explicit mapping) and accidental collisions (fallback names).
+            # Store in instance variable so it's accessible to _render_page_as_function and
+            # _render_call_or_inline without threading through every method signature.
+            self._current_page_name_map = self._build_page_name_resolution_map(
+                pages_for_role, process_map
+            )
+
             seen_function_names: set[str] = set()
             for page in pages_for_role:
                 # Skip pages that are shaped as inline_block/fold — they're rendered
@@ -388,12 +405,14 @@ class PADGenerator:
                     # These will be rendered when called from other pages
                     continue
 
-                # De-duplication: skip if this function name has already been rendered
-                # This handles cases where multiple BP pages map to the same target function
-                # (e.g., "Mark as read mail" and "Mark as read and move to exception folder"
-                # both map to target_name "Move Emails" per §B14 rows 10-11)
-                target_name = shape_info.get("target_name", page.name)
-                if target_name in seen_function_names:
+                # De-duplication: use resolved target name from the mapping built above
+                # This mapping distinguishes between:
+                # - Intentional folds: multiple pages map to same target_name via explicit
+                #   mapping entry — skip silently on collision (don't disambiguate)
+                # - Accidental collisions: pages fallback to their own name and happen to
+                #   collide — add disambiguation suffix (e.g., _2, _3)
+                resolved_target_name = self._current_page_name_map.get(page.page_id, page.name)
+                if resolved_target_name in seen_function_names:
                     # FUNCTION with this name already emitted; skip the duplicate
                     # (cite the first occurrence; the mapping file notes parameterization)
                     continue
@@ -406,7 +425,7 @@ class PADGenerator:
                     lines.append(page_content)
                     lines.append("")
                     # Track this function name to prevent duplicates
-                    seen_function_names.add(target_name)
+                    seen_function_names.add(resolved_target_name)
 
             # Emit boilerplate "Get Error" FUNCTION if any page references it
             full_content = "\n".join(lines)
@@ -682,8 +701,13 @@ class PADGenerator:
             return f"# TODO: Target page not found for call stage '{stage.name}'"
 
         if shape == "function":
-            # Regular FUNCTION call — use target_name if available
-            target_name = shape_info.get("target_name", target_page.name)
+            # Regular FUNCTION call — use self._current_page_name_map if available
+            # (includes disambiguation suffixes), otherwise use mapped target_name from
+            # shape_info or fallback to page.name.
+            if target_page.page_id in self._current_page_name_map:
+                target_name = self._current_page_name_map[target_page.page_id]
+            else:
+                target_name = shape_info.get("target_name", target_page.name)
             call_template = self.env.get_template("actions/call_subflow.robin.j2")
             return call_template.render(subflow_name=target_name)
 
@@ -791,8 +815,13 @@ class PADGenerator:
             Rendered FUNCTION block.
         """
         try:
-            # Get target name if mapped (for renaming)
-            target_name = shape_info.get("target_name", page.name)
+            # Get target name: use self._current_page_name_map if available (includes
+            # disambiguation suffixes), otherwise fall back to shape_info (explicit mapping)
+            # or page.name (default).
+            if page.page_id in self._current_page_name_map:
+                target_name = self._current_page_name_map[page.page_id]
+            else:
+                target_name = shape_info.get("target_name", page.name)
 
             # Determine GLOBAL qualifier
             is_global = shape_info.get("global", False)
@@ -983,6 +1012,98 @@ class PADGenerator:
             function_blocks.append(function)
 
         return "\n".join(function_blocks)
+
+    def _build_page_name_resolution_map(
+        self,
+        pages_for_role: list,
+        process_map: dict[str, Any],
+    ) -> dict[str, str]:
+        """Build a mapping from page_id to its final resolved FUNCTION name.
+
+        Distinguishes between intentional folds (explicit mapping) and accidental collisions:
+        - Intentional fold: page_target_map.yaml gives two pages the same target_name
+          → both map to the same name; rendering loop will skip the second via
+          seen_function_names deduplication (no suffix added)
+        - Accidental collision: two pages both fallback to their own name and happen to collide
+          → add disambiguation suffix (e.g., _2, _3) so both render as distinct FUNCTIONs
+
+        Args:
+            pages_for_role: List of BPPage objects for the current role.
+            process_map: The process entry from page_target_map.yaml.
+
+        Returns:
+            Dict mapping page_id → final_resolved_target_name (may include disambiguation suffix).
+
+        Raises:
+            GenerationError: If name resolution fails.
+        """
+        # Collect each page's target name and track whether it's from explicit mapping or fallback
+        page_targets: dict[str, tuple[str, bool]] = {}  # page_id -> (target_name, is_explicit)
+        explicit_targets: dict[
+            str, list[str]
+        ] = {}  # target_name -> [page_ids with this explicit target]
+        fallback_targets: dict[
+            str, list[str]
+        ] = {}  # target_name -> [page_ids with this fallback target]
+
+        for page in pages_for_role:
+            shape_info = self._get_page_shape(page.name, process_map)
+            shape = shape_info.get("shape", "function")
+
+            # Skip inline_block/fold pages — they're not rendered as top-level FUNCTIONs
+            if shape in ("inline_block", "fold"):
+                continue
+
+            # Determine if target_name is explicit (from mapping) or fallback
+            if "target_name" in shape_info:
+                target_name = shape_info["target_name"]
+                is_explicit = True
+                if target_name not in explicit_targets:
+                    explicit_targets[target_name] = []
+                explicit_targets[target_name].append(page.page_id)
+            else:
+                target_name = page.name
+                is_explicit = False
+                if target_name not in fallback_targets:
+                    fallback_targets[target_name] = []
+                fallback_targets[target_name].append(page.page_id)
+
+            page_targets[page.page_id] = (target_name, is_explicit)
+
+        # Build final resolution map, handling collisions
+        final_map: dict[str, str] = {}
+
+        for page in pages_for_role:
+            shape_info = self._get_page_shape(page.name, process_map)
+            shape = shape_info.get("shape", "function")
+            if shape in ("inline_block", "fold"):
+                continue
+
+            target_name, is_explicit = page_targets[page.page_id]
+
+            if is_explicit:
+                # Intentional fold: all pages with this explicit target_name map to the same
+                # resolved name. The rendering loop will skip duplicates via seen_function_names.
+                final_map[page.page_id] = target_name
+            else:
+                # Fallback name: check for collision with other fallback names
+                fallback_count = len(fallback_targets.get(target_name, []))
+                if fallback_count > 1:
+                    # Collision detected: add disambiguation suffix
+                    # Find the ordinal position of this page among pages with the same fallback name
+                    fallback_pages = fallback_targets[target_name]
+                    ordinal = fallback_pages.index(page.page_id)  # 0-indexed position
+                    if ordinal == 0:
+                        # First occurrence: no suffix (leave original name bare)
+                        final_map[page.page_id] = target_name
+                    else:
+                        # Second+ occurrences: _2, _3, etc. (suffix at position+1)
+                        final_map[page.page_id] = f"{target_name}_{ordinal + 1}"
+                else:
+                    # No collision: use the fallback name as-is
+                    final_map[page.page_id] = target_name
+
+        return final_map
 
     def _get_page_shape(
         self,
