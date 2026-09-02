@@ -33,8 +33,8 @@ def _name(stage_by_id: dict, sid: str | None, fallback: str = "?") -> str:
 
 
 def _page_order(pages: dict) -> list[tuple[str, dict]]:
-    """Implicit page first, then alphabetical by name."""
-    implicit = [(IMPLICIT_PAGE_ID, pages[IMPLICIT_PAGE_ID])]
+    """Implicit page first (if present), then alphabetical by name."""
+    implicit = [(IMPLICIT_PAGE_ID, pages[IMPLICIT_PAGE_ID])] if IMPLICIT_PAGE_ID in pages else []
     named = sorted(
         [(pid, p) for pid, p in pages.items() if pid != IMPLICIT_PAGE_ID],
         key=lambda x: x[1]["name"],
@@ -533,6 +533,9 @@ def main():
         sys.exit(1)
 
     filepath = sys.argv[1]
+    # NOTE: unlike bp_html_report_v3.py, this Markdown generator does not yet wire
+    # VBO reachability pruning through generate()/generate_release() — a --include-all
+    # flag would have nothing to toggle, so it's not parsed here. Flagged as a gap.
     args = [a for a in sys.argv[2:] if not a.startswith("--")]
     outpath = args[0] if args else None
 
@@ -547,18 +550,26 @@ def main():
     if file_type == "release":
         from bp_release_parser import parse_release
 
+        print("Parsing …", end=" ", flush=True)
         result = parse_release(filepath)
+        print("done.")
         s = result["stats"]
         print(
             f"  processes={s['process_count']}  objects={s['object_count']}"
             f"  env_vars={s['env_var_count']}  errors={s['error_count']}"
         )
+        print("Generating report …", end=" ", flush=True)
         report = generate_release(result)
+        print("done.")
     else:
+        print("Parsing …", end=" ", flush=True)
         result = parse(filepath)
+        print("done.")
         s = result["stats"]
         print(f"  pages={s['pages']}  parsed={s['parsed']}  skipped={s['skipped']}")
+        print("Generating report …", end=" ", flush=True)
         report = generate(result)
+        print("done.")
 
     if outpath:
         with open(outpath, "w", encoding="utf-8") as f:

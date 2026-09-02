@@ -446,6 +446,49 @@ def page_graph_png_b64(result: dict, page_id: str, include_data: bool = False) -
         return None
 
 
+def page_graph_png_file(
+    result: dict,
+    page_id: str,
+    out_path: str,
+    include_data: bool = False,
+    include_svg: bool = False,
+) -> str | None:
+    """
+    Render a single-page graph to a PNG file at out_path.
+    If include_svg is True, also writes out_path.replace('.png', '.svg').
+    Returns the written PNG path on success, None on failure.
+    """
+    try:
+        g = build_page_graph(result, page_id, include_data=include_data)
+        g.format = "png"
+        # graphviz.render appends the format extension; strip .png from stem
+        stem = out_path[:-4] if out_path.endswith(".png") else out_path
+        png_path = g.render(filename=stem, cleanup=True)
+        if include_svg:
+            g.format = "svg"
+            g.render(filename=stem + "_svg", cleanup=True)
+        return png_path
+    except FileNotFoundError as e:
+        if "graphviz" in str(e).lower() or "dot" in str(e).lower():
+            print(
+                "Warning: Graphviz binary not found. "
+                "Windows: choco install graphviz | Linux: apt install graphviz | macOS: brew install graphviz",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"Warning: File not found during graph render for page {page_id}: {e}",
+                file=sys.stderr,
+            )
+        return None
+    except Exception as e:
+        print(
+            f"Warning: Graph render failed for page {page_id}: {type(e).__name__}: {e}",
+            file=sys.stderr,
+        )
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Render
 # ---------------------------------------------------------------------------
