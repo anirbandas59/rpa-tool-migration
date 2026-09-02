@@ -32,6 +32,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 # ---------------------------------------------------------------------------
 import time as _time
 
+from bp_common import _full_traversal
 from bp_parser_v2 import IMPLICIT_PAGE_ID, parse
 
 
@@ -146,41 +147,11 @@ def _trunc(s: str, n: int = 100) -> str:
 # ---------------------------------------------------------------------------
 # Flow chain builder
 # ---------------------------------------------------------------------------
-
-
-def _full_traversal(page_id: str, stages: list, stage_by_id: dict) -> list[dict]:
-    """
-    BFS from Start following onsuccess + ontrue + onfalse edges,
-    returning ALL reachable stages on this page in traversal order.
-    Recover/Resume stages (no inbound explicit edges) are appended after.
-    """
-    page_map = {s["id"]: s for s in stages if s["page_id"] == page_id}
-    start = next((s for s in page_map.values() if s["type"] == "Start"), None)
-    if not start:
-        return list(page_map.values())
-
-    visited = []
-    seen = set()
-    queue = [start["id"]]
-
-    while queue:
-        sid = queue.pop(0)
-        if sid in seen or sid not in page_map:
-            continue
-        seen.add(sid)
-        s = page_map[sid]
-        visited.append(s)
-        for edge_key in ("onsuccess", "ontrue", "onfalse"):
-            nxt = s.get(edge_key)
-            if nxt and nxt not in seen and nxt in page_map:
-                queue.append(nxt)
-
-    # Append stages not reachable via explicit edges (Recover/Resume entry points)
-    for s in page_map.values():
-        if s["id"] not in seen:
-            visited.append(s)
-
-    return visited
+# _full_traversal() now lives in bp_common.py (Task O) — bp_graph_v3.py needs
+# the identical ordering for its page-graph builder, and previously imported
+# its own (byte-identical) copy from the deprecated bp_html_report_v2.py
+# rather than from this file. Centralised so both modules share one
+# implementation instead of two independently-maintained copies.
 
 
 def _build_flow_chain(page_id: str, stages: list, stage_by_id: dict) -> list[dict]:

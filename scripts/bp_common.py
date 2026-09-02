@@ -1,10 +1,11 @@
 """
-Shared utilities for bp_html_report_v3.py and bp_report_v3.py.
+Shared utilities for bp_html_report_v3.py, bp_graph_v3.py, and bp_report_v3.py.
 
 Functions
 ---------
 _reachable_vbo_actions  – collect every VBO object/action called across a list of processes
 _reachable_stage_ids    – BFS from the Start stage on a page, following success/true/false edges
+_full_traversal         – BFS from Start returning ALL stages on a page in traversal order
 _json_default           – json.dump default= handler that serialises sets and unknown objects
 """
 
@@ -89,6 +90,65 @@ def _reachable_stage_ids(
             next_id = stage.get(edge)
             if next_id and next_id not in visited:
                 queue.append(next_id)
+
+    return visited
+
+
+def _full_traversal(page_id: str, stages: list[dict], stage_by_id: dict[str, dict]) -> list[dict]:
+    """BFS from the Start stage on *page_id*, following ``onsuccess``, ``ontrue``,
+    and ``onfalse`` edges, returning ALL stages on that page in traversal order.
+
+    Unlike :func:`_reachable_stage_ids`, this returns the full stage dicts (not
+    just IDs) in a stable rendering order, and never drops a stage: any stage not
+    reached via the BFS (typically Recover/Resume entry points, which have no
+    inbound explicit edge) is appended after the reached ones, in dict order.
+    Used wherever a page's stages need to be rendered or drawn in a sensible
+    order — the HTML report's page sections and the Graphviz page-graph builder
+    both need this same ordering, hence its home here rather than in either.
+
+    Parameters
+    ----------
+    page_id:
+        The page whose Start stage is the BFS root.
+    stages:
+        All stage dicts to search (only those with a matching ``page_id`` are
+        considered).
+    stage_by_id:
+        Present for signature parity with call sites that already have it on
+        hand; not used internally (stage lookup here is by page_id, not by id).
+
+    Returns
+    -------
+    list[dict]
+        Every stage dict on *page_id*: BFS-reached ones first, in traversal
+        order, followed by any unreached ones. If no Start stage exists on the
+        page, returns all of the page's stages in their original (dict) order.
+    """
+    page_map = {s["id"]: s for s in stages if s["page_id"] == page_id}
+    start = next((s for s in page_map.values() if s["type"] == "Start"), None)
+    if not start:
+        return list(page_map.values())
+
+    visited: list[dict] = []
+    seen: set[str] = set()
+    queue: deque[str] = deque([start["id"]])
+
+    while queue:
+        sid = queue.popleft()
+        if sid in seen or sid not in page_map:
+            continue
+        seen.add(sid)
+        s = page_map[sid]
+        visited.append(s)
+        for edge_key in ("onsuccess", "ontrue", "onfalse"):
+            nxt = s.get(edge_key)
+            if nxt and nxt not in seen and nxt in page_map:
+                queue.append(nxt)
+
+    # Append stages not reachable via explicit edges (Recover/Resume entry points)
+    for s in page_map.values():
+        if s["id"] not in seen:
+            visited.append(s)
 
     return visited
 

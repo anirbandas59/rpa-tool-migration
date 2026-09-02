@@ -6,7 +6,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from bp_common import _json_default, _reachable_stage_ids, _reachable_vbo_actions
+from bp_common import _full_traversal, _json_default, _reachable_stage_ids, _reachable_vbo_actions
 
 # ---------------------------------------------------------------------------
 # _reachable_vbo_actions
@@ -113,6 +113,62 @@ def test_reachable_stage_ids_only_this_page():
     by_id = {s["id"]: s for s in stages}
     result = _reachable_stage_ids("p1", stages, by_id)
     assert "other" not in result
+
+
+# ---------------------------------------------------------------------------
+# _full_traversal (Task O: moved here from bp_html_report_v3.py so both it and
+# bp_graph_v3.py share one implementation instead of two independent copies —
+# bp_graph_v3.py previously imported its own from the deprecated
+# bp_html_report_v2.py)
+# ---------------------------------------------------------------------------
+
+
+def test_full_traversal_linear_order():
+    stages = [
+        _s("s1", "Start", "p1", onsuccess="s2"),
+        _s("s2", "Action", "p1", onsuccess="s3"),
+        _s("s3", "End", "p1"),
+    ]
+    by_id = {s["id"]: s for s in stages}
+    result = _full_traversal("p1", stages, by_id)
+    assert [s["id"] for s in result] == ["s1", "s2", "s3"]
+
+
+def test_full_traversal_appends_orphans_after_reached():
+    """Recover/Resume-style stages with no inbound edge are appended after the
+    BFS-reached ones, not dropped (unlike _reachable_stage_ids, which excludes
+    them entirely) — _full_traversal must return every stage on the page.
+    """
+    stages = [
+        _s("s1", "Start", "p1", onsuccess="s2"),
+        _s("s2", "End", "p1"),
+        _s("s3", "Recover", "p1"),  # orphan — no inbound edge
+    ]
+    by_id = {s["id"]: s for s in stages}
+    result = _full_traversal("p1", stages, by_id)
+    ids = [s["id"] for s in result]
+    assert ids[:2] == ["s1", "s2"]
+    assert ids[2] == "s3"
+    assert len(ids) == 3
+
+
+def test_full_traversal_no_start_returns_all_in_dict_order():
+    stages = [_s("s1", "Action", "p1"), _s("s2", "End", "p1")]
+    by_id = {s["id"]: s for s in stages}
+    result = _full_traversal("p1", stages, by_id)
+    assert [s["id"] for s in result] == ["s1", "s2"]
+
+
+def test_full_traversal_only_this_page():
+    stages = [
+        _s("s1", "Start", "p1", onsuccess="s2"),
+        _s("s2", "Action", "p1", onsuccess="other"),
+        _s("other", "Action", "p2"),
+    ]
+    by_id = {s["id"]: s for s in stages}
+    result = _full_traversal("p1", stages, by_id)
+    assert "other" not in [s["id"] for s in result]
+    assert len(result) == 2
 
 
 # ---------------------------------------------------------------------------

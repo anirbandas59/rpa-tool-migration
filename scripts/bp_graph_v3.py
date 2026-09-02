@@ -22,7 +22,7 @@ import sys
 import graphviz
 
 sys.path.insert(0, os.path.dirname(__file__))
-from bp_html_report_v2 import _full_traversal
+from bp_common import _full_traversal
 from bp_parser import IMPLICIT_PAGE_ID, parse
 
 # ---------------------------------------------------------------------------
