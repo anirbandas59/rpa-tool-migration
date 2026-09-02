@@ -3,6 +3,7 @@ Targeted tests for bp_html_report_v3.py — split-output writer and manifest.
 Does NOT require Graphviz (graph_fn=None throughout).
 """
 
+import html
 import json
 import os
 import re
@@ -516,3 +517,55 @@ def test_stage_card_has_stage_id_anchor(make_release_result, tmp_path):
     bp_html_report.generate_split(release, str(tmp_path), graph_fn=None)
     page_html = (tmp_path / "pages" / "my-process.html").read_text(encoding="utf-8")
     assert 'id="stage-abc-123"' in page_html
+
+
+def test_stage_card_has_copy_buttons_with_valid_payloads(make_release_result, tmp_path):
+    """Every stage card carries a Copy JSON / Copy MD button (Task N), with the
+    copyable payload embedded as a data-* attribute at generation time — must
+    work even where fetch() can't reach data/stages.jsonl (file://; see Task J).
+    """
+    release = make_release_result(
+        processes=[
+            {
+                "name": "My Process",
+                "pages": {"p1": {"name": "Main", "type": "Normal", "published": None}},
+                "stages": [
+                    _make_stage("abc-123", vbo_object="My VBO", vbo_action="Do Thing", page_id="p1")
+                ],
+            }
+        ],
+    )
+    bp_html_report.generate_split(release, str(tmp_path), graph_fn=None)
+    page_html = (tmp_path / "pages" / "my-process.html").read_text(encoding="utf-8")
+
+    assert "_copyStageData" in page_html
+    assert "onclick=\"_copyStageData(this,'json')\"" in page_html
+    assert "onclick=\"_copyStageData(this,'md')\"" in page_html
+
+    m = re.search(r'data-copy-json="([^"]*)"', page_html)
+    assert m, "expected a data-copy-json attribute on the stage card"
+    payload = json.loads(html.unescape(m.group(1)))
+    assert payload["id"] == "abc-123"
+    assert payload["page"] == "Main"
+    assert payload["vbo_object"] == "My VBO"
+    assert payload["vbo_action"] == "Do Thing"
+
+    m_md = re.search(r'data-copy-md="([^"]*)"', page_html)
+    assert m_md, "expected a data-copy-md attribute on the stage card"
+    md = html.unescape(m_md.group(1))
+    assert "My VBO" in md and "Do Thing" in md
+
+
+def test_styles_css_has_print_stylesheet(make_release_result, tmp_path):
+    """styles.css includes an @media print block that hides screen-only UI
+    chrome and forces closed <details> open, so printing/save-as-PDF from the
+    browser shows real content instead of collapsed cards (Task N).
+    """
+    release = make_release_result(
+        processes=[{"name": "My Process", "pages": {}, "stages": []}],
+    )
+    bp_html_report.generate_split(release, str(tmp_path), graph_fn=None)
+    css = (tmp_path / "styles.css").read_text(encoding="utf-8")
+    assert "@media print" in css
+    assert "details:not([open])" in css
+    assert ".controls-bar" in css

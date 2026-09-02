@@ -48,11 +48,15 @@ class ProgressBar:
     """
 
     WIDTH = 20
+    # Maximum suffix length — keeps the bar within ~120 cols on any terminal.
+    # Longer names are truncated with an ellipsis so the display stays stable.
+    MAX_SUFFIX = 55
 
     def __init__(self, total: int, label: str = ""):
         self._total = max(total, 1)
         self._label = label
         self._start = 0.0
+        self._last_len = 0  # length of the last line written (excluding \r)
 
     def start(self) -> None:
         self._start = _time.perf_counter()
@@ -72,9 +76,15 @@ class ProgressBar:
         filled = int(self.WIDTH * pct)
         bar = "█" * filled + "░" * (self.WIDTH - filled)
         label = f"  {self._label}: " if self._label else "  "
-        trunc = suffix[:50] if len(suffix) > 50 else suffix
-        line = f"\r[{bar}] {int(pct * 100):3d}%{label}{trunc}"
-        sys.stderr.write(line)
+        # Truncate suffix with ellipsis so it never exceeds MAX_SUFFIX chars
+        if len(suffix) > self.MAX_SUFFIX:
+            suffix = suffix[: self.MAX_SUFFIX - 1] + "…"
+        line = f"[{bar}] {int(pct * 100):3d}%{label}{suffix}"
+        # Pad to the previous line's length so \r fully overwrites old text
+        if len(line) < self._last_len:
+            line = line + " " * (self._last_len - len(line))
+        self._last_len = len(line)
+        sys.stderr.write(f"\r{line}")
         sys.stderr.flush()
 
 
@@ -554,6 +564,49 @@ def _section_header(title: str, color: str = "#333", bg: str = "#f8f8f8") -> str
     )
 
 
+def _stage_copy_payload(s: dict, pages: dict) -> tuple[str, str]:
+    """
+    Build (json_str, markdown_str) copyable snippets for one stage (Task N).
+
+    Embedded as data-* attributes at generation time rather than read back from
+    data/stages.jsonl client-side — the clipboard button must work even where
+    fetch() is unavailable (file:// in Chrome/Safari; see Task J), so it can't
+    depend on that same fetch succeeding.
+    """
+    page_name = pages.get(s.get("page_id"), {}).get("name", s.get("page_id"))
+    inputs = [
+        {"name": i["name"], "type": i["type"], "expr": i["expr"]} for i in s.get("inputs", [])
+    ]
+    outputs = [{"name": o["name"], "type": o["type"]} for o in s.get("outputs", [])]
+    payload = {
+        "id": s["id"],
+        "page": page_name,
+        "stage_type": s["type"],
+        "name": s["name"],
+        "vbo_object": s.get("vbo_object") or None,
+        "vbo_action": s.get("vbo_action") or None,
+        "expression": s.get("expression") or None,
+        "inputs": inputs,
+        "outputs": outputs,
+    }
+    json_str = _json.dumps(payload, indent=2)
+
+    md_lines = [f"**{s['name']}** ({s['type']})", f"- Page: {page_name}"]
+    if s.get("vbo_object"):
+        md_lines.append(f"- VBO: {s['vbo_object']} → {s.get('vbo_action') or '?'}")
+    if s.get("expression"):
+        md_lines.append(f"- Expression: `{s['expression']}`")
+    if inputs:
+        ins = "; ".join(f"{i['name']} ({i['type']}) = {i['expr']}" for i in inputs)
+        md_lines.append(f"- Inputs: {ins}")
+    if outputs:
+        outs = "; ".join(f"{o['name']} ({o['type']})" for o in outputs)
+        md_lines.append(f"- Outputs: {outs}")
+    md_str = "\n".join(md_lines)
+
+    return json_str, md_str
+
+
 def _stage_card(s: dict, stage_by_id: dict, pages: dict) -> str:
     bg, fg = TYPE_COLORS.get(s["type"], DEFAULT_COLOR)
     detail = _render_stage_detail(s, stage_by_id, pages)
@@ -564,6 +617,7 @@ def _stage_card(s: dict, stage_by_id: dict, pages: dict) -> str:
     # native behaviour only fires when the target is hidden inside a closed
     # <details>). _openDetailsForHash() in _SHARED_JS opens the ancestor chain.
     stage_id = f"stage-{s['id']}"
+    json_str, md_str = _stage_copy_payload(s, pages)
     return f"""
 <details class="stage-card">
   <summary class="stage-summary" id="{stage_id}">
@@ -572,6 +626,13 @@ def _stage_card(s: dict, stage_by_id: dict, pages: dict) -> str:
     {_badge(s["type"], s["raw_type"])}
   </summary>
   <div class="stage-body">
+    <div class="copy-row">
+      <button type="button" class="copy-btn" data-copy-json="{_e(json_str)}"
+              onclick="_copyStageData(this,'json')">Copy JSON</button>
+      <button type="button" class="copy-btn" data-copy-md="{_e(md_str)}"
+              onclick="_copyStageData(this,'md')">Copy MD</button>
+      <span class="copy-feedback"></span>
+    </div>
     {detail}
   </div>
 </details>
@@ -912,6 +973,33 @@ _SHARED_CSS = """
   .page-summary { padding:14px 18px; cursor:pointer; background:#fafafa; border-bottom:1px solid #e0e0e0; list-style:none; display:flex; align-items:center; gap:12px; user-select:none; }
   .page-body { padding:16px 18px; }
   .page-name { font-size:15px; font-weight:700; color:#1a1a1a; }
+
+  /* Copy-as-JSON/Markdown per stage (Task N) */
+  .copy-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .copy-btn {
+    background: #fff; border: 1px solid #ddd; border-radius: 6px;
+    padding: 3px 10px; font-size: 11px; color: #333; cursor: pointer;
+  }
+  .copy-btn:hover { border-color: #0C447C; color: #0C447C; }
+  .copy-feedback { font-size: 11px; color: #3B6D11; }
+
+  /* Print — a single artefact page, straight from the browser, without the
+     screen-only UI chrome or the "click to expand" collapsed state. */
+  @media print {
+    .controls-bar, #search-results, .expand-all, .collapse-all,
+    #artefact-jump, .copy-row, .sort-ind, a[href="../index.html"] {
+      display: none !important;
+    }
+    body { background: #fff; }
+    a { color: #000; text-decoration: none; }
+    /* Force every <details> open for print — the native "closed" state hides
+       its content outright; this overrides that regardless of the JS-driven
+       open attribute, which print never triggers (no click happened). */
+    details:not([open]) > *:not(summary) { display: block !important; }
+    summary::before { display: none; }
+    summary { cursor: default; }
+    .stage-card, .page-card { break-inside: avoid; page-break-inside: avoid; }
+  }
 """
 
 _SHARED_JS = """
@@ -960,6 +1048,44 @@ function _openDetailsForHash() {
 }
 _openDetailsForHash();
 window.addEventListener('hashchange', _openDetailsForHash);
+
+// Copy-as-JSON/Markdown per stage (Task N). The payload is embedded as a data-*
+// attribute at generation time (see _stage_copy_payload() / _stage_card()), not
+// read back from data/stages.jsonl client-side — this must work even where
+// fetch() is unavailable (file://; see the cross-page search note below).
+// navigator.clipboard.writeText() also has its own reliability gaps on file://
+// across browsers, so this always has a synchronous execCommand('copy')
+// fallback rather than assuming the async Clipboard API just works.
+function _copyStageData(btn, kind) {
+  const text = kind === 'json' ? btn.dataset.copyJson : btn.dataset.copyMd;
+  const feedback = btn.parentElement.querySelector('.copy-feedback');
+  const showResult = (ok) => {
+    if (!feedback) return;
+    feedback.textContent = ok ? 'Copied!' : 'Copy failed';
+    setTimeout(() => { feedback.textContent = ''; }, 1500);
+  };
+  const fallbackCopy = () => {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      showResult(ok);
+    } catch (e) {
+      showResult(false);
+    }
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(() => showResult(true)).catch(fallbackCopy);
+  } else {
+    fallbackCopy();
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Cross-page search, backed by data/stages.jsonl — reaches every artefact and
