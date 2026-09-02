@@ -23,6 +23,7 @@ coverage.xml
 
 # Output (generated artifacts — never commit)
 output/
+outputs/
 
 # Samples
 samples/
@@ -41,4 +42,5 @@ Thumbs.db
 
 # Claude (local)
 .claude/
+.bob/
 graphify-out/cache/
