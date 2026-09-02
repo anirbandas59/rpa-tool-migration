@@ -2352,7 +2352,22 @@ def _print_completion_summary(out_dir: str, manifest: dict) -> None:
 
 
 def main():
+    import contextlib
     import datetime
+
+    # Make console output crash-proof regardless of the terminal's codepage.
+    # The progress bar (█░✓) and completion summary (─·) use characters outside
+    # single-byte encodings like Windows' cp1252 — without this, a plain
+    # Command Prompt (no `chcp 65001` / UTF-8 mode) crashes with
+    # UnicodeEncodeError, typically right at the finish line after a fully
+    # successful run. Scoped to main() (CLI entry only), not import time, so
+    # calling generate_split() etc. as a library never touches global stdio
+    # state. Degrades to '?' on incompatible terminals rather than erroring;
+    # UTF-8-capable terminals are unaffected.
+    for _stream in (sys.stdout, sys.stderr):
+        if hasattr(_stream, "reconfigure"):
+            with contextlib.suppress(Exception):
+                _stream.reconfigure(errors="replace")
 
     if len(sys.argv) < 2:
         print(

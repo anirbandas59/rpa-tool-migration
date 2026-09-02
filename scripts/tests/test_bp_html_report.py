@@ -9,6 +9,8 @@ import os
 import re
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import bp_html_report_v3 as bp_html_report
@@ -569,3 +571,45 @@ def test_styles_css_has_print_stylesheet(make_release_result, tmp_path):
     assert "@media print" in css
     assert "details:not([open])" in css
     assert ".controls-bar" in css
+
+
+# ---------------------------------------------------------------------------
+# main() — console-encoding safety
+# ---------------------------------------------------------------------------
+
+
+def test_main_stdio_reconfigure_is_defensive(monkeypatch):
+    """main()'s stdout/stderr reconfigure (crash-proofing console output on
+    non-UTF-8 terminals, e.g. Windows cp1252 — see the progress bar's block
+    characters and the completion summary's box-drawing character) must not
+    itself raise if a stream lacks reconfigure() entirely, or if calling it
+    raises. Regression test for the UnicodeEncodeError that previously
+    crashed a fully successful run right at the finish line.
+    """
+
+    class _StreamNoReconfigure:
+        def write(self, s):
+            pass
+
+        def flush(self):
+            pass
+
+    class _StreamRaisingReconfigure:
+        def write(self, s):
+            pass
+
+        def flush(self):
+            pass
+
+        def reconfigure(self, **kwargs):
+            raise ValueError("this terminal refuses to reconfigure")
+
+    monkeypatch.setattr(sys, "argv", ["bp_html_report_v3.py"])  # triggers the early usage/exit path
+    monkeypatch.setattr(sys, "stdout", _StreamNoReconfigure())
+    monkeypatch.setattr(sys, "stderr", _StreamRaisingReconfigure())
+
+    # The early "not enough args" path still calls sys.exit(1) — that's
+    # expected and unrelated to what's under test here (the reconfigure step
+    # runs before it and must not raise on its own).
+    with pytest.raises(SystemExit):
+        bp_html_report.main()

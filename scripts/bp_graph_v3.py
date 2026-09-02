@@ -23,7 +23,13 @@ import graphviz
 
 sys.path.insert(0, os.path.dirname(__file__))
 from bp_common import _full_traversal
-from bp_parser import IMPLICIT_PAGE_ID, parse
+
+# Verified before swapping: bp_parser_v2's stage dict is a strict superset of
+# bp_parser's (same keys, plus timeout_seconds/group_id for WaitStart/WaitEnd
+# that this module doesn't read), stats/top-level keys match exactly, and
+# parse()'s signature is identical — this module's standalone CLI (main(),
+# below) behaves the same, just parsed by the actively-maintained pipeline.
+from bp_parser_v2 import IMPLICIT_PAGE_ID, parse
 
 # ---------------------------------------------------------------------------
 # Visual constants
@@ -518,8 +524,19 @@ def render(result: dict, output_stem: str, include_data: bool = False) -> tuple:
 
 
 def main():
+    import contextlib
+
+    # Same fix as bp_html_report_v3.py's main(): make console output
+    # crash-proof on non-UTF-8 terminals (e.g. Windows cp1252, which can't
+    # encode the "→" below) instead of a UnicodeEncodeError right after a
+    # fully successful parse. Scoped to main(), not import time.
+    for _stream in (sys.stdout, sys.stderr):
+        if hasattr(_stream, "reconfigure"):
+            with contextlib.suppress(Exception):
+                _stream.reconfigure(errors="replace")
+
     if len(sys.argv) < 2:
-        print("Usage: python bp_graph.py <file.xml> [output_stem] [--with-data]")
+        print("Usage: python bp_graph_v3.py <file.xml> [output_stem] [--with-data]")
         sys.exit(1)
 
     filepath = sys.argv[1]
