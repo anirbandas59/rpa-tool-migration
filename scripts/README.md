@@ -185,26 +185,22 @@ claim more than the code actually does:
   `render()` already produces one alongside the PNG, so wiring it up in
   `generate_split()` is a small, well-scoped task; it just hasn't been done
   yet.
-- **`bp_graph.py` is broken, not just deprecated.** It imports
-  `_full_traversal` from `bp_html_report` (no version suffix) — a file that
-  no longer exists in `scripts/`; it was moved to `scripts/archived/` when
-  the actively-maintained files were renamed to `_v3`. Importing this script
-  raises `ImportError`. Use `bp_graph_v3.py` instead.
-- **`bp_html_report_v2.py` is an older, unrelated lineage — not a newer
-  version of anything.** Despite the `_v2` suffix, it predates the
-  `bp_parser_v2.py` pipeline (it imports from `bp_parser.py`) and is a
-  different, less-capable ancestor of `bp_html_report_v3.py`, not a version
-  in between. Kept for reference only; not maintained.
-- **`bp_parser.py`** is the original parser, superseded by `bp_parser_v2.py`.
-  Still correct for what it does, just missing the newer fields
-  (`timeout_seconds`, `group_id`) and not receiving further updates.
-- **`bp_report.py`**'s own usage message and docstring still say it consumes
-  `bp_parser.parse()` — its actual import is `bp_parser_v2`, so the parser it
-  uses is current even though the text describing it is stale. Use
-  `bp_report_v3.py`, not this file, for anything new.
-- **`scripts/archived/`** holds the pristine, pre-rename originals of the
-  three files that became `_v3` (`bp_html_report.py`, `bp_report_v2.py`,
-  `bp_graph_v2.py`) — kept for history, not imported by anything.
+
+Everything superseded or unused lives in `scripts/archived/`, not in
+`scripts/` itself, so nothing broken or dead is sitting alongside the active
+pipeline:
+
+| Archived file | Why |
+|---|---|
+| `bp_html_report.py`, `bp_report_v2.py`, `bp_graph_v2.py` | Pristine pre-rename originals of the three files that became `_v3` — kept for history. |
+| `bp_graph.py` | Imported `_full_traversal` from `bp_html_report` (no version suffix) — a file that no longer exists in `scripts/` once the above rename happened. Importing it raises `ImportError`; it was never actually wired into report generation (`bp_html_report_v3.py` has only ever imported `bp_graph_v3.py`). Archived unmodified — its import was never fixed, since fixing dead code just to archive it adds nothing. |
+| `bp_html_report_v2.py` | An older, *unrelated* lineage, not a newer version of anything — despite the `_v2` suffix, it predates the `bp_parser_v2.py` pipeline entirely (it imports from `bp_parser.py`) and is a different, less-capable ancestor of `bp_html_report_v3.py`, not a version in between. |
+| `bp_parser.py` | The original parser, superseded by `bp_parser_v2.py` (which adds `timeout_seconds`/`group_id` for WaitStart/WaitEnd bracket matching). Once `bp_graph.py` and `bp_html_report_v2.py` — its only importers — were archived too, nothing in `scripts/` referenced it any more. |
+| `bp_report.py` | Its own usage message and docstring claim it consumes `bp_parser.parse()`; its actual import was already `bp_parser_v2` (stale docs, current code) — but nothing imported *it*, and `bp_report_v3.py` fully supersedes it. |
+
+None of the seven are imported by anything in `scripts/` — confirmed by
+grepping every remaining file for `from <name> import` before each move, not
+assumed from naming alone.
 
 ## Tests
 
