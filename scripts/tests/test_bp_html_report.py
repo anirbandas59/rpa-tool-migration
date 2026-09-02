@@ -119,8 +119,9 @@ def test_generate_split_index_has_no_dead_expand_collapse_buttons(make_release_r
 
 
 def test_generate_split_index_search_targets_nav_list(make_release_result, tmp_path):
-    """doSearch() in index.html's embedded JS must filter the artefact <li> nav
-    list, not just <summary>/<td> — Pass 1's selector missed the nav list entirely.
+    """doSearch() in index.html's embedded JS must filter the artefact table's
+    rows (Task L: a sortable <table>, not a <ul>), not just <summary>/<td> —
+    Pass 1's selector missed the nav list entirely.
     """
     release = make_release_result(
         processes=[{"name": "My Process", "pages": {}, "stages": []}],
@@ -128,8 +129,8 @@ def test_generate_split_index_search_targets_nav_list(make_release_result, tmp_p
     bp_html_report.generate_split(release, str(tmp_path), graph_fn=None)
     with open(os.path.join(str(tmp_path), "index.html"), encoding="utf-8") as f:
         index_html = f.read()
-    assert "#artefacts-container > ul > li" in index_html
-    assert "li.hidden" in index_html
+    assert "#artefacts-container tbody tr" in index_html
+    assert "row.hidden" in index_html
 
 
 def test_generate_split_index_has_cross_page_search_and_fallback(make_release_result, tmp_path):
@@ -412,7 +413,40 @@ def test_generate_split_nav_shows_actions_used_badge(make_release_result, tmp_pa
     bp_html_report.generate_split(release, str(tmp_path), graph_fn=None, include_all=False)
     with open(os.path.join(str(tmp_path), "index.html"), encoding="utf-8") as f:
         index_html = f.read()
-    assert "1 / 2 actions used" in index_html
+    assert ">1 / 2<" in index_html
+    assert 'data-ratio="0.5"' in index_html  # sortable by reachability (Task L)
+
+
+def test_generate_split_index_has_sortable_artefact_table(make_release_result, tmp_path):
+    """index.html's artefact list is a sortable <table> (Task L), not a flat <ul>."""
+    release = make_release_result(
+        processes=[{"name": "My Process", "pages": {}, "stages": []}],
+    )
+    bp_html_report.generate_split(release, str(tmp_path), graph_fn=None)
+    with open(os.path.join(str(tmp_path), "index.html"), encoding="utf-8") as f:
+        index_html = f.read()
+    assert 'id="artefact-table"' in index_html
+    assert "_sortArtefacts" in index_html
+    assert 'data-sort="name"' in index_html
+    assert 'data-sort="pages"' in index_html
+    assert 'data-sort="ratio"' in index_html
+
+
+def test_artefact_page_has_jump_to_artefact_dropdown(make_release_result, tmp_path):
+    """pages/*.html offers a way to switch artefacts without a round-trip through
+    index.html (Task L) — a <select> listing every other artefact in the release.
+    """
+    release = make_release_result(
+        processes=[{"name": "My Process", "pages": {}, "stages": []}],
+        objects=[{"name": "My VBO", "pages": {}, "stages": []}],
+    )
+    bp_html_report.generate_split(release, str(tmp_path), graph_fn=None)
+    with open(os.path.join(str(tmp_path), "pages", "my-process.html"), encoding="utf-8") as f:
+        page_html = f.read()
+    assert 'id="artefact-jump"' in page_html
+    assert ">My Process<" in page_html
+    assert ">My VBO<" in page_html
+    assert 'value="my-vbo.html"' in page_html
 
 
 def test_stage_card_has_stage_id_anchor(make_release_result, tmp_path):

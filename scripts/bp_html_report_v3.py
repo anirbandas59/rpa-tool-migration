@@ -818,9 +818,22 @@ _SHARED_CSS = """
   #search-results a { color: #0C447C; text-decoration: none; font-weight: 600; }
   #search-results a:hover { text-decoration: underline; }
   .search-hit-meta { display: block; color: #888; font-size: 11px; margin-top: 2px; }
+  /* Sortable artefact table (index.html only — Task L) */
+  .artefact-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .artefact-table th {
+    text-align: left; padding: 8px 10px; font-size: 11px; color: #888;
+    text-transform: uppercase; letter-spacing: .3px; border-bottom: 2px solid #e0e0e0;
+    cursor: pointer; user-select: none; white-space: nowrap;
+  }
+  .artefact-table th:hover { color: #0C447C; }
+  .artefact-table td { padding: 7px 10px; border-bottom: 1px solid #f0f0f0; }
+  .artefact-table tr:hover td { background: #fafbfc; }
+  .sort-ind { display: inline-block; width: 10px; }
   @media (max-width: 600px) {
     .stat-grid { grid-template-columns: repeat(2, 1fr); }
     #search-box { width: 100%; }
+    .artefact-table { font-size: 12px; }
+    .artefact-table th, .artefact-table td { padding: 6px; }
   }
   /* Stage card */
   .stage-card { margin-bottom:6px; border:1px solid #eee; border-radius:6px; overflow:hidden; }
@@ -845,6 +858,30 @@ _SHARED_CSS = """
 _SHARED_JS = """
 function toggleAll(open) {
   document.querySelectorAll('#pages-container details, #artefacts-container details').forEach(d => d.open = open);
+}
+
+// Sortable artefact table on index.html (Task L) — no-op elsewhere, since
+// #artefact-table only exists there. Toggles ascending/descending on repeat
+// clicks of the same column; numeric columns (pages, ratio) sort numerically.
+let _artefactSort = {col: null, dir: 1};
+function _sortArtefacts(col) {
+  const tbody = document.querySelector('#artefact-table tbody');
+  if (!tbody) return;
+  const numeric = col === 'pages' || col === 'ratio';
+  const dir = (_artefactSort.col === col) ? -_artefactSort.dir : 1;
+  _artefactSort = {col: col, dir: dir};
+  const rows = Array.from(tbody.querySelectorAll('tr'));
+  rows.sort((a, b) => {
+    let av = a.dataset[col], bv = b.dataset[col];
+    if (numeric) { av = parseFloat(av); bv = parseFloat(bv); }
+    if (av < bv) return -dir;
+    if (av > bv) return dir;
+    return 0;
+  });
+  rows.forEach(r => tbody.appendChild(r));
+  document.querySelectorAll('#artefact-table th .sort-ind').forEach(el => { el.textContent = ''; });
+  const activeTh = document.querySelector(`#artefact-table th[data-sort="${col}"] .sort-ind`);
+  if (activeTh) activeTh.textContent = dir === 1 ? ' \\u25B2' : ' \\u25BC';
 }
 
 // Deep-link support (Task K): the #stage-{id} anchor sits on <summary>, which is
@@ -909,9 +946,9 @@ _loadStageIndex(); // kick off eagerly so it's ready by the time someone searche
 function _renderCrossPageResults(records, q) {
   const countEl = document.getElementById('search-count');
   const resultsEl = document.getElementById('search-results');
-  // Undo any nav-list filtering left over from a same-page fallback pass before
+  // Undo any nav-table filtering left over from a same-page fallback pass before
   // the index finished loading — cross-page results below supersede it.
-  document.querySelectorAll('#artefacts-container > ul > li').forEach(li => { li.hidden = false; });
+  document.querySelectorAll('#artefacts-container tbody tr').forEach(row => { row.hidden = false; });
   const lq = q.toLowerCase();
   const hits = records.filter(r =>
     (r.artefact && r.artefact.toLowerCase().includes(lq)) ||
@@ -938,23 +975,27 @@ function _renderCrossPageResults(records, q) {
   }).join('');
 }
 
-// Same-page fallback (Pass 1/Task I behaviour) — nav-list filter on index.html,
-// auto-expand matching <details> everywhere that has real accordion content.
+// Same-page fallback (Pass 1/Task I behaviour) — nav-table filter on
+// index.html (Task L: rows, not <li>), auto-expand matching <details>
+// everywhere that has real accordion content.
 function _samePageSearch(q) {
   const countEl = document.getElementById('search-count');
-  const navItems = document.querySelectorAll('#artefacts-container > ul > li');
+  const navRows = document.querySelectorAll('#artefacts-container tbody tr');
   if (!q) {
-    navItems.forEach(li => { li.hidden = false; });
+    navRows.forEach(row => { row.hidden = false; });
     return;
   }
   const lq = q.toLowerCase();
   let hits = 0;
-  navItems.forEach(li => {
-    const match = li.textContent.toLowerCase().includes(lq);
-    li.hidden = !match;
+  navRows.forEach(row => {
+    const match = row.textContent.toLowerCase().includes(lq);
+    row.hidden = !match;
     if (match) hits++;
   });
   document.querySelectorAll('summary, td').forEach(el => {
+    // The artefact table's own <td> cells are already counted via navRows
+    // above (by row, not per-cell) — skip them here to avoid double-counting.
+    if (el.closest('#artefacts-container')) return;
     if (el.textContent.toLowerCase().includes(lq)) {
       hits++;
       const parent = el.closest('details');
@@ -1101,13 +1142,23 @@ def _artefact_page_html(
     img_map: dict,
     pruned_pages: list,
     include_all: bool = False,
+    artefact_nav: list[tuple[str, str]] | None = None,
 ) -> str:
     """
     Render one artefact (process or object) as a complete standalone HTML page.
 
     img_map:      {slug_pagename: relative_img_url} e.g. {"myproc_main": "../images/myproc_main.png"}
     pruned_pages: names of action pages omitted due to VBO pruning
+    artefact_nav: [(name, slug), …] for every artefact in the release, sorted by
+                  name — powers the "jump to artefact" control (Task L), letting a
+                  reader switch artefacts without a round-trip through index.html.
     """
+    artefact_nav = artefact_nav or []
+    jump_options = "".join(
+        f'<option value="{_e(nav_slug)}.html"{" selected" if nav_slug == slug else ""}>'
+        f"{_e(nav_name)}</option>"
+        for nav_name, nav_slug in artefact_nav
+    )
     meta = result["meta"]
     pages = result["pages"]
     stages = result["stages"]
@@ -1200,8 +1251,13 @@ def _artefact_page_html(
 </head>
 <body>
 <div class="wrap">
-  <div style="margin-bottom:16px;font-size:13px">
+  <div style="margin-bottom:16px;font-size:13px;display:flex;align-items:center;gap:14px;flex-wrap:wrap">
     <a href="../index.html" style="color:#0C447C;text-decoration:none">← Release index</a>
+    <select id="artefact-jump" onchange="if (this.value) location.href = this.value"
+            style="border:1px solid #ddd;border-radius:6px;padding:4px 8px;font-size:12px;color:#333">
+      <option value="">Jump to artefact…</option>
+      {jump_options}
+    </select>
   </div>
   <div class="header-card">
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
@@ -1575,6 +1631,16 @@ def generate_split(
     total_artefacts = len(all_artefacts)
     nav_items: list[str] = []
 
+    # Precomputed once, passed to every artefact page so pages/*.html can offer a
+    # "jump to artefact" control without a round-trip through index.html (Task L).
+    artefact_nav = sorted(
+        (
+            a["meta"]["name"],
+            re.sub(r"[^a-z0-9]+", "-", a["meta"]["name"].lower()).strip("-"),
+        )
+        for a in all_artefacts
+    )
+
     for idx, art in enumerate(all_artefacts):
         meta = art["meta"]
         pages = art["pages"]
@@ -1628,6 +1694,7 @@ def generate_split(
             img_map=img_map,
             pruned_pages=pruned_pages,
             include_all=include_all,
+            artefact_nav=artefact_nav,
         )
         page_path = os.path.join(out_dir, "pages", f"{slug}.html")
         with open(page_path, "w", encoding="utf-8") as _pf:
@@ -1637,29 +1704,36 @@ def generate_split(
         if progress_fn:
             progress_fn(idx + 1, total_artefacts, f"Rendering: {meta['name']}")
 
-        # Nav item — VBOs get a "N / M actions used" reachability badge (only
-        # meaningful with pruning active: --include-all renders everything, so
-        # "used" wouldn't mean anything there — same reason a process, which has
-        # no VBO action pages of its own, never gets one).
+        # Nav row (Task L: sortable table) — VBOs get a "N / M actions used"
+        # reachability badge (only meaningful with pruning active: --include-all
+        # renders everything, so "used" wouldn't mean anything there — same reason
+        # a process, which has no VBO action pages of its own, never gets one).
         atype = meta["artefact_type"]
-        badge_html = ""
+        used_cell = "—"
+        used_ratio = -1.0  # sorts before/after real ratios, consistently, either way
         if is_vbo and total_action_pages and not include_all:
             used = total_action_pages - len(pruned_pages)
+            used_ratio = used / total_action_pages
             badge_color = "#3B6D11" if used < total_action_pages else "#888"
-            badge_html = (
-                f' <span style="background:{badge_color}22;color:{badge_color};'
-                f'padding:1px 7px;border-radius:8px;font-size:10px;font-weight:600">'
-                f"{used} / {total_action_pages} actions used</span>"
+            used_cell = (
+                f'<span style="background:{badge_color}22;color:{badge_color};'
+                f"padding:1px 7px;border-radius:8px;font-size:10px;font-weight:600;"
+                f'white-space:nowrap">{used} / {total_action_pages}</span>'
+            )
+        pages_cell = f"{pages_rendered}"
+        if pruned_pages:
+            pages_cell += (
+                f'<span style="color:#aaa;font-size:11px"> ({len(pruned_pages)} omitted)</span>'
             )
         nav_items.append(
-            f'<li style="padding:6px 0;border-bottom:1px solid #f0f0f0">'
-            f'<a href="pages/{slug}.html" style="color:#0C447C;text-decoration:none;'
-            f'font-weight:600">{_e(meta["name"])}</a>'
-            f"{badge_html}"
-            f' <span style="font-size:11px;color:#888">'
-            f"({atype}, {pages_rendered} page{'s' if pages_rendered != 1 else ''}"
-            f"{f', {len(pruned_pages)} omitted' if pruned_pages else ''})"
-            f"</span></li>"
+            f'<tr data-name="{_e(meta["name"].lower())}" data-type="{atype}" '
+            f'data-pages="{pages_rendered}" data-ratio="{used_ratio}">'
+            f'<td><a href="pages/{slug}.html" style="color:#0C447C;text-decoration:none;'
+            f'font-weight:600">{_e(meta["name"])}</a></td>'
+            f"<td>{atype}</td>"
+            f"<td>{pages_cell}</td>"
+            f"<td>{used_cell}</td>"
+            f"</tr>"
         )
 
     # 6. Build and write index.html
@@ -1889,9 +1963,19 @@ def generate_split(
   {controls_html}
   <div class="section-label">Artefacts</div>
   <div id="artefacts-container">
-    <ul style="list-style:none;padding:0;margin:0">
+    <table class="artefact-table" id="artefact-table">
+      <thead>
+        <tr>
+          <th data-sort="name" onclick="_sortArtefacts('name')">Name<span class="sort-ind"></span></th>
+          <th data-sort="type" onclick="_sortArtefacts('type')">Type<span class="sort-ind"></span></th>
+          <th data-sort="pages" onclick="_sortArtefacts('pages')">Pages<span class="sort-ind"></span></th>
+          <th data-sort="ratio" onclick="_sortArtefacts('ratio')">Reachability<span class="sort-ind"></span></th>
+        </tr>
+      </thead>
+      <tbody>
       {nav_items_html}
-    </ul>
+      </tbody>
+    </table>
   </div>
   {env_section}
   {xref_section}
