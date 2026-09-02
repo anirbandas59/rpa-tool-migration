@@ -1124,6 +1124,156 @@ full test suite + linter in step 3 are clean.
 
 ---
 
+**Task 7's own review** (`docs/reviews/7-2026-09-01.md`, 45%, "needs another implementation pass")
+was the *first* full generated-solution-vs-full-reference-package comparison this session —
+every prior review scored one task's own scoped diff. It found 8 concrete, cited gaps that no
+per-task review could have caught individually. Independently re-confirmed against a fresh
+regeneration on 2026-09-03 (after several more 5b/5c/6a/6b fix-passes had already landed) that all
+8 are still present — this is not a stale finding. Gaps 1-4 are architecture-layer (they'll affect
+every future automation in the ~200-program rollout, not just PID_171-specific content) and are
+split into their own tasks below, each independently scoped per the lesson from Task 5a's history
+(don't bundle reasoning-heavy work with mechanical work in one pass). Gaps 5-8 are smaller and
+largely independent of each other's difficulty, bundled into one cleanup task.
+
+## Task 7a — `mapping/vbo_catalogue.yaml`: wire WorkQueues `method_actions` templates
+
+**Depends on:** Task 6b
+**Files in scope:** `mapping/vbo_catalogue.yaml`, `src/flowsmith/generator/pad.py` (the
+`WorkQueues` dispatch branch only), `tests/generator/test_pad.py`, `tests/mapper/test_vbo_router.py`
+**Required reading:** `docs/pad-reference/vbo-action-mapping.md`'s Work Queues table (already has
+real, cited PAD call templates for `Get Next Item`, `Mark Completed`, `Mark Exception` — 3 status
+variants, `Update Status`); `mapping/vbo_catalogue.yaml`'s existing `clsWorkQueuesActions` entry
+(cites this exact table in its own `notes` field already, per `docs/reviews/7-2026-09-01.md`'s
+VBO/action fidelity finding).
+
+**Do:**
+1. Populate `method_actions` on `clsWorkQueuesActions`'s catalogue entry for `Get Next Item`,
+   `Mark Completed`, `Mark Exception`, `Update Status` — the real syntax already exists in
+   `vbo-action-mapping.md`, this is transcription with citation, not new research.
+2. `Tag Item`/`Defer` correctly stay `# TODO` (the mapping doc's own row already says
+   **STOP** — no direct call observed, `ReviewFlag`) — do not invent syntax for these two.
+3. Wire `generator/pad.py`'s `WorkQueues` dispatch branch to actually consume `method_actions`
+   (confirmed by the Task 7 review the catalogue entry has module/confidence/citation wired but no
+   per-method template, so today's codegen has nothing to render even where the catalogue is
+   otherwise correct).
+
+**Done when:** regenerating `PID_0171.bprelease` shows zero `# TODO: WorkQueues.<action>` stubs for
+the 4 documented actions (Tag Item/Defer TODOs remain, expected); a test asserts the real syntax
+renders for at least `Get Next Item`.
+
+**Out of scope:** any VBO other than `clsWorkQueuesActions`; the `GLOBAL.` qualification these
+generated calls' output variables will need (Task 7b).
+
+---
+
+## Task 7b — `generator/pad.py`: `GLOBAL.` qualification + consecutive-exception dispatch completion
+
+**Depends on:** Task 6b
+**Files in scope:** `src/flowsmith/generator/pad.py`, `mapping/page_target_map.yaml`,
+`tests/generator/test_pad.py`
+**Required reading:** `docs/bp-to-pad-architecture-PID171.md` §A4 (the `GLOBAL.` qualification
+rule — named as "the root cause of the historical `Variables.IncreaseVariable`-on-`GLOBAL.var` bug"
+when omitted), §A7/§A8-D4 (the consecutive-exception BE/SUE/SE dispatch pattern, with real line
+citations for `Send Consecutive Exception Mail`/`Send System Exception Mail`).
+
+**Why these two are one task:** per `docs/reviews/7-2026-09-01.md`, they're causally linked, not
+two separate defects — `num_ConsecutiveExceptionCount`/`Limit` exist by name inside `Mark Exception`
+but are never `GLOBAL.`-qualified, so the counter resets to 0 on every per-item call instead of
+persisting across queue items, which is the entire point of "consecutive." Fixing the qualification
+without also completing the dispatch (or vice versa) leaves the pattern still non-functional.
+
+**Do:**
+1. Implement §A4's `GLOBAL.` qualification rule: any variable referenced across `FUNCTION`
+   boundaries (main-body/cross-call state, not a function's own local declarations) must be
+   `GLOBAL.`-prefixed. Currently 0 occurrences anywhere in generated output despite 15 of 16
+   Performer `FUNCTION`s being non-`GLOBAL` and needing to read/write main-body state.
+2. Fill in `Mark Exception`'s `Limit?` gating `IF` — currently an unfilled `# VERIFY` comment, not
+   the real breach-check logic (`docs/bp-to-pad-architecture-PID171.md` §A7 already has this logic
+   fully reverse-engineered from the real BP page).
+3. Add `mapping/page_target_map.yaml` entries + generate the two missing `FUNCTION`s
+   (`Send Consecutive Exception Mail`, `Send System Exception Mail`) — real line citations already
+   exist in §A7/§A8-D4 (L1026, L1096, L1283-1302 of the reference Performer file).
+
+**Done when:** regenerating `PID_0171.bprelease` shows `GLOBAL.num_ConsecutiveExceptionCount`/
+`Limit` (not bare `num_...`); a test confirms the counter persists across simulated consecutive
+calls rather than resetting; `Limit?`'s `IF` contains real breach logic, not `# VERIFY`; both
+`Send Consecutive Exception Mail` and `Send System Exception Mail` `FUNCTION`s exist in generated
+output.
+
+**Out of scope:** Task 5c's `BLOCK`/`ON BLOCK ERROR` structural pattern (already done) — this task
+only fixes variable scoping and fills in the one named dispatch gap inside it.
+
+---
+
+## Task 7c — `generator/pad.py`: match the reference's single-parameter `@INPUT` contract
+
+**Depends on:** Task 6b
+**Files in scope:** `src/flowsmith/generator/pad.py` (flow-header generation),
+`templates/pad/flow_header.robin.j2`, `tests/generator/test_pad.py`
+**Required reading:** `docs/bp-to-pad-architecture-PID171.md` §A4 (the `In_`/`Out_`-prefixed
+single-JSON-blob interface); `docs/reviews/7-2026-09-01.md`'s Naming-convention finding (the real
+orchestrator's `RunUIFlow_V2` call was decoded directly and confirmed to only ever send
+`In_txt_Config` — the generated Desktop Flows' declared input surface doesn't match what will
+actually be supplied at call time, not just a style mismatch).
+
+**Do:** replace the current per-stage-VBO-parameter-union `@INPUT` collection (92 raw,
+space-containing, unprefixed names in Loader; 111 in Performer — e.g. `Sender Mail ID`, `Queue
+Name`, and one that carries a source typo through verbatim, `SystemException_Maiil ID`) with the
+single `In_txt_Config` contract both reference files actually use.
+
+**Done when:** regenerating `PID_0171.bprelease` shows exactly 1 `@INPUT` (`In_txt_Config`) per
+generated file, matching the reference and the orchestrator's real call signature.
+
+**Out of scope:** `@OUTPUT` (already correctly left empty with a `# TODO`, per Task 5a's Fix C);
+the orchestrator's own Cloud Flow JSON (Task 7d).
+
+---
+
+## Task 7d — packaging/mapping/fallback cleanup (4 independent, small fixes)
+
+**Depends on:** Task 6b
+**Files in scope:** `src/flowsmith/cli/app.py`, `src/flowsmith/generator/packager.py`,
+`mapping/page_target_map.yaml`, `src/flowsmith/generator/pad.py` (fallback-rendering paths only)
+**Required reading:** `docs/bp-to-pad-architecture-PID171.md` §A1 (Cloud Flow content-storage
+convention); `CLAUDE.md`'s "never silently drop a BP construct... leave a `# TODO` comment naming
+what it was and why" rule; `docs/reviews/7-2026-09-01.md` gaps 5, 6, 7, 8.
+
+**Do (4 independent items, no shared logic — implement and test each separately):**
+1. **Orphan `Populate_Queue_cloudflow.json`** — `cli/app.py:58` still invokes the old per-page
+   `CloudFlowGenerator.generate_process()` path alongside the new consolidated packaging path;
+   `packager.py:222-225` blindly copies its output into the `.zip` wholesale, unreferenced by
+   anything. Remove the old invocation — violates Task 6b's own "exactly the file counts" done
+   condition.
+2. **Orchestrator Cloud Flow content storage is inverted from the reference's documented
+   convention** — real Logic-App JSON currently sits inline in `<Definition>`, while the
+   `<JsonFileName>`-referenced companion file is a hollow `{"package": ""}` stub. Per §A1, Cloud
+   Flows should carry no inline `<Definition>`, only a real `<JsonFileName>` payload — the reverse
+   of the current output. Fix `packager.py`'s storage direction for Cloud Flow workflow entries
+   specifically (Desktop Flow entries' inline `<Definition>` storage is correct and unaffected).
+3. **Missing `Load Config Data` mapping entry** — present in the reference Loader (L213), has no
+   entry anywhere in `mapping/page_target_map.yaml` and is silently missing from generated output,
+   unlike the four legitimately-`stop`-shaped orphan pages (which are cited with reasons). Add the
+   entry, citing the reference line.
+4. **Fallback honesty for untranslated expressions** — when Task 5b's translator returns empty for
+   a BP expression, `pad.py:1636`/`:1690`'s fallback currently emits either a commented-out unfilled
+   template skeleton or a bare `%SomeVar%` placeholder, with only a confidence-band comment naming
+   the *stage* — not a `# TODO` naming *why* it failed or *what BP expression* needs manual
+   completion, per CLAUDE.md's rule. Change the fallback to emit
+   `# TODO: could not translate BP expression '<raw expression>' on stage '<stage name>' — needs
+   manual completion` instead of a placeholder that looks like it might already be real.
+
+**Done when:** regenerating `PID_0171.bprelease`'s `.zip` contains no unreferenced Cloud Flow JSON
+file; the orchestrator CF's `<Definition>`/`<JsonFileName>` storage matches the reference's
+convention; `Load Config Data` `FUNCTION` is present; every remaining untranslated-expression
+fallback line is a `# TODO` naming the source expression, not a bare placeholder value or an
+unfilled template skeleton.
+
+**Out of scope:** the underlying reasons expressions fail to translate in the first place (that's
+Task 5b's/7a's/7b's job depending on which construct) — this task only fixes how the *failure* is
+reported when it does happen.
+
+---
+
 ## Task 8 — `reporter/`: developer-facing AUTO/SPOT-CHECK/MANUAL coverage report
 
 **Why this task exists (context, not part of the PID_171 output itself):** PID_171 is the pilot
