@@ -703,6 +703,7 @@ def generate(result: dict, graph_fn=None) -> str:
     <input id="search-box" type="text" placeholder="Search stages…" oninput="doSearch(this.value)">
     <span id="search-count" style="font-size:12px;color:#888"></span>
   </div>
+  <ul id="search-results" hidden></ul>
 
   <!-- ===== PAGE SECTIONS ===== -->
   <div class="section-label">Pages</div>
@@ -799,6 +800,18 @@ _SHARED_CSS = """
   }
   #search-box:focus { border-color: #0C447C; }
   .highlight { background: #fff3cd; border-radius: 2px; }
+  /* Cross-page search results (data/stages.jsonl-backed, when reachable) */
+  #search-results {
+    list-style: none; margin: -8px 0 16px; padding: 0; border: 1px solid #e0e0e0;
+    border-radius: 8px; background: #fff; max-height: 360px; overflow-y: auto;
+  }
+  #search-results li {
+    padding: 8px 14px; border-bottom: 1px solid #f0f0f0; font-size: 12px;
+  }
+  #search-results li:last-child { border-bottom: none; }
+  #search-results a { color: #0C447C; text-decoration: none; font-weight: 600; }
+  #search-results a:hover { text-decoration: underline; }
+  .search-hit-meta { display: block; color: #888; font-size: 11px; margin-top: 2px; }
   @media (max-width: 600px) {
     .stat-grid { grid-template-columns: repeat(2, 1fr); }
     #search-box { width: 100%; }
@@ -827,14 +840,86 @@ _SHARED_JS = """
 function toggleAll(open) {
   document.querySelectorAll('#pages-container details, #artefacts-container details').forEach(d => d.open = open);
 }
-function doSearch(q) {
+
+// ---------------------------------------------------------------------------
+// Cross-page search, backed by data/stages.jsonl — reaches every artefact and
+// stage from any page, not just the current one. fetch() is blocked on file://
+// origins in Chrome/Safari (the common way these reports are opened), so this
+// degrades gracefully to the same-page search below whenever it's unavailable
+// (single-file mode has no data/ export at all; file:// commonly blocks it too).
+// ---------------------------------------------------------------------------
+let _stageIndexPromise = null;
+let _stageIndexReady = null; // null = pending, true = loaded, false = unavailable
+
+function _inPagesDir() {
+  return /(^|\\/)pages\\//.test(window.location.pathname);
+}
+function _dataUrl() {
+  return (_inPagesDir() ? '../' : '') + 'data/stages.jsonl';
+}
+function _pagesPrefix() {
+  return _inPagesDir() ? '' : 'pages/';
+}
+function _slugify(name) {
+  return (name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+function _escHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function _loadStageIndex() {
+  if (_stageIndexPromise) return _stageIndexPromise;
+  _stageIndexPromise = fetch(_dataUrl())
+    .then(r => { if (!r.ok) throw new Error('stages.jsonl not reachable'); return r.text(); })
+    .then(text => {
+      const records = text.split('\\n').filter(Boolean).map(line => {
+        try { return JSON.parse(line); } catch (e) { return null; }
+      }).filter(Boolean);
+      _stageIndexReady = true;
+      return records;
+    })
+    .catch(() => { _stageIndexReady = false; return null; });
+  return _stageIndexPromise;
+}
+_loadStageIndex(); // kick off eagerly so it's ready by the time someone searches
+
+function _renderCrossPageResults(records, q) {
   const countEl = document.getElementById('search-count');
-  document.querySelectorAll('.highlight').forEach(el => { el.outerHTML = el.textContent; });
-  // Nav list only exists on index.html (empty NodeList everywhere else) — filter
-  // it by hiding non-matching rows, since there's nothing here to expand into view.
+  const resultsEl = document.getElementById('search-results');
+  // Undo any nav-list filtering left over from a same-page fallback pass before
+  // the index finished loading — cross-page results below supersede it.
+  document.querySelectorAll('#artefacts-container > ul > li').forEach(li => { li.hidden = false; });
+  const lq = q.toLowerCase();
+  const hits = records.filter(r =>
+    (r.artefact && r.artefact.toLowerCase().includes(lq)) ||
+    (r.page && r.page.toLowerCase().includes(lq)) ||
+    (r.name && r.name.toLowerCase().includes(lq)) ||
+    (r.vbo_object && r.vbo_object.toLowerCase().includes(lq)) ||
+    (r.vbo_action && r.vbo_action.toLowerCase().includes(lq)) ||
+    (r.expression && r.expression.toLowerCase().includes(lq))
+  );
+  const shown = hits.slice(0, 50);
+  if (countEl) {
+    countEl.textContent = hits.length
+      ? `${hits.length} match${hits.length > 1 ? 'es' : ''}${hits.length > 50 ? ' (showing 50)' : ''}`
+      : 'No matches';
+  }
+  if (!resultsEl) return;
+  if (!shown.length) { resultsEl.hidden = true; resultsEl.innerHTML = ''; return; }
+  resultsEl.hidden = false;
+  resultsEl.innerHTML = shown.map(r => {
+    const href = _pagesPrefix() + _slugify(r.artefact) + '.html' + (r.id ? '#stage-' + r.id : '');
+    const meta = r.vbo_action ? `${_escHtml(r.vbo_object)} \\u2192 ${_escHtml(r.vbo_action)}` : _escHtml(r.stage_type);
+    return `<li><a href="${href}">${_escHtml(r.artefact)} \\u203a ${_escHtml(r.page)} \\u203a ${_escHtml(r.name)}</a>`
+         + `<span class="search-hit-meta">${meta}</span></li>`;
+  }).join('');
+}
+
+// Same-page fallback (Pass 1/Task I behaviour) — nav-list filter on index.html,
+// auto-expand matching <details> everywhere that has real accordion content.
+function _samePageSearch(q) {
+  const countEl = document.getElementById('search-count');
   const navItems = document.querySelectorAll('#artefacts-container > ul > li');
-  if (!q || q.length < 2) {
-    countEl.textContent = '';
+  if (!q) {
     navItems.forEach(li => { li.hidden = false; });
     return;
   }
@@ -852,7 +937,39 @@ function doSearch(q) {
       if (parent) parent.open = true;
     }
   });
-  countEl.textContent = hits ? `${hits} match${hits > 1 ? 'es' : ''}` : 'No matches';
+  if (countEl) countEl.textContent = hits ? `${hits} match${hits > 1 ? 'es' : ''}` : 'No matches';
+}
+
+function doSearch(q) {
+  const countEl = document.getElementById('search-count');
+  const resultsEl = document.getElementById('search-results');
+  document.querySelectorAll('.highlight').forEach(el => { el.outerHTML = el.textContent; });
+
+  if (!q || q.length < 2) {
+    if (countEl) countEl.textContent = '';
+    if (resultsEl) { resultsEl.hidden = true; resultsEl.innerHTML = ''; }
+    _samePageSearch('');
+    return;
+  }
+
+  if (_stageIndexReady === true) {
+    _stageIndexPromise.then(records => { if (records) _renderCrossPageResults(records, q); });
+    return;
+  }
+  if (_stageIndexReady === null) {
+    // Still loading — pick it up for this query too if it resolves in time,
+    // guarded so a stale response can't clobber a newer, faster-typed query.
+    _stageIndexPromise.then(records => {
+      const box = document.getElementById('search-box');
+      if (records && box && box.value === q) _renderCrossPageResults(records, q);
+    });
+  }
+  // Unavailable, or still pending for this keystroke: same-page fallback. Clear
+  // any cross-page results left over from before the index became unavailable
+  // (or from a prior query while it was still loading), so results and the
+  // nav-list filter never show two conflicting result sets at once.
+  if (resultsEl) { resultsEl.hidden = true; resultsEl.innerHTML = ''; }
+  _samePageSearch(q);
 }
 """
 
@@ -1087,6 +1204,7 @@ def _artefact_page_html(
            oninput="doSearch(this.value)">
     <span id="search-count" style="font-size:12px;color:#888"></span>
   </div>
+  <ul id="search-results" hidden></ul>
 
   <div class="section-label">Pages</div>
   <div id="artefacts-container">
@@ -1343,6 +1461,7 @@ def generate_release(release_result: dict, graph_fn=None) -> str:
            oninput="doSearch(this.value)">
     <span id="search-count" style="font-size:12px;color:#888"></span>
   </div>
+  <ul id="search-results" hidden></ul>
 
   {env_section}
 
@@ -1540,12 +1659,17 @@ def generate_split(
 
     # No expand/collapse-all here: the artefact nav list below has no <details> to
     # toggle (that content lives in pages/*.html, which has its own controls bar).
+    # Placeholder covers both cases: cross-page stage search when data/stages.jsonl
+    # is reachable (fetch() works — served over HTTP, or Firefox on file://), falling
+    # back to an artefact-name-only filter of the nav list below when it isn't
+    # (Chrome/Safari block fetch() on file://; single-file mode has no data/ at all).
     controls_html = """
 <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap">
-  <input id="search-box" type="text" placeholder="Search artefacts…"
+  <input id="search-box" type="text" placeholder="Search artefacts, stages, VBOs…"
          oninput="doSearch(this.value)">
   <span id="search-count" style="font-size:12px;color:#888"></span>
 </div>
+<ul id="search-results" hidden></ul>
 """
 
     nav_items_html = "\n        ".join(nav_items)
@@ -1831,6 +1955,7 @@ def write_data_exports(
                 page_name = pages.get(pid, {}).get("name", pid)
                 reachable_ids = reachable_by_page.get(pid, set())
                 record = {
+                    "id": stage["id"],  # not yet a DOM anchor target — see Task K
                     "artefact": result["meta"]["name"],
                     "artefact_type": result["meta"]["artefact_type"],
                     "page": page_name,

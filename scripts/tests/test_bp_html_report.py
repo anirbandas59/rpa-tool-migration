@@ -132,6 +132,39 @@ def test_generate_split_index_search_targets_nav_list(make_release_result, tmp_p
     assert "li.hidden" in index_html
 
 
+def test_generate_split_index_has_cross_page_search_and_fallback(make_release_result, tmp_path):
+    """index.html's embedded JS must fetch data/stages.jsonl for cross-page search
+    AND retain the same-page nav-list fallback for when fetch() is unavailable
+    (blocked on file:// in Chrome/Safari, or 404 in single-file mode).
+    """
+    release = make_release_result(
+        processes=[{"name": "My Process", "pages": {}, "stages": []}],
+    )
+    bp_html_report.generate_split(release, str(tmp_path), graph_fn=None)
+    with open(os.path.join(str(tmp_path), "index.html"), encoding="utf-8") as f:
+        index_html = f.read()
+    assert "data/stages.jsonl" in index_html
+    assert "_loadStageIndex" in index_html
+    assert "_renderCrossPageResults" in index_html
+    assert "_samePageSearch" in index_html  # fallback path retained, not removed
+    assert 'id="search-results"' in index_html
+
+
+def test_generate_split_artefact_page_has_cross_page_search(make_release_result, tmp_path):
+    """pages/*.html must also load the cross-page index (via ../data/stages.jsonl,
+    one level up from index.html's data/stages.jsonl) so search reaches every
+    artefact from within any single artefact's page too.
+    """
+    release = make_release_result(
+        processes=[{"name": "My Process", "pages": {}, "stages": []}],
+    )
+    bp_html_report.generate_split(release, str(tmp_path), graph_fn=None)
+    with open(os.path.join(str(tmp_path), "pages", "my-process.html"), encoding="utf-8") as f:
+        page_html = f.read()
+    assert "_loadStageIndex" in page_html
+    assert 'id="search-results"' in page_html
+
+
 def test_generate_split_styles_css_has_stage_card(make_release_result, tmp_path):
     """styles.css contains the .stage-card class extracted from _SHARED_CSS."""
     release = make_release_result(
@@ -191,6 +224,28 @@ def test_write_data_exports_manifest_has_expected_types(make_release_result, tmp
     assert "release-json" in types
     assert "stages-jsonl" in types
     assert "manifest" in types
+
+
+def test_write_data_exports_stages_jsonl_has_stage_id(make_release_result, tmp_path):
+    """Each stages.jsonl record carries the stage's real id — needed so a search
+    result can deep-link to #stage-{id} once Task K adds those DOM anchors.
+    """
+    release = make_release_result(
+        processes=[
+            {
+                "name": "Proc A",
+                "pages": {"p1": {"name": "Main", "type": "Normal", "published": None}},
+                "stages": [_make_stage("s1", page_id="p1")],
+            }
+        ],
+    )
+    data_dir = os.path.join(str(tmp_path), "data")
+    os.makedirs(data_dir)
+    bp_html_report.write_data_exports(release, data_dir, release["processes"], release["objects"])
+    with open(os.path.join(data_dir, "stages.jsonl"), encoding="utf-8") as f:
+        records = [json.loads(line) for line in f if line.strip()]
+    assert records
+    assert records[0]["id"] == "s1"
 
 
 def test_write_data_exports_artefact_md_written(make_release_result, tmp_path):
