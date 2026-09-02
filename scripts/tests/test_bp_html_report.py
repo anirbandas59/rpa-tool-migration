@@ -359,3 +359,76 @@ def test_generate_split_include_all_disables_pruning(make_release_result, tmp_pa
         release, str(tmp_path / "all"), graph_fn=None, include_all=True
     )
     assert m_all["total_pages_rendered"] >= m_pruned["total_pages_rendered"]
+
+
+def test_generate_split_prunes_entirely_unused_vbo(make_release_result, tmp_path):
+    """Regression: a VBO never called by ANY process must still be pruned down to
+    just its structural pages — the pruning gate previously required
+    `called_actions` to be non-empty, so a completely-unused VBO (empty
+    called_actions) skipped pruning entirely and rendered every page.
+    """
+    release = make_release_result(
+        processes=[{"name": "P", "pages": {}, "stages": []}],  # calls nothing
+        objects=[
+            {
+                "name": "Unused VBO",
+                "pages": {
+                    "IMPLICIT_MAIN": {"name": "Initialize", "type": "implicit", "published": None},
+                    "pa": {"name": "Action A", "type": "Normal", "published": None},
+                    "pb": {"name": "Action B", "type": "Normal", "published": None},
+                },
+                "stages": [],
+            }
+        ],
+    )
+    manifest = bp_html_report.generate_split(
+        release, str(tmp_path), graph_fn=None, include_all=False
+    )
+    assert manifest.get("total_pages_pruned", 0) == 2  # both actions, none called
+    page_html = (tmp_path / "pages" / "unused-vbo.html").read_text(encoding="utf-8")
+    assert "Initialize" in page_html  # structural page always kept
+    assert page_html.count("Action A") == 1  # footer-only mention, not a full card
+    assert page_html.count("Action B") == 1
+
+
+def test_generate_split_nav_shows_actions_used_badge(make_release_result, tmp_path):
+    """index.html's nav list shows an 'N / M actions used' badge for a VBO with
+    partial reachability (Task K) — not just the raw page count from Task H.
+    """
+    proc_stages = [_make_stage("s1", vbo_object="My VBO", vbo_action="Action A")]
+    release = make_release_result(
+        processes=[{"name": "My Process", "pages": {}, "stages": proc_stages}],
+        objects=[
+            {
+                "name": "My VBO",
+                "pages": {
+                    "pa": {"name": "Action A", "type": "Normal", "published": None},
+                    "pb": {"name": "Action B", "type": "Normal", "published": None},
+                },
+                "stages": [],
+            }
+        ],
+    )
+    bp_html_report.generate_split(release, str(tmp_path), graph_fn=None, include_all=False)
+    with open(os.path.join(str(tmp_path), "index.html"), encoding="utf-8") as f:
+        index_html = f.read()
+    assert "1 / 2 actions used" in index_html
+
+
+def test_stage_card_has_stage_id_anchor(make_release_result, tmp_path):
+    """Every stage card carries id="stage-{id}" — Task J's search results link to
+    #stage-{id}; this is the DOM anchor that makes those links actually land on
+    the right stage (and lets browsers auto-expand its <details> chain).
+    """
+    release = make_release_result(
+        processes=[
+            {
+                "name": "My Process",
+                "pages": {"p1": {"name": "Main", "type": "Normal", "published": None}},
+                "stages": [_make_stage("abc-123", page_id="p1")],
+            }
+        ],
+    )
+    bp_html_report.generate_split(release, str(tmp_path), graph_fn=None)
+    page_html = (tmp_path / "pages" / "my-process.html").read_text(encoding="utf-8")
+    assert 'id="stage-abc-123"' in page_html

@@ -557,7 +557,13 @@ def _section_header(title: str, color: str = "#333", bg: str = "#f8f8f8") -> str
 def _stage_card(s: dict, stage_by_id: dict, pages: dict) -> str:
     bg, fg = TYPE_COLORS.get(s["type"], DEFAULT_COLOR)
     detail = _render_stage_detail(s, stage_by_id, pages)
-    stage_id = f"s-{s['id']}"
+    # Deep-link target for a specific stage (Task J's search results link to
+    # #stage-{id}; also shareable/linkable directly). Placed on <summary>, which
+    # is always visible even while its <details> is closed — so browsers scroll
+    # to it on fragment navigation, but won't auto-open anything themselves (that
+    # native behaviour only fires when the target is hidden inside a closed
+    # <details>). _openDetailsForHash() in _SHARED_JS opens the ancestor chain.
+    stage_id = f"stage-{s['id']}"
     return f"""
 <details class="stage-card">
   <summary class="stage-summary" id="{stage_id}">
@@ -840,6 +846,24 @@ _SHARED_JS = """
 function toggleAll(open) {
   document.querySelectorAll('#pages-container details, #artefacts-container details').forEach(d => d.open = open);
 }
+
+// Deep-link support (Task K): the #stage-{id} anchor sits on <summary>, which is
+// always visible even while its <details> is closed — so the browser's native
+// fragment-navigation auto-expand (which only fires for a target hidden *inside*
+// a closed <details>) never triggers here. Walk up and open every ancestor
+// <details> explicitly instead (a stage card, and its enclosing page section).
+function _openDetailsForHash() {
+  if (!location.hash) return;
+  let target;
+  try { target = document.querySelector(location.hash); } catch (e) { return; }
+  if (!target) return;
+  for (let el = target; el; el = el.parentElement) {
+    if (el.tagName === 'DETAILS') el.open = true;
+  }
+  requestAnimationFrame(() => target.scrollIntoView({block: 'center'}));
+}
+_openDetailsForHash();
+window.addEventListener('hashchange', _openDetailsForHash);
 
 // ---------------------------------------------------------------------------
 // Cross-page search, backed by data/stages.jsonl — reaches every artefact and
@@ -1563,19 +1587,20 @@ def generate_split(
         img_map: dict[str, str] = {}
         pruned_pages: list[str] = []
         pages_rendered = 0
+        total_action_pages = 0  # non-structural pages; denominator for the nav badge
 
         for pid, page in _page_order(pages):
             page_name = page.get("name", pid)
             safe_page_name = re.sub(r"[^a-z0-9]+", "-", page_name.lower()).strip("-")
+            is_action_page = page.get("type") not in STRUCTURAL_PAGE_TYPES
+            if is_vbo and is_action_page:
+                total_action_pages += 1
 
-            # Pruning logic — only render pages that are called, or aren't callable actions
-            if (
-                not include_all
-                and is_vbo
-                and called_actions
-                and page.get("type") not in STRUCTURAL_PAGE_TYPES
-                and page_name not in called_actions
-            ):
+            # Pruning logic — only render pages that are called, or aren't callable actions.
+            # NOTE: `called_actions` being empty is a valid, meaningful case (a VBO
+            # never called by any process in the release) — must still prune, not
+            # skip pruning, so this doesn't gate on `called_actions` being truthy.
+            if not include_all and is_vbo and is_action_page and page_name not in called_actions:
                 pruned_pages.append(page_name)
                 total_pruned += 1
                 continue
@@ -1612,12 +1637,25 @@ def generate_split(
         if progress_fn:
             progress_fn(idx + 1, total_artefacts, f"Rendering: {meta['name']}")
 
-        # Nav item
+        # Nav item — VBOs get a "N / M actions used" reachability badge (only
+        # meaningful with pruning active: --include-all renders everything, so
+        # "used" wouldn't mean anything there — same reason a process, which has
+        # no VBO action pages of its own, never gets one).
         atype = meta["artefact_type"]
+        badge_html = ""
+        if is_vbo and total_action_pages and not include_all:
+            used = total_action_pages - len(pruned_pages)
+            badge_color = "#3B6D11" if used < total_action_pages else "#888"
+            badge_html = (
+                f' <span style="background:{badge_color}22;color:{badge_color};'
+                f'padding:1px 7px;border-radius:8px;font-size:10px;font-weight:600">'
+                f"{used} / {total_action_pages} actions used</span>"
+            )
         nav_items.append(
             f'<li style="padding:6px 0;border-bottom:1px solid #f0f0f0">'
             f'<a href="pages/{slug}.html" style="color:#0C447C;text-decoration:none;'
             f'font-weight:600">{_e(meta["name"])}</a>'
+            f"{badge_html}"
             f' <span style="font-size:11px;color:#888">'
             f"({atype}, {pages_rendered} page{'s' if pages_rendered != 1 else ''}"
             f"{f', {len(pruned_pages)} omitted' if pruned_pages else ''})"
