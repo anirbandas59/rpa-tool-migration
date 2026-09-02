@@ -805,6 +805,10 @@ _SHARED_CSS = """
     font-size: 13px; width: 240px; outline: none;
   }
   #search-box:focus { border-color: #0C447C; }
+  .controls-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
+  #search-count { font-size: 12px; color: #888; }
+  .presence-ok { color: #3B6D11; }
+  .presence-warn { color: #BA7517; }
   .highlight { background: #fff3cd; border-radius: 2px; }
   /* Cross-page search results (data/stages.jsonl-backed, when reachable) */
   #search-results {
@@ -828,7 +832,62 @@ _SHARED_CSS = """
   .artefact-table th:hover { color: #0C447C; }
   .artefact-table td { padding: 7px 10px; border-bottom: 1px solid #f0f0f0; }
   .artefact-table tr:hover td { background: #fafbfc; }
+  .artefact-table a { color: #0C447C; text-decoration: none; font-weight: 600; }
+  .omitted-note { color: #aaa; font-size: 11px; }
   .sort-ind { display: inline-block; width: 10px; }
+
+  /* index.html header (Task M — extracted from inline styles) */
+  .header-top { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
+  .header-icon { font-size: 22px; }
+  .header-title { font-size: 20px; font-weight: 700; color: #0C447C; }
+  .header-meta { font-size: 12px; color: #888; margin-bottom: 16px; }
+
+  /* Colour-coded pill/badge — structural rules only; background/colour stay
+     inline per-item (dynamic value, e.g. per env-var type or stage type). */
+  .pill { padding: 1px 6px; border-radius: 8px; font-size: 10px; font-weight: 600; white-space: nowrap; }
+
+  /* Bordered, collapsible reference section on index.html (xref, groups) —
+     same visual language as pages/*.html's .page-card, kept as its own class
+     since the two are governed independently (a page-card tweak shouldn't
+     silently reshape the index). */
+  .info-card { border: 1px solid #e0e0e0; border-radius: 8px; overflow: hidden; background: #fff; }
+  .info-card-summary {
+    padding: 12px 16px; cursor: pointer; background: #fafafa;
+    font-size: 13px; font-weight: 600; list-style: none; user-select: none;
+  }
+  .info-card-body { padding: 14px 16px; overflow-x: auto; }
+  .info-card-body .data-table { min-width: 500px; }
+  .section-label--spaced { margin-top: 24px; }
+
+  /* Plain reference data table (env vars, VBO xref, groups, parse errors) */
+  .data-table { width: 100%; border-collapse: collapse; }
+  .data-table th {
+    text-align: left; font-size: 11px; color: #888; padding: 4px 12px 4px 0;
+  }
+  .data-table th:last-child, .data-table td:last-child { padding-right: 0; }
+  .data-table thead tr { border-bottom: 2px solid #e0e0e0; }
+  .data-table tbody tr { border-bottom: 1px solid #f0f0f0; }
+  .data-table td { padding: 5px 12px 5px 0; font-size: 12px; }
+  .data-table td.cell-strong { font-weight: 600; }
+  .data-table td.cell-mono { font-family: monospace; word-break: break-all; }
+  .data-table td.cell-muted { font-size: 11px; color: #666; font-style: italic; }
+  .data-table td.cell-dim { font-size: 11px; color: #555; }
+  /* Parse-errors variant: same shape, red-tinted */
+  .data-table--error { background: #fff8f8; }
+  .data-table--error th { color: #A32D2D; }
+  .data-table--error thead tr { border-bottom-color: #f5c0c0; }
+  .data-table--error tbody tr { border-bottom-color: #f5c0c0; }
+
+  /* Non-collapsible bordered card (env vars table; parse-errors table) */
+  .plain-card {
+    background: #fff; border: 1px solid #e0e0e0; border-radius: 8px;
+    padding: 14px 18px; margin-bottom: 8px; overflow-x: auto;
+  }
+  .plain-card .data-table { min-width: 500px; }
+  .plain-card--error { background: #fff8f8; border-color: #f5c0c0; }
+  .section-label--error { color: #A32D2D; }
+  .data-table--error td.cell-mono { color: #A32D2D; }
+
   @media (max-width: 600px) {
     .stat-grid { grid-template-columns: repeat(2, 1fr); }
     #search-box { width: 100%; }
@@ -1716,20 +1775,16 @@ def generate_split(
             used_ratio = used / total_action_pages
             badge_color = "#3B6D11" if used < total_action_pages else "#888"
             used_cell = (
-                f'<span style="background:{badge_color}22;color:{badge_color};'
-                f"padding:1px 7px;border-radius:8px;font-size:10px;font-weight:600;"
-                f'white-space:nowrap">{used} / {total_action_pages}</span>'
+                f'<span class="pill" style="background:{badge_color}22;color:{badge_color}">'
+                f"{used} / {total_action_pages}</span>"
             )
         pages_cell = f"{pages_rendered}"
         if pruned_pages:
-            pages_cell += (
-                f'<span style="color:#aaa;font-size:11px"> ({len(pruned_pages)} omitted)</span>'
-            )
+            pages_cell += f'<span class="omitted-note"> ({len(pruned_pages)} omitted)</span>'
         nav_items.append(
             f'<tr data-name="{_e(meta["name"].lower())}" data-type="{atype}" '
             f'data-pages="{pages_rendered}" data-ratio="{used_ratio}">'
-            f'<td><a href="pages/{slug}.html" style="color:#0C447C;text-decoration:none;'
-            f'font-weight:600">{_e(meta["name"])}</a></td>'
+            f'<td><a href="pages/{slug}.html">{_e(meta["name"])}</a></td>'
             f"<td>{atype}</td>"
             f"<td>{pages_cell}</td>"
             f"<td>{used_cell}</td>"
@@ -1746,13 +1801,12 @@ def generate_split(
     # Header card HTML
     header_card_html = f"""
 <div class="header-card">
-  <div style="display:flex;align-items:center;gap:12px;margin-bottom:6px">
-    <span style="font-size:22px">📦</span>
-    <h1 style="font-size:20px;font-weight:700;color:#0C447C">{_e(meta_r["name"])}</h1>
-    <span style="background:#e8f0fe;color:#0C447C;padding:2px 8px;border-radius:10px;
-                 font-size:11px;font-weight:600">RELEASE</span>
+  <div class="header-top">
+    <span class="header-icon">📦</span>
+    <h1 class="header-title">{_e(meta_r["name"])}</h1>
+    <span class="pill" style="background:#e8f0fe;color:#0C447C">RELEASE</span>
   </div>
-  <div style="font-size:12px;color:#888;margin-bottom:16px">
+  <div class="header-meta">
     Created {_e(meta_r["created"])} &nbsp;·&nbsp; by {_e(meta_r["created_by"])}
     &nbsp;·&nbsp; Package #{_e(meta_r["package_id"])}
     &nbsp;·&nbsp; {meta_r["declared_count"]} declared items
@@ -1776,10 +1830,10 @@ def generate_split(
     # back to an artefact-name-only filter of the nav list below when it isn't
     # (Chrome/Safari block fetch() on file://; single-file mode has no data/ at all).
     controls_html = """
-<div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap">
+<div class="controls-bar">
   <input id="search-box" type="text" placeholder="Search artefacts, stages, VBOs…"
          oninput="doSearch(this.value)">
-  <span id="search-count" style="font-size:12px;color:#888"></span>
+  <span id="search-count"></span>
 </div>
 <ul id="search-results" hidden></ul>
 """
@@ -1804,32 +1858,25 @@ def generate_split(
             _color_key = "masked" if ev["type"] == "password" else ev["type"]
             tc = type_colors_ev.get(_color_key, "#555")
             env_rows += (
-                f'<tr style="border-bottom:1px solid #f0f0f0">'
-                f'<td style="padding:6px 12px 6px 0;font-size:12px;font-weight:600">{_e(ev["name"])}</td>'
-                f'<td style="padding:6px 12px 6px 0">'
-                f'<span style="background:{tc}22;color:{tc};padding:1px 6px;border-radius:8px;'
-                f'font-size:10px;font-weight:600">{_e(ev["type"])}</span></td>'
-                f'<td style="padding:6px 12px 6px 0;font-size:12px;font-family:monospace;'
-                f'word-break:break-all">{_e(ev["value"])}</td>'
-                f'<td style="padding:6px 0;font-size:11px;color:#666;font-style:italic">'
-                f"{_e(ev['description'])}</td>"
+                f"<tr>"
+                f'<td class="cell-strong">{_e(ev["name"])}</td>'
+                f'<td><span class="pill" style="background:{tc}22;color:{tc}">'
+                f"{_e(ev['type'])}</span></td>"
+                f'<td class="cell-mono">{_e(ev["value"])}</td>'
+                f'<td class="cell-muted">{_e(ev["description"])}</td>'
                 f"</tr>"
             )
     else:
-        env_rows = '<tr><td colspan="4" style="padding:10px 0;color:#aaa;font-size:12px">No environment variables in this release.</td></tr>'
+        env_rows = '<tr><td colspan="4" class="cell-dim">No environment variables in this release.</td></tr>'
 
     env_section = f"""
 <div class="section-label">Environment variables ({len(env_vars)})</div>
-<div style="background:#fff;border:1px solid #e0e0e0;border-radius:8px;
-            padding:14px 18px;margin-bottom:8px;overflow-x:auto">
-  <table style="width:100%;border-collapse:collapse;min-width:500px">
-    <tr style="border-bottom:2px solid #e0e0e0">
-      <th style="text-align:left;font-size:11px;color:#888;padding:4px 12px 4px 0">Name</th>
-      <th style="text-align:left;font-size:11px;color:#888;padding:4px 12px 4px 0">Type</th>
-      <th style="text-align:left;font-size:11px;color:#888;padding:4px 12px 4px 0">Value</th>
-      <th style="text-align:left;font-size:11px;color:#888;padding:4px 0">Description</th>
-    </tr>
-    {env_rows}
+<div class="plain-card">
+  <table class="data-table">
+    <thead><tr>
+      <th>Name</th><th>Type</th><th>Value</th><th>Description</th>
+    </tr></thead>
+    <tbody>{env_rows}</tbody>
   </table>
 </div>
 """
@@ -1845,38 +1892,33 @@ def generate_split(
                 action_str = ", ".join(sorted(a for a in actions if a))
                 in_release = any(o["meta"]["name"] == vbo for o in objs)
                 presence = (
-                    '<span style="color:#3B6D11;font-size:11px">✓ in release</span>'
+                    '<span class="presence-ok">✓ in release</span>'
                     if in_release
-                    else '<span style="color:#BA7517;font-size:11px">⚠ not in release</span>'
+                    else '<span class="presence-warn">⚠ not in release</span>'
                 )
                 xref_rows += (
-                    f'<tr style="border-bottom:1px solid #f0f0f0">'
-                    f'<td style="padding:5px 12px 5px 0;font-size:12px;font-weight:600">'
-                    f"{_e(p['meta']['name'])}</td>"
-                    f'<td style="padding:5px 12px 5px 0;font-size:12px">{_e(vbo)}</td>'
-                    f'<td style="padding:5px 12px 5px 0;font-size:11px;color:#555">{_e(action_str)}</td>'
-                    f'<td style="padding:5px 0">{presence}</td>'
+                    f"<tr>"
+                    f'<td class="cell-strong">{_e(p["meta"]["name"])}</td>'
+                    f"<td>{_e(vbo)}</td>"
+                    f'<td class="cell-dim">{_e(action_str)}</td>'
+                    f'<td class="cell-dim">{presence}</td>'
                     f"</tr>"
                 )
 
     xref_section = ""
     if xref_rows:
         xref_section = f"""
-<div class="section-label" style="margin-top:24px">VBO dependency cross-reference</div>
-<details style="border:1px solid #e0e0e0;border-radius:8px;overflow:hidden;background:#fff">
-  <summary style="padding:12px 16px;cursor:pointer;background:#fafafa;
-                  font-size:13px;font-weight:600;list-style:none;user-select:none">
+<div class="section-label section-label--spaced">VBO dependency cross-reference</div>
+<details class="info-card">
+  <summary class="info-card-summary">
     Process → VBO calls (shows whether each VBO is included in this release)
   </summary>
-  <div style="padding:14px 16px;overflow-x:auto">
-    <table style="width:100%;border-collapse:collapse;min-width:500px">
-      <tr style="border-bottom:2px solid #e0e0e0">
-        <th style="text-align:left;font-size:11px;color:#888;padding:4px 12px 4px 0">Process</th>
-        <th style="text-align:left;font-size:11px;color:#888;padding:4px 12px 4px 0">VBO</th>
-        <th style="text-align:left;font-size:11px;color:#888;padding:4px 12px 4px 0">Actions called</th>
-        <th style="text-align:left;font-size:11px;color:#888;padding:4px 0">In release?</th>
-      </tr>
-      {xref_rows}
+  <div class="info-card-body">
+    <table class="data-table">
+      <thead><tr>
+        <th>Process</th><th>VBO</th><th>Actions called</th><th>In release?</th>
+      </tr></thead>
+      <tbody>{xref_rows}</tbody>
     </table>
   </div>
 </details>
@@ -1886,34 +1928,27 @@ def generate_split(
     for g in groups_r:
         gtype_color = "#0C447C" if g["type"] == "process-group" else "#533bb7"
         group_rows += (
-            f'<tr style="border-bottom:1px solid #f0f0f0">'
-            f'<td style="padding:5px 12px 5px 0;font-size:12px;font-weight:600">{_e(g["name"])}</td>'
-            f'<td style="padding:5px 12px 5px 0">'
-            f'<span style="background:{gtype_color}22;color:{gtype_color};padding:1px 6px;'
-            f'border-radius:8px;font-size:10px;font-weight:600">{_e(g["type"])}</span></td>'
-            f'<td style="padding:5px 12px 5px 0;font-size:11px;color:#555">'
-            f"{len(g['member_ids'])} members</td>"
-            f'<td style="padding:5px 0;font-size:11px;color:#555">'
-            f"{'default' if g['is_default'] else ''}</td>"
+            f"<tr>"
+            f'<td class="cell-strong">{_e(g["name"])}</td>'
+            f'<td><span class="pill" style="background:{gtype_color}22;color:{gtype_color}">'
+            f"{_e(g['type'])}</span></td>"
+            f'<td class="cell-dim">{len(g["member_ids"])} members</td>'
+            f'<td class="cell-dim">{"default" if g["is_default"] else ""}</td>'
             f"</tr>"
         )
 
     groups_section = f"""
-<div class="section-label" style="margin-top:24px">Groups (not migrated — reference only)</div>
-<details style="border:1px solid #e0e0e0;border-radius:8px;overflow:hidden;background:#fff">
-  <summary style="padding:12px 16px;cursor:pointer;background:#fafafa;
-                  font-size:13px;font-weight:600;list-style:none;user-select:none">
+<div class="section-label section-label--spaced">Groups (not migrated — reference only)</div>
+<details class="info-card">
+  <summary class="info-card-summary">
     {len(groups_r)} groups ({len([g for g in groups_r if g["type"] == "process-group"])} process + {len([g for g in groups_r if g["type"] == "object-group"])} object)
   </summary>
-  <div style="padding:14px 16px;overflow-x:auto">
-    <table style="width:100%;border-collapse:collapse">
-      <tr style="border-bottom:2px solid #e0e0e0">
-        <th style="text-align:left;font-size:11px;color:#888;padding:4px 12px 4px 0">Name</th>
-        <th style="text-align:left;font-size:11px;color:#888;padding:4px 12px 4px 0">Type</th>
-        <th style="text-align:left;font-size:11px;color:#888;padding:4px 12px 4px 0">Members</th>
-        <th style="text-align:left;font-size:11px;color:#888;padding:4px 0">Default?</th>
-      </tr>
-      {group_rows}
+  <div class="info-card-body">
+    <table class="data-table">
+      <thead><tr>
+        <th>Name</th><th>Type</th><th>Members</th><th>Default?</th>
+      </tr></thead>
+      <tbody>{group_rows}</tbody>
     </table>
   </div>
 </details>
@@ -1922,29 +1957,24 @@ def generate_split(
     errors_section = ""
     if errors_r:
         err_rows = "".join(
-            f'<tr style="border-bottom:1px solid #f0f0f0">'
-            f'<td style="padding:5px 12px 5px 0;font-size:12px">'
-            f'<span style="background:#A32D2D22;color:#A32D2D;padding:1px 6px;border-radius:8px;'
-            f'font-size:10px;font-weight:600">{_e(e["item_type"])}</span></td>'
-            f'<td style="padding:5px 12px 5px 0;font-size:12px;font-weight:600">{_e(e["name"])}</td>'
-            f'<td style="padding:5px 0;font-size:11px;color:#A32D2D;font-family:monospace">'
-            f"{_e(e['error'])}</td>"
+            f"<tr>"
+            f'<td><span class="pill" style="background:#A32D2D22;color:#A32D2D">'
+            f"{_e(e['item_type'])}</span></td>"
+            f'<td class="cell-strong">{_e(e["name"])}</td>'
+            f'<td class="cell-mono">{_e(e["error"])}</td>'
             f"</tr>"
             for e in errors_r
         )
         errors_section = f"""
-<div class="section-label" style="margin-top:24px;color:#A32D2D">
+<div class="section-label section-label--spaced section-label--error">
   Parse errors ({len(errors_r)})
 </div>
-<div style="background:#fff8f8;border:1px solid #f5c0c0;border-radius:8px;
-            padding:14px 18px;overflow-x:auto">
-  <table style="width:100%;border-collapse:collapse">
-    <tr style="border-bottom:2px solid #f5c0c0">
-      <th style="text-align:left;font-size:11px;color:#A32D2D;padding:4px 12px 4px 0">Type</th>
-      <th style="text-align:left;font-size:11px;color:#A32D2D;padding:4px 12px 4px 0">Name</th>
-      <th style="text-align:left;font-size:11px;color:#A32D2D;padding:4px 0">Error</th>
-    </tr>
-    {err_rows}
+<div class="plain-card plain-card--error">
+  <table class="data-table data-table--error">
+    <thead><tr>
+      <th>Type</th><th>Name</th><th>Error</th>
+    </tr></thead>
+    <tbody>{err_rows}</tbody>
   </table>
 </div>
 """

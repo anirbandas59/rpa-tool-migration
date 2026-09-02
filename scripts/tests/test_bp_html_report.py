@@ -5,6 +5,7 @@ Does NOT require Graphviz (graph_fn=None throughout).
 
 import json
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -430,6 +431,55 @@ def test_generate_split_index_has_sortable_artefact_table(make_release_result, t
     assert 'data-sort="name"' in index_html
     assert 'data-sort="pages"' in index_html
     assert 'data-sort="ratio"' in index_html
+
+
+def test_generate_split_index_uses_extracted_css_classes(make_release_result, tmp_path):
+    """Task M: index.html's header, env-vars/xref/groups/errors tables, and
+    controls bar use named classes (styles.css) instead of repeated inline
+    style="..." attributes — only per-item dynamic colours (pill badges) stay
+    inline, per Enhancement 5's original structural-vs-dynamic split.
+    """
+    release = make_release_result(
+        processes=[{"name": "My Process", "pages": {}, "stages": []}],
+        objects=[{"name": "My VBO", "pages": {}, "stages": []}],
+    )
+    release["environment_variables"] = [
+        {"name": "EnvA", "type": "text", "value": "x", "description": "d"}
+    ]
+    release["groups"] = [
+        {"name": "G1", "type": "process-group", "member_ids": ["a"], "is_default": True}
+    ]
+    release["errors"] = [{"item_type": "process", "name": "Bad", "error": "boom"}]
+    bp_html_report.generate_split(release, str(tmp_path), graph_fn=None)
+    with open(os.path.join(str(tmp_path), "index.html"), encoding="utf-8") as f:
+        index_html = f.read()
+
+    # Structural classes present — collect every class actually used, robust to
+    # multi-class attributes (e.g. class="plain-card plain-card--error").
+    used_classes: set[str] = set()
+    for attr_value in re.findall(r'class="([^"]*)"', index_html):
+        used_classes.update(attr_value.split())
+    for cls in (
+        "header-top",
+        "header-title",
+        "header-meta",
+        "controls-bar",
+        "plain-card",
+        "info-card",
+        "info-card-summary",
+        "data-table",
+        "data-table--error",
+        "cell-strong",
+        "cell-mono",
+        "cell-muted",
+        "cell-dim",
+    ):
+        assert cls in used_classes, f"expected class {cls!r} to appear in index.html"
+
+    # Only the intentional dynamic-colour pill badges keep inline style=
+    styled = re.findall(r'style="([^"]*)"', index_html)
+    for s in styled:
+        assert s.startswith("background:"), f"unexpected leftover inline style: {s!r}"
 
 
 def test_artefact_page_has_jump_to_artefact_dropdown(make_release_result, tmp_path):
