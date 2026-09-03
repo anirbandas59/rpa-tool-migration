@@ -588,6 +588,49 @@ class TestMethodActionsPrecedence:
         assert decision.resolved_action_template == "DataModule.GetData"
         assert decision.is_known is True
 
+    def test_workqueues_method_actions_resolve_correctly(self) -> None:
+        """Task 7a fix pass: WorkQueues method_actions resolve through router (Gap 4).
+
+        Verifies that the real WorkQueues VBO from the catalogue can resolve
+        Get Next Item, Mark Completed, Mark Exception (and its variants), and
+        Update Status through the router's existing method_actions mechanism.
+        """
+        from flowsmith.mapper import load_rules
+
+        config = load_rules(force_reload=True)
+        router = VBORouter(config)
+
+        # Get the real WorkQueues entry from the catalogue
+        wq_entry = config.get_vbo_entry("Blueprism.Automate.clsWorkQueuesActions")
+        assert wq_entry is not None, "WorkQueues VBO should be in catalogue"
+
+        # Test Get Next Item
+        decision = router.route("Blueprism.Automate.clsWorkQueuesActions", "Get Next Item")
+        assert decision.is_known is True
+        assert decision.resolved_action_template != ""
+        assert "WorkQueues.ProcessWorkQueueItem" in decision.resolved_action_template
+
+        # Test Mark Completed
+        decision = router.route("Blueprism.Automate.clsWorkQueuesActions", "Mark Completed")
+        assert decision.is_known is True
+        assert decision.resolved_action_template != ""
+        assert "WorkQueues.UpdateWorkQueueItem" in decision.resolved_action_template
+        assert "Processed" in decision.resolved_action_template
+
+        # Test Mark Exception (BusinessException variant)
+        decision = router.route("Blueprism.Automate.clsWorkQueuesActions", "Mark Exception")
+        assert decision.is_known is True
+        assert decision.resolved_action_template != ""
+        assert (
+            "WorkQueues.WorkQueueItemStatus.BusinessException" in decision.resolved_action_template
+        )
+
+        # Test Update Status
+        decision = router.route("Blueprism.Automate.clsWorkQueuesActions", "Update Status")
+        assert decision.is_known is True
+        assert decision.resolved_action_template != ""
+        assert "WorkQueues.UpdateProcessingNotes" in decision.resolved_action_template
+
 
 # ── Fusion pattern resolution tests ────────────────────────────────────────
 
