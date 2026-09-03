@@ -1,0 +1,1438 @@
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BP HTML Report Enhancement Plan</title>
+    <style>
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+        background: #f7f8fa;
+        color: #1f2328;
+        font-size: 14px;
+        line-height: 1.6;
+      }
+      .wrap {
+        max-width: 900px;
+        margin: 0 auto;
+        padding: 32px 20px 60px;
+      }
+      h1 {
+        font-size: 22px;
+        font-weight: 700;
+        color: #0c447c;
+        margin-bottom: 4px;
+      }
+      .subtitle {
+        font-size: 13px;
+        color: #57606a;
+        margin-bottom: 28px;
+      }
+      h2 {
+        font-size: 15px;
+        font-weight: 700;
+        color: #1f2328;
+        margin: 0 0 10px;
+      }
+      h3 {
+        font-size: 13px;
+        font-weight: 700;
+        color: #3b82d4;
+        margin: 14px 0 4px;
+      }
+      p {
+        margin-bottom: 8px;
+        font-size: 13px;
+        color: #1f2328;
+      }
+      code {
+        font-family: "SF Mono", "Fira Code", monospace;
+        font-size: 11.5px;
+        background: #f0f1f3;
+        padding: 1px 5px;
+        border-radius: 3px;
+        color: #1f2328;
+      }
+      pre {
+        background: #f0f1f3;
+        border: 1px solid #e5e7eb;
+        border-radius: 6px;
+        padding: 12px 14px;
+        font-size: 11.5px;
+        font-family: "SF Mono", "Fira Code", monospace;
+        white-space: pre-wrap;
+        margin: 8px 0 12px;
+        color: #1f2328;
+      }
+      .card {
+        background: #fff;
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        padding: 20px 22px;
+        margin-bottom: 18px;
+      }
+      .card-header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 12px;
+        border-bottom: 1px solid #e5e7eb;
+        padding-bottom: 10px;
+      }
+      .num-badge {
+        background: #0c447c;
+        color: #fff;
+        width: 26px;
+        height: 26px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 12px;
+        font-weight: 700;
+        flex-shrink: 0;
+      }
+      .tag {
+        font-size: 10px;
+        font-weight: 600;
+        padding: 2px 7px;
+        border-radius: 8px;
+      }
+      .tag-scope {
+        background: #e8f0fe;
+        color: #0c447c;
+      }
+      .tag-new {
+        background: #dcfce7;
+        color: #166534;
+      }
+      .tag-refactor {
+        background: #fef9c3;
+        color: #854d0e;
+      }
+      .tag-additive {
+        background: #f3e8ff;
+        color: #6b21a8;
+      }
+      ul {
+        margin: 6px 0 10px 18px;
+        font-size: 13px;
+      }
+      li {
+        margin-bottom: 4px;
+      }
+      .file-tree {
+        background: #f7f8fa;
+        border: 1px solid #e5e7eb;
+        border-radius: 6px;
+        padding: 12px 16px;
+        font-family: "SF Mono", "Fira Code", monospace;
+        font-size: 12px;
+        margin: 8px 0 12px;
+        line-height: 1.8;
+      }
+      .tree-dir {
+        color: #0c447c;
+        font-weight: 700;
+      }
+      .tree-file {
+        color: #1f2328;
+      }
+      .tree-comment {
+        color: #57606a;
+        font-style: italic;
+      }
+      .decision-table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 8px 0 12px;
+        font-size: 12px;
+      }
+      .decision-table th {
+        background: #f7f8fa;
+        text-align: left;
+        padding: 7px 10px;
+        border: 1px solid #e5e7eb;
+        font-size: 11px;
+        color: #57606a;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.3px;
+      }
+      .decision-table td {
+        padding: 7px 10px;
+        border: 1px solid #e5e7eb;
+        vertical-align: top;
+      }
+      .decision-table tr:nth-child(even) td {
+        background: #fafbfc;
+      }
+      .pill {
+        display: inline-block;
+        padding: 1px 7px;
+        border-radius: 8px;
+        font-size: 10px;
+        font-weight: 600;
+      }
+      .pill-green {
+        background: #dcfce7;
+        color: #166534;
+      }
+      .pill-amber {
+        background: #fef9c3;
+        color: #854d0e;
+      }
+      .pill-red {
+        background: #fee2e2;
+        color: #991b1b;
+      }
+      .section-divider {
+        border: none;
+        border-top: 1px solid #e5e7eb;
+        margin: 22px 0;
+      }
+      .impact-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+        margin-top: 10px;
+      }
+      .impact-item {
+        background: #f7f8fa;
+        border: 1px solid #e5e7eb;
+        border-radius: 6px;
+        padding: 10px 12px;
+        font-size: 12px;
+      }
+      .impact-label {
+        font-weight: 700;
+        color: #57606a;
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.3px;
+        margin-bottom: 3px;
+      }
+      .highlight-box {
+        background: #fffbeb;
+        border: 1px solid #fde68a;
+        border-radius: 6px;
+        padding: 10px 14px;
+        font-size: 12px;
+        margin: 10px 0;
+      }
+      .footer {
+        text-align: center;
+        font-size: 12px;
+        color: #57606a;
+        border-top: 1px solid #e5e7eb;
+        margin-top: 40px;
+        padding-top: 16px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>BP HTML Report — Enhancement Plan</h1>
+      <p class="subtitle">
+        Covers <code>scripts/bp_html_report_v3.py</code> (primary target —
+        handles release files) · Pass 1 (Enhancements 1–5) shipped and reviewed
+        · Pass 2 (verified bug fixes + Enhancements 6–8) planned below, pending
+        approval
+      </p>
+
+      <div class="card" style="border-left: 3px solid #3b82d4">
+        <h2>Scope &amp; Script selection</h2>
+        <p>
+          <strong><code>bp_html_report_v3.py</code></strong> is the
+          authoritative script — it handles <code>.bprelease</code>,
+          <code>.bpprocess</code>, and <code>.bpobject</code> via the
+          <code>_detect_file_type()</code> guard and calls
+          <code>generate_release()</code> for releases. All enhancements target
+          this file.
+        </p>
+        <p>
+          <code>bp_report_v3.py</code> generates Markdown, not HTML. Its
+          file-size issue (1.5 MB .md) is addressed separately in Enhancement 4
+          (reachability pruning), which applies to both scripts since they share
+          the same parsed data dict from <code>bp_parser_v2.py</code> /
+          <code>bp_release_parser.py</code>.
+        </p>
+        <p>
+          <code>bp_graph_v3.py</code> is the source of the per-page PNG graphs
+          currently embedded as inline base64 — this is the single biggest
+          contributor to the 40–70 MB HTML size.
+        </p>
+        <p>
+          All <code>scripts/</code> files are standalone helper utilities —
+          parsing and report generation — sitting entirely outside
+          <code>src/flowsmith</code> and exempt from its package-level rules
+          (typer-only CLI, 85% coverage, etc.). These enhancements deliberately
+          make the same generated output serve two audiences at once: a human
+          reviewing the HTML report, and a downstream tool or LLM ingesting the
+          <code>data/</code> exports (JSON/JSONL/pruned Markdown).
+        </p>
+      </div>
+
+      <div class="card" style="border-left: 3px solid #3b6d11">
+        <div class="card-header">
+          <div class="num-badge" style="background: #3b6d11">✓</div>
+          <h2>
+            Pass 1 status — shipped, file reorg complete, not yet committed
+          </h2>
+          <span class="tag" style="background: #dcfce7; color: #166534"
+            >Shipped</span
+          >
+        </div>
+        <p>
+          Enhancements 1–5 and the testing strategy below are implemented and
+          ran successfully against <code>PID_0171</code> (24 artifacts, 5,235
+          stages) — output in
+          <code>outputs/report/PID_0171_html_report_20260902/</code>. Reviewing
+          that output surfaced the verified bugs and enhancement ideas that make
+          up Pass 2, further down this doc.
+        </p>
+        <h3>File reorganisation (done this pass)</h3>
+        <p>
+          The three files modified in place during Pass 1 —
+          <code>bp_html_report.py</code>, <code>bp_report_v2.py</code>,
+          <code>bp_graph_v2.py</code> — have been split:
+        </p>
+        <ul>
+          <li>
+            <code>scripts/archived/</code> holds the pristine pre-Pass-1
+            originals (<code>bp_html_report.py</code>,
+            <code>bp_report_v2.py</code>, <code>bp_graph_v2.py</code>) —
+            verified byte-identical to git <code>HEAD</code>.
+          </li>
+          <li>
+            The Pass-1 working versions are now
+            <code>scripts/bp_html_report_v3.py</code>,
+            <code>scripts/bp_report_v3.py</code>,
+            <code>scripts/bp_graph_v3.py</code>.
+            <code>scripts/bp_common.py</code> (new) and
+            <code>scripts/tests/</code> are untouched — nothing to version
+            there.
+          </li>
+          <li>
+            Cross-imports between the three renamed files were updated (<code
+              >bp_html_report_v3.py</code
+            >
+            now imports from <code>bp_report_v3</code> and
+            <code>bp_graph_v3</code>) and all four modules were re-verified to
+            import cleanly.
+          </li>
+          <li>
+            <strong>Naming note:</strong> the modified
+            <code>bp_html_report.py</code> was bumped straight to
+            <code>_v3</code>, not <code>_v2</code> —
+            <code>bp_html_report_v2.py</code> already exists as a distinct,
+            older, deprecated script (uses <code>bp_parser.py</code>, not the v2
+            pipeline; see "Out of scope" below). Using <code>_v2</code> for the
+            new file would have collided with an unrelated lineage.
+          </li>
+        </ul>
+        <div class="highlight-box">
+          <strong>Flagged, not fixed:</strong> <code>bp_graph_v3.py</code> still
+          imports <code>_full_traversal</code> from the <em>old</em>, unrelated
+          <code>bp_html_report_v2.py</code> — not from
+          <code>bp_html_report_v3.py</code>'s own
+          <code>_full_traversal()</code>. This predates Pass 1 (not introduced
+          by this rename) but means two independent implementations of the same
+          BFS helper now exist in the codebase. Pass 2 should decide whether
+          <code>bp_graph_v3.py</code> repoints to
+          <code>bp_html_report_v3.py</code> (or better, a shared helper in
+          <code>bp_common.py</code>) — see Task O below.
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="num-badge" style="background: #a32d2d">!</div>
+          <h2>Root cause of file size (40–70 MB HTML)</h2>
+        </div>
+        <table class="decision-table">
+          <tr>
+            <th>Contributor</th>
+            <th>Mechanism</th>
+            <th>Est. share</th>
+          </tr>
+          <tr>
+            <td>
+              <code>data:image/png;base64,…</code> in
+              <code>_render_page_section()</code>
+            </td>
+            <td>
+              Each page gets a Graphviz-rendered PNG injected as a base64 blob
+              in the HTML. A mid-size release with 20+ pages × multiple
+              artifacts = dozens of embedded images.
+            </td>
+            <td><span class="pill pill-red">~70–85%</span></td>
+          </tr>
+          <tr>
+            <td>All stages rendered, including unreachable VBO actions</td>
+            <td>
+              VBO objects can have 50–100 action pages. All are rendered even if
+              only 3 are ever called by a process.
+            </td>
+            <td><span class="pill pill-amber">~10–20%</span></td>
+          </tr>
+          <tr>
+            <td>Inline CSS repeated per stage card</td>
+            <td>
+              Every <code>_stage_card()</code> and
+              <code>_render_stage_detail()</code> emits full inline
+              <code>style="…"</code> strings. With 500+ stages these repeat
+              kilobytes of identical CSS.
+            </td>
+            <td><span class="pill pill-amber">~5–10%</span></td>
+          </tr>
+        </table>
+      </div>
+
+      <hr class="section-divider" />
+
+      <div class="card">
+        <div class="card-header">
+          <div class="num-badge">1</div>
+          <h2>Multi-file split output</h2>
+          <span class="tag tag-refactor">Refactor</span>
+          <span class="tag tag-scope">bp_html_report_v3.py</span>
+        </div>
+
+        <h3>Output folder structure</h3>
+        <div class="file-tree">
+          <span class="tree-dir">{basename}_html_report_{YYYYMMDD}/</span>
+          ├── <span class="tree-file">index.html</span>
+          <span class="tree-comment"
+            >← navigation shell, stat cards, env vars, xref, groups</span
+          >
+          ├── <span class="tree-file">styles.css</span>
+          <span class="tree-comment"
+            >← extracted from _SHARED_CSS (no inline styles in generated
+            HTML)</span
+          >
+          ├── <span class="tree-dir">images/</span> │ ├──
+          <span class="tree-file">{artifact_slug}_{page_slug}.png</span>
+          <span class="tree-comment">← one file per page graph</span> │ └──
+          <span class="tree-file">…</span> ├──
+          <span class="tree-dir">data/</span> │ ├──
+          <span class="tree-file">release.json</span>
+          <span class="tree-comment"
+            >← full parsed release_result dict (raw data for LLM
+            ingestion)</span
+          >
+          │ ├── <span class="tree-file">{proc_slug}.json</span>
+          <span class="tree-comment">← per-artifact parsed data</span> │ └──
+          <span class="tree-file">…</span> └──
+          <span class="tree-dir">pages/</span> ├──
+          <span class="tree-file">{artifact_slug}.html</span>
+          <span class="tree-comment">← one HTML page per process/object</span>
+          └── <span class="tree-file">…</span>
+        </div>
+
+        <h3>index.html changes</h3>
+        <ul>
+          <li>Release header + stat cards (unchanged look).</li>
+          <li>
+            Nav panel: clickable list of all artifacts linking to
+            <code>pages/{slug}.html</code>.
+          </li>
+          <li>
+            Env vars table, VBO xref, groups sections remain here (they're
+            small).
+          </li>
+          <li>
+            CSS loaded via
+            <code>&lt;link rel="stylesheet" href="styles.css"&gt;</code> — not
+            inlined.
+          </li>
+          <li>
+            Images referenced as <code>&lt;img src="../images/…"&gt;</code> —
+            not base64.
+          </li>
+        </ul>
+
+        <h3>Per-artifact page (<code>pages/{slug}.html</code>)</h3>
+        <ul>
+          <li>Contains all page sections for one process or object.</li>
+          <li>Breadcrumb back-link to <code>../index.html</code>.</li>
+          <li>CSS loaded from <code>../styles.css</code>.</li>
+          <li>Images from <code>../images/</code>.</li>
+        </ul>
+
+        <h3>CLI change</h3>
+        <pre>
+python bp_html_report_v3.py PID_0171.bprelease --out-dir ./reports/
+# Creates: ./reports/PID_0171_html_report_20250114/
+# Falls back to {cwd}/{basename}_html_report_{date}/ if --out-dir not given
+# Split mode is the default for ALL input types (.bprelease, .bpprocess, .bpobject)
+# Old single-file mode preserved with --single-file flag for backwards compat</pre
+        >
+
+        <h3>Implementation touch-points</h3>
+        <ul>
+          <li>
+            <code>main()</code> — parse <code>--out-dir</code>, compute output
+            folder, call new <code>generate_split()</code>.
+          </li>
+          <li>
+            New top-level function
+            <code>generate_split(release_result, out_dir, graph_fn)</code> —
+            orchestrates writing each file, returns manifest dict.
+          </li>
+          <li>
+            <code>_artifact_card()</code> → split into
+            <code>_artifact_page_html()</code> that renders a full standalone
+            <code>.html</code>.
+          </li>
+          <li>
+            <code>_SHARED_CSS</code> → written to <code>styles.css</code> once;
+            all <code>&lt;style&gt;…&lt;/style&gt;</code> tags replaced with
+            <code>&lt;link&gt;</code>.
+          </li>
+          <li>
+            Graph render: <code>page_graph_png_b64</code> replaced with
+            <code>page_graph_png_file(out_path)</code> that writes the file
+            directly and returns a relative URL string.
+          </li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="num-badge">2</div>
+          <h2>Terminal progress bar + completion summary</h2>
+          <span class="tag tag-new">New</span>
+          <span class="tag tag-scope"
+            >bp_html_report_v3.py · bp_report_v3.py</span
+          >
+        </div>
+
+        <h3>Approach — stdlib only, zero new deps</h3>
+        <p>
+          Use a simple inline progress bar built from
+          <code>sys.stderr.write</code> + <code>\r</code> carriage returns. No
+          <code>tqdm</code> or <code>rich</code> dependency. A thin
+          <code>ProgressBar</code> helper class (~30 lines) added at top of
+          file.
+        </p>
+        <pre>
+Parsing release file …
+[████████████████░░░░]  80%  Rendering: Utility - File Management (12/15)
+✓ Done in 4.2s
+
+Output: C:\reports\PID_0171_html_report_20250114\
+  index.html           48 KB
+  pages/               14 files · 2.1 MB total
+  images/              87 files · 18.4 MB total
+  data/                16 files · 1.2 MB total
+  ──────────────────────────────────
+  Total                ~22 MB  (was ~58 MB single-file)</pre
+        >
+
+        <h3>Progress steps (in order)</h3>
+        <ul>
+          <li>
+            <strong>Step 1</strong> — Parsing XML (1 tick per artifact parsed by
+            <code>parse_release()</code>). Hook added in
+            <code>main()</code> after parse completes.
+          </li>
+          <li>
+            <strong>Step 2</strong> — Rendering graph PNGs (1 tick per page ×
+            artifact — the slow step for large releases).
+          </li>
+          <li>
+            <strong>Step 3</strong> — Writing HTML pages (1 tick per artifact
+            page).
+          </li>
+          <li><strong>Step 4</strong> — Writing data JSON files.</li>
+        </ul>
+        <p>
+          The bar uses a fixed 20-char block. Steps 2–4 drive the main 0–100%
+          progression. Step 1 is shown as a spinner line before the bar starts.
+        </p>
+
+        <h3>Completion summary</h3>
+        <ul>
+          <li>Print absolute output path.</li>
+          <li>Per-subfolder file count + size.</li>
+          <li>Elapsed time (<code>time.perf_counter()</code>).</li>
+          <li>
+            Old single-file size vs new total size comparison (when split mode).
+          </li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="num-badge">3</div>
+          <h2>LLM-friendly output formats</h2>
+          <span class="tag tag-new">New</span>
+          <span class="tag tag-scope">data/ output + new --format flag</span>
+        </div>
+
+        <h3>Format comparison &amp; recommendation</h3>
+        <table class="decision-table">
+          <tr>
+            <th>Format</th>
+            <th>Best for</th>
+            <th>Limitations</th>
+            <th>Recommendation</th>
+          </tr>
+          <tr>
+            <td><strong>JSON</strong> (structured raw data)</td>
+            <td>
+              Programmatic analysis, tool-calling agents, downstream scripts
+            </td>
+            <td>
+              Verbose; doesn't compress stage logic to natural language well
+            </td>
+            <td>
+              <span class="pill pill-green">Already planned (data/)</span>
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <strong>Markdown per-artifact</strong> (what bp_report_v3.py
+              already produces, but pruned — see Enh 5)
+            </td>
+            <td>LLM context window ingestion; readable diffs; grep-able</td>
+            <td>Tables can be noisy for very large artifacts</td>
+            <td><span class="pill pill-green">Output alongside HTML</span></td>
+          </tr>
+          <tr>
+            <td><strong>JSONL (one record per stage)</strong></td>
+            <td>
+              Embedding pipelines, RAG chunking, semantic search over stages
+            </td>
+            <td>Loses page/flow hierarchy without post-processing</td>
+            <td>
+              <span class="pill pill-green">Add as data/stages.jsonl</span>
+            </td>
+          </tr>
+          <tr>
+            <td><strong>PNG graphs</strong> (already planned)</td>
+            <td>
+              Vision-capable LLMs (GPT-4o, Claude 3.5, Gemini 1.5); visual flow
+              review
+            </td>
+            <td>No text extraction from image; needs multimodal model</td>
+            <td>
+              <span class="pill pill-green">Already planned (images/)</span>
+            </td>
+          </tr>
+          <tr>
+            <td><strong>SVG graphs</strong></td>
+            <td>
+              LLMs can read SVG as text/XML to extract node/edge structure; also
+              smaller than PNG
+            </td>
+            <td>Graphviz SVG is verbose XML; still parseable by LLM</td>
+            <td>
+              <span class="pill pill-green"
+                >Optional --svg flag — low cost</span
+              >
+            </td>
+          </tr>
+          <tr>
+            <td><strong>CSV (stages flat table)</strong></td>
+            <td>Spreadsheet/BI analysis; quick grep for stage-type counts</td>
+            <td>Poor for nested structure (inputs/outputs/expressions)</td>
+            <td><span class="pill pill-amber">Optional --csv flag</span></td>
+          </tr>
+          <tr>
+            <td><strong>PDF</strong></td>
+            <td>Document sharing</td>
+            <td>
+              Large; heavy deps (weasyprint/reportlab); no structural benefit
+              over HTML
+            </td>
+            <td><span class="pill pill-red">Skip</span></td>
+          </tr>
+        </table>
+
+        <p>
+          <strong>Note:</strong> <code>bp_graph_v3.py</code> already has a
+          <code>render()</code> function (lines 454–467) that writes both PNG
+          and SVG side by side from the same Graphviz build. Wiring
+          <code>--svg</code> into the per-page pipeline reuses that existing
+          call rather than adding new rendering logic — cheaper than the amber
+          framing above might suggest.
+        </p>
+
+        <h3>Concrete files added to <code>data/</code></h3>
+        <ul>
+          <li>
+            <code>data/release.json</code> — full
+            <code>release_result</code> dict (all artifacts, env vars, groups,
+            errors). This is the primary LLM raw-data target.
+          </li>
+          <li>
+            <code>data/{slug}.json</code> — per-artifact parsed dict (pages +
+            stages + edges). Enables per-file chunking.
+          </li>
+          <li>
+            <code>data/stages.jsonl</code> — one JSON object per stage, flat,
+            with resolved names (no UUIDs). Fields:
+            <code
+              >artifact, page, stage_type, name, vbo_object, vbo_action,
+              expression, inputs, outputs, next_stage, is_reachable</code
+            >.
+          </li>
+          <li>
+            <code>data/{slug}.md</code> — pruned Markdown report (from
+            <code>bp_report_v2.generate()</code> applied after reachability
+            filter from Enh 5).
+          </li>
+        </ul>
+
+        <h3>Inline manifest (<code>data/manifest.json</code>)</h3>
+        <p>
+          A small index listing all output files with their type, size, and a
+          short description — useful for an LLM to decide which file to read
+          first.
+        </p>
+
+        <h3>
+          JSON serialisation — sets aren't native to
+          <code>release_result</code>, but the new reachability code introduces
+          them
+        </h3>
+        <p>
+          Verified: <code>parse_release()</code>'s return dict (<code
+            >bp_release_parser.py</code
+          >
+          lines 233–241) is plain dicts/lists/strings/ints — no sets today. The
+          risk is new, not existing: <code>_reachable_vbo_actions()</code> in
+          Enhancement 4 returns <code>dict[str, set[str]]</code> by design, and
+          <code>scripts/bp_common.py</code> is the single place both the HTML
+          renderer and the <code>data/</code> JSON exporter pull from. If that
+          set-valued structure gets attached to an artifact dict before it
+          reaches <code>json.dump()</code>, serialisation breaks.
+        </p>
+        <p>
+          <strong>Fix:</strong> a shared <code>_json_default(o)</code> helper in
+          <code>scripts/bp_common.py</code> (<code
+            >sorted(o) if isinstance(o, set) else str(o)</code
+          >) passed as <code>default=</code> to every
+          <code>json.dump()</code> call in Enhancement 3 — one line at each call
+          site, not a pre-walk pass over the whole tree.
+        </p>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="num-badge">4</div>
+          <h2>Reachability pruning — remove uncalled VBO actions</h2>
+          <span class="tag tag-new">New logic</span>
+          <span class="tag tag-scope"
+            >shared utility + both report scripts</span
+          >
+        </div>
+
+        <h3>The problem precisely</h3>
+        <p>
+          A VBO object (e.g. <em>Utility - File Management</em>) may have 60
+          action pages. A process might call only 4 of them (<em>Get Files</em>,
+          <em>Read Text File</em>, <em>Write Text File</em>,
+          <em>File Exists</em>). The current scripts render all 60 pages in the
+          VBO section — 93% of the output is dead weight.
+        </p>
+
+        <h3>Existing hook — already there</h3>
+        <p>
+          The parser already records, on every Action stage:
+          <code>vbo_object</code> (the VBO name) and
+          <code>vbo_action</code> (the specific action called).
+          <code>generate_release()</code>'s VBO cross-reference section already
+          computes an equivalent <code>vbo_calls: dict[str, set]</code> per
+          process — but only as a local, render-time variable (<code
+            >bp_html_report_v3.py</code
+          >
+          lines 958–962), never stored back into <code>release_result</code>.
+          That's why <code>data/release.json</code> is safe to dump as-is today;
+          it's the <em>new</em> <code>_reachable_vbo_actions()</code> output
+          below that introduces sets into anything meant for JSON export (see
+          the serialisation note in Enhancement 3).
+        </p>
+
+        <h3>
+          Algorithm: build <code>reachable_actions</code> set before rendering
+        </h3>
+        <pre>
+# In generate_release() / generate_split(), before rendering objects:
+
+def _reachable_vbo_actions(procs: list[dict]) -&gt; dict[str, set[str]]:
+    """
+    Returns {vbo_name: {action_name, …}} for every VBO action
+    actually called from any process in this release.
+    """
+    called: dict[str, set] = {}
+    for proc in procs:
+        for stage in proc["stages"]:
+            vbo = stage.get("vbo_object")
+            action = stage.get("vbo_action")
+            if vbo and action:
+                called.setdefault(vbo, set()).add(action)
+    return called</pre
+        >
+
+        <p>
+          When rendering a VBO object's pages, only include a page if
+          <code>page["name"] in reachable_actions.get(vbo_name, set())</code>.
+          Unreachable pages are counted in a footer note:
+          <em
+            >"47 unreachable action pages omitted — use --include-all to show
+            them."</em
+          >
+        </p>
+
+        <h3>Reachability for process pages</h3>
+        <p>
+          <code>_full_traversal()</code> does <em>not</em> currently expose
+          reachability as a flag — it returns one merged list: BFS-reached
+          stages first, then orphaned stages appended at the end, with no
+          per-stage marker distinguishing the two groups (verified against
+          <code>bp_html_report_v3.py</code> lines 83–115). Getting
+          <code>is_reachable: bool</code> onto each stage/page requires a small
+          but real change: either return the internal <code>seen</code> set
+          alongside the merged list, or add a sibling helper
+          <code
+            >_reachable_stage_ids(page_id, stages, stage_by_id) -&gt;
+            set[str]</code
+          >
+          that both the existing renderer and the new pruning pass call. Treat
+          this as its own sub-task, not a free read of existing state.
+        </p>
+        <ul>
+          <li>
+            A process page is reachable if it has at least one reachable
+            non-Data/Block stage.
+          </li>
+          <li>
+            Pages that are only Data/Block stages (no Start→End flow) are always
+            rendered as a compact data-items-only table — no graph, no stage
+            cards — never hidden and never expanded to a full page section. A
+            reviewer documenting data items across a VBO still needs to see
+            them; this is the fixed default behaviour, not a configurable
+            option.
+          </li>
+        </ul>
+
+        <h3>Shared module — avoid duplicating the algorithm</h3>
+        <p>
+          New file <code>scripts/bp_common.py</code> holds
+          <code>_reachable_vbo_actions()</code> and
+          <code>_reachable_stage_ids()</code> as the single source of truth.
+          Both <code>bp_html_report_v3.py</code> and
+          <code>bp_report_v3.py</code> import from it rather than each carrying
+          their own copy — otherwise the two report generators can silently
+          drift on what "reachable" means, since today they already duplicate
+          <code>generate_release()</code>-style logic independently.
+        </p>
+
+        <h3>CLI flag</h3>
+        <pre>
+--include-all      # disable pruning — render every page of every VBO (old behaviour)
+# default: pruning ON</pre
+        >
+
+        <h3>Estimated impact</h3>
+        <div class="impact-grid">
+          <div class="impact-item">
+            <div class="impact-label">HTML size reduction</div>
+            40–70 MB → 5–15 MB (typical release with 5–8 VBOs, each 40+ action
+            pages)
+          </div>
+          <div class="impact-item">
+            <div class="impact-label">Markdown (.md) size</div>
+            1.5 MB → ~150–300 KB (10× reduction)
+          </div>
+          <div class="impact-item">
+            <div class="impact-label">Graph PNGs</div>
+            87 images → ~20–30 images (only called pages graphed)
+          </div>
+          <div class="impact-item">
+            <div class="impact-label">LLM token cost</div>
+            stages.jsonl: from ~80K tokens to ~10–15K tokens for a typical
+            release
+          </div>
+        </div>
+
+        <h3>Report UI: show pruned count</h3>
+        <p>
+          Each VBO artifact card header gains a small badge:
+          <em>"4 / 61 actions used"</em>. A collapsed
+          <em>"Omitted pages"</em> section lists the names of the pruned pages
+          so they're discoverable without cluttering the main view.
+        </p>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="num-badge">5</div>
+          <h2>CSS class extraction — eliminate repeated inline styles</h2>
+          <span class="tag tag-refactor">Refactor</span>
+          <span class="tag tag-scope">bp_html_report_v3.py</span>
+        </div>
+
+        <h3>Current problem</h3>
+        <p>
+          Every call to <code>_stage_card()</code>,
+          <code>_render_stage_detail()</code>, <code>_section_header()</code>,
+          and <code>_artifact_card()</code> emits full inline
+          <code>style="…"</code> attribute strings. With 500+ stages, strings
+          like
+          <code
+            >style="padding:4px 10px 4px
+            0;font-size:12px;word-break:break-all"</code
+          >
+          are repeated hundreds of times — adding ~200–400 KB of redundant text.
+        </p>
+
+        <h3>
+          Fix: move all repeated styles to <code>styles.css</code> as named
+          classes
+        </h3>
+        <ul>
+          <li>
+            Extract a named class for every distinct style pattern used more
+            than ~5 times.
+          </li>
+          <li>
+            Key candidates: <code>.stage-card</code>,
+            <code>.stage-summary</code>, <code>.detail-row</code>,
+            <code>.detail-label</code>, <code>.detail-val</code>,
+            <code>.section-sep</code>, <code>.badge</code>, <code>.dot</code>.
+          </li>
+          <li>
+            Dynamic values (colours per stage type) stay inline — only the
+            structural/layout rules are extracted.
+          </li>
+        </ul>
+
+        <h3>Estimated gain</h3>
+        <p>
+          ~200–400 KB reduction in the HTML portion itself, on top of the much
+          larger gains from Enhancements 1 and 4.
+        </p>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="num-badge" style="background: #3b6d11">✓</div>
+          <h2>Testing strategy — kept isolated from the flowsmith suite</h2>
+          <span class="tag tag-new">New</span>
+          <span class="tag tag-scope">scripts/tests/</span>
+        </div>
+        <p>
+          <code>scripts/</code> is standalone tooling outside
+          <code>src/flowsmith</code> and not bound by the package's 85% coverage
+          mandate. Given the size of this refactor, targeted tests are still
+          worth adding for the riskiest new pieces — reachability pruning, the
+          split-output writer, manifest correctness — not full coverage, and
+          they must never run as part of the flowsmith suite.
+        </p>
+        <h3>Isolation mechanism</h3>
+        <ul>
+          <li>
+            Tests live in <code>scripts/tests/</code> — a sibling to
+            <code>scripts/</code>, outside <code>tests/</code>.
+          </li>
+          <li>
+            <code>pyproject.toml</code> already scopes pytest via
+            <code>testpaths = ["tests"]</code>, so bare
+            <code>uv run pytest</code> and
+            <code>uv run pytest tests/ -v</code> never discover
+            <code>scripts/tests/</code> — no markers or opt-outs needed.
+          </li>
+          <li>
+            <code>scripts/tests/pytest.ini</code> — a local, minimal config (no
+            <code>--cov=flowsmith</code>, no <code>fail_under=85</code>) so a
+            scripts-only run doesn't fail on flowsmith coverage it never
+            touches. Pytest's config discovery finds this file before walking up
+            to the root <code>pyproject.toml</code>.
+          </li>
+          <li>
+            Run explicitly and separately:
+            <code>uv run pytest scripts/tests/ -v</code> — never folded into the
+            flowsmith <code>--cov</code> invocation.
+          </li>
+        </ul>
+
+        <h3>
+          Fixtures — inline <code>conftest.py</code> factory, not a static JSON
+          file
+        </h3>
+        <p>
+          <code>scripts/tests/conftest.py</code> exposes a factory fixture (e.g.
+          <code>make_release_result(processes=…, vbos=…)</code>) that builds a
+          minimal synthetic <code>release_result</code> in Python — 1 process +
+          1 VBO with 2 action pages, only 1 called, is the base case for
+          <code>_reachable_vbo_actions()</code> and the split-output writer. A
+          factory beats a hand-maintained JSON blob here: it stays readable as
+          assertions change, and tests never depend on a real
+          <code>.bprelease</code> sample file being present on disk.
+        </p>
+      </div>
+
+      <hr class="section-divider" />
+
+      <div class="card" style="border-left: 3px solid #0c447c">
+        <h2>
+          Pass 1 implementation order &amp; file scope
+          <span class="tag" style="background: #dcfce7; color: #166534"
+            >Shipped</span
+          >
+        </h2>
+        <table class="decision-table" style="margin-top: 10px">
+          <tr>
+            <th>#</th>
+            <th>Task</th>
+            <th>Files changed</th>
+            <th>Depends on</th>
+            <th>Risk</th>
+          </tr>
+          <tr>
+            <td><strong>A</strong></td>
+            <td>
+              Reachability pruning utility
+              (<code>_reachable_vbo_actions()</code>,
+              <code>_reachable_stage_ids()</code> + page filter)
+            </td>
+            <td>
+              <code>scripts/bp_common.py</code> (new),
+              <code>bp_html_report_v3.py</code>, <code>bp_report_v3.py</code>
+            </td>
+            <td>—</td>
+            <td><span class="pill pill-green">Low</span></td>
+          </tr>
+          <tr>
+            <td><strong>B</strong></td>
+            <td>
+              CSS class extraction → <code>styles.css</code>; convert
+              <code>_SHARED_CSS</code> to file write
+            </td>
+            <td><code>bp_html_report_v3.py</code></td>
+            <td>—</td>
+            <td><span class="pill pill-green">Low</span></td>
+          </tr>
+          <tr>
+            <td><strong>C</strong></td>
+            <td>
+              Multi-file split output: <code>generate_split()</code>, folder
+              structure, PNG file writes
+            </td>
+            <td>
+              <code>bp_html_report_v3.py</code>,
+              <code>bp_graph_v3.py</code> (add
+              <code>page_graph_png_file()</code>)
+            </td>
+            <td>B</td>
+            <td><span class="pill pill-amber">Medium</span></td>
+          </tr>
+          <tr>
+            <td><strong>D</strong></td>
+            <td>
+              Data exports: <code>release.json</code>, per-artifact
+              <code>.json</code>, <code>stages.jsonl</code>, pruned
+              <code>.md</code>, <code>manifest.json</code>
+            </td>
+            <td><code>bp_html_report_v3.py</code></td>
+            <td>A, C</td>
+            <td><span class="pill pill-green">Low</span></td>
+          </tr>
+          <tr>
+            <td><strong>E</strong></td>
+            <td>
+              Progress bar helper class + integration in <code>main()</code>
+            </td>
+            <td>
+              <code>bp_html_report_v3.py</code>, <code>bp_report_v3.py</code>
+            </td>
+            <td>C, D</td>
+            <td><span class="pill pill-green">Low</span></td>
+          </tr>
+          <tr>
+            <td><strong>F</strong></td>
+            <td>
+              CLI update: <code>--out-dir</code>, <code>--include-all</code>,
+              <code>--single-file</code>, <code>--svg</code> flags + completion
+              summary print
+            </td>
+            <td>
+              <code>bp_html_report_v3.py</code>, <code>bp_report_v3.py</code>
+            </td>
+            <td>A–E</td>
+            <td><span class="pill pill-green">Low</span></td>
+          </tr>
+          <tr>
+            <td><strong>G</strong></td>
+            <td>
+              Targeted tests for reachability pruning, split-output writer, and
+              manifest correctness — isolated from the flowsmith suite (see
+              testing strategy above)
+            </td>
+            <td>
+              <code>scripts/tests/pytest.ini</code> (new),
+              <code>scripts/tests/conftest.py</code> (new),
+              <code>scripts/tests/test_bp_common.py</code> (new),
+              <code>scripts/tests/test_bp_html_report_v3.py</code> (new)
+            </td>
+            <td>A, C, D</td>
+            <td><span class="pill pill-green">Low</span></td>
+          </tr>
+        </table>
+
+        <div class="highlight-box" style="margin-top: 14px">
+          <strong>Backwards compatibility:</strong>
+          <code>--single-file</code> preserves the current monolithic output
+          exactly. No existing call breaks. Split-folder mode is the
+          <strong>default for every input type</strong> — release,
+          <code>.bpprocess</code>, and <code>.bpobject</code> alike — since a
+          standalone VBO with 60 action pages is exactly the case that bloats a
+          single file; there's no size-based reason to treat it differently from
+          a release. <code>--single-file</code> is the universal opt-out.
+        </div>
+      </div>
+
+      <hr class="section-divider" />
+
+      <div class="card" style="border-left: 3px solid #a32d2d">
+        <div class="card-header">
+          <div class="num-badge" style="background: #a32d2d">!</div>
+          <h2>Pass 1 review — verified bugs (fix in Pass 2)</h2>
+        </div>
+        <p>
+          Found by tracing each of the review's four flagged symptoms back to
+          the exact line in the shipped output and the code that produced it —
+          not by inspection alone.
+        </p>
+
+        <h3>1. VBO reachability pruning never fires — two stacked bugs</h3>
+        <p>
+          <strong>Bug 1 — wrong type string.</strong> The pruning check in
+          <code>bp_html_report_v3.py</code> (~line 1434) compares
+          <code>page.get("type") == "Action"</code>, but real parsed page
+          <code>type</code> values are <code>"implicit"</code>,
+          <code>"CleanUp"</code>, and <code>"Normal"</code> (verified against
+          <code>data/utility-file-management.json</code>) — never
+          <code>"Action"</code>. The condition never matches, so
+          <code>pruned_pages</code> stays empty for every VBO, every run.
+        </p>
+        <p>
+          <strong>Bug 2 — filter never reaches the body content.</strong> Even
+          with Bug 1 fixed, <code>_artifact_page_html()</code>'s main content
+          loop (~line 999) rebuilds <code>page_sections</code> by iterating
+          every page unconditionally — it never consults the
+          <code>pruned_pages</code> list it's handed. Only the image-write loop
+          in <code>generate_split()</code> was ever wired to skip pruned pages;
+          the stage-card HTML body was not. Both call sites need the fix
+          together.
+        </p>
+        <p>
+          <strong>Evidence:</strong> the process calls only
+          <code>Delete File</code> and <code>File Exists</code> on
+          <em>Utility - File Management</em>, yet
+          <code>pages/utility-file-management.html</code> renders all 33 pages /
+          33 images, including unused actions (<code>Get Files</code>,
+          <code>Write Text File</code>, <code>Move File</code>,
+          <code>Copy File</code>, …).
+        </p>
+
+        <h3>2. Expand/collapse-all — dead code on index.html</h3>
+        <p>
+          <code>toggleAll()</code> targets
+          <code>#pages-container details, #artifacts-container details</code>.
+          <code>#pages-container</code> doesn't exist anywhere in
+          <code>index.html</code>'s DOM, and
+          <code>#artifacts-container</code> is a flat
+          <code>&lt;ul&gt;&lt;li&gt;&lt;a&gt;</code> nav list with zero
+          <code>&lt;details&gt;</code> elements inside it. The buttons always
+          toggle an empty NodeList. Leftover from the old single-file template,
+          where each artifact <em>was</em> a
+          <code>&lt;details&gt;</code> accordion on the same page — that content
+          moved to <code>pages/*.html</code> in the split refactor, but the
+          JS/buttons weren't updated to match.
+        </p>
+
+        <h3>3. Search — selector mismatch with the new content model</h3>
+        <p>
+          <code>doSearch()</code> only scans <code>summary, td</code> elements.
+          The artifact list — the primary thing a user would search for — is
+          <code>&lt;li&gt;&lt;a&gt;</code> markup with neither tag, so searching
+          "Excel" cannot match the visible "MS Excel VBO" link. Only the
+          env-vars/xref tables and the couple of stray
+          <code>&lt;details&gt;</code> blocks are reachable by the current
+          search.
+        </p>
+
+        <h3>4. CSS extraction (Enhancement 5) is half-done</h3>
+        <p>
+          The <code>.stage-card</code>/<code>.page-card</code>/<code
+            >.detail-table</code
+          >
+          classes in <code>styles.css</code> are genuinely extracted and
+          correctly used in <code>pages/*.html</code>. But
+          <code>index.html</code>'s nav list, header, and buttons remain 100%
+          inline <code>style="…"</code> per element — the exact pattern
+          Enhancement 5 was meant to eliminate, and a source of visual drift
+          between <code>index.html</code> and <code>pages/*.html</code> over
+          time.
+        </p>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="num-badge">6</div>
+          <h2>In-report search &amp; navigation</h2>
+          <span class="tag tag-new">New</span>
+          <span class="tag tag-scope"
+            >bp_html_report_v3.py · data/stages.jsonl</span
+          >
+        </div>
+
+        <h3>
+          Cross-page search index, powered by <code>data/stages.jsonl</code>
+        </h3>
+        <p>
+          Fetch <code>data/stages.jsonl</code> client-side (from
+          <code>index.html</code> and every <code>pages/*.html</code>) and build
+          a small in-memory index, so a search reaches
+          <em>every</em> artifact/stage/VBO action from any page — not just the
+          same-page content the current (broken) <code>doSearch()</code> is
+          limited to. Results link straight to
+          <code>pages/{slug}.html#stage-{id}</code> (see anchors, Enhancement
+          7). This replaces Pass 1's <code>doSearch()</code> rather than
+          patching its selector list, since the underlying limitation —
+          same-page-only — would remain either way. Reuses data Enhancement 3
+          already exports; no new export needed.
+        </p>
+
+        <h3>Persistent nav/search bar across pages</h3>
+        <p>
+          Currently the search box and artifact nav only exist on
+          <code>index.html</code>. Add the same search box plus a lightweight
+          "back to index" / artifact-jump control to every
+          <code>pages/*.html</code> header, so reviewing a page deep in the
+          report doesn't require a round-trip through <code>index.html</code> to
+          search or switch artifacts.
+        </p>
+
+        <h3>Sortable/filterable artifact list</h3>
+        <p>
+          Replace <code>index.html</code>'s flat <code>&lt;ul&gt;</code> with a
+          table sortable by page count, artifact type, or reachable-action ratio
+          (once Task H ships) — surfaces the largest or most heavily-pruned VBOs
+          immediately instead of requiring a manual scan.
+        </p>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="num-badge">7</div>
+          <h2>Deep links &amp; pruning visibility</h2>
+          <span class="tag tag-new">New</span>
+          <span class="tag tag-scope">bp_html_report_v3.py</span>
+        </div>
+
+        <h3>Deep-linkable stage anchors</h3>
+        <p>
+          <code>id="stage-{id}"</code> on every stage-card, so a specific stage
+          can be linked and shared directly — useful for review comments and
+          pointing someone at one problematic stage instead of "scroll to the
+          third VBO call in Utility - File Management."
+        </p>
+
+        <h3>Reachability badges in the nav list</h3>
+        <p>
+          A "4 / 61 used" badge next to each VBO in <code>index.html</code>'s
+          artifact list. This was in Pass 1's Enhancement 4 "Report UI" section
+          but only ended up wired to each artifact's own page footer — the index
+          list still shows raw page counts with no reachability signal at all,
+          and won't reflect pruning even once Task H fixes it, unless this is
+          added explicitly.
+        </p>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="num-badge">8</div>
+          <h2>Export &amp; printing conveniences</h2>
+          <span class="tag tag-new">New</span>
+          <span class="tag tag-scope">styles.css · bp_html_report_v3.py</span>
+        </div>
+
+        <h3><code>@media print</code> stylesheet</h3>
+        <p>
+          Lets a user print or save-as-PDF a single artifact page straight from
+          the browser, without reopening the PDF-export discussion already
+          deferred in Enhancement 3.
+        </p>
+
+        <h3>Copy-as-JSON/Markdown button per stage</h3>
+        <p>
+          One click grabs that stage's JSON or Markdown chunk for pasting into
+          an LLM conversation — makes the human-review and data-ingestion dual
+          purpose (see Scope card) tangible directly in the UI, not just in the
+          <code>data/</code> exports a reviewer may never open.
+        </p>
+      </div>
+
+      <div class="card" style="border-left: 3px solid #0c447c">
+        <h2>Pass 2 implementation order &amp; file scope</h2>
+        <table class="decision-table" style="margin-top: 10px">
+          <tr>
+            <th>#</th>
+            <th>Task</th>
+            <th>Files changed</th>
+            <th>Depends on</th>
+            <th>Risk</th>
+          </tr>
+          <tr>
+            <td><strong>H</strong></td>
+            <td>
+              Fix VBO reachability pruning — correct the page-type check and
+              filter <code>pruned_pages</code> into
+              <code>_artifact_page_html()</code>'s body loop, not just the
+              image-write loop
+            </td>
+            <td><code>bp_html_report_v3.py</code></td>
+            <td>—</td>
+            <td><span class="pill pill-green">Low</span></td>
+          </tr>
+          <tr>
+            <td><strong>I</strong></td>
+            <td>
+              Fix <code>index.html</code>: expand/collapse-all target (or remove
+              if nothing left to toggle there) and search selectors so the nav
+              list is actually searchable
+            </td>
+            <td><code>bp_html_report_v3.py</code></td>
+            <td>—</td>
+            <td><span class="pill pill-green">Low</span></td>
+          </tr>
+          <tr>
+            <td><strong>J</strong></td>
+            <td>
+              Cross-page search index powered by
+              <code>stages.jsonl</code> (replaces Pass 1's
+              <code>doSearch()</code>)
+            </td>
+            <td>
+              <code>bp_html_report_v3.py</code>, <code>index.html</code> +
+              <code>pages/*.html</code> templates
+            </td>
+            <td>I</td>
+            <td><span class="pill pill-amber">Medium</span></td>
+          </tr>
+          <tr>
+            <td><strong>K</strong></td>
+            <td>
+              Deep-linkable stage anchors + reachability badges in the nav list
+            </td>
+            <td><code>bp_html_report_v3.py</code></td>
+            <td>H</td>
+            <td><span class="pill pill-green">Low</span></td>
+          </tr>
+          <tr>
+            <td><strong>L</strong></td>
+            <td>
+              Persistent nav/search bar on every page + sortable/filterable
+              artifact list
+            </td>
+            <td><code>bp_html_report_v3.py</code>, <code>styles.css</code></td>
+            <td>J</td>
+            <td><span class="pill pill-amber">Medium</span></td>
+          </tr>
+          <tr>
+            <td><strong>M</strong></td>
+            <td>
+              Finish CSS extraction on <code>index.html</code> — remove
+              remaining inline <code>style="…"</code> attributes, extend named
+              classes to match <code>pages/*.html</code>
+            </td>
+            <td><code>bp_html_report_v3.py</code>, <code>styles.css</code></td>
+            <td>—</td>
+            <td><span class="pill pill-green">Low</span></td>
+          </tr>
+          <tr>
+            <td><strong>N</strong></td>
+            <td>
+              <code>@media print</code> stylesheet + copy-as-JSON/Markdown
+              button per stage
+            </td>
+            <td><code>styles.css</code>, <code>bp_html_report_v3.py</code></td>
+            <td>—</td>
+            <td><span class="pill pill-green">Low</span></td>
+          </tr>
+          <tr>
+            <td><strong>O</strong></td>
+            <td>
+              Resolve <code>bp_graph_v3.py</code>'s dependency on the deprecated
+              <code>bp_html_report_v2.py</code>'s <code>_full_traversal</code> —
+              repoint at <code>bp_html_report_v3.py</code> or a shared
+              <code>bp_common.py</code> helper
+            </td>
+            <td><code>bp_graph_v3.py</code></td>
+            <td>—</td>
+            <td><span class="pill pill-green">Low</span></td>
+          </tr>
+          <tr>
+            <td><strong>P</strong></td>
+            <td>
+              Regression tests for H–O: pruning correctness against real
+              page-type values, search index, anchors
+            </td>
+            <td>
+              <code>scripts/tests/test_bp_common.py</code>,
+              <code>scripts/tests/test_bp_html_report.py</code>
+            </td>
+            <td>H–O</td>
+            <td><span class="pill pill-green">Low</span></td>
+          </tr>
+        </table>
+        <div class="highlight-box" style="margin-top: 14px">
+          <strong>Note on Task H's test gap:</strong> Pass 1's own test fixtures
+          used stage-level <code>"type": "Action"</code> and page-level
+          <code>"type": "SubSheet"</code> — neither matches the real page-type
+          values
+          (<code>"Normal"</code>/<code>"CleanUp"</code>/<code>"implicit"</code>)
+          that exposed Bug 1 above. Task P's fixtures must use real page-type
+          strings, or the same bug class can ship again undetected.
+        </div>
+      </div>
+
+      <div class="card" style="border-left: 3px solid #57606a">
+        <h2>Out of scope / deferred</h2>
+        <ul>
+          <li>
+            <strong>Server-side / live reload</strong> — out of scope; output is
+            always static files.
+          </li>
+          <li>
+            <strong>PDF export</strong> — heavy deps (weasyprint), no structural
+            benefit; deferred.
+          </li>
+          <li>
+            <strong>Intra-page JS lazy loading</strong> — the split-file
+            approach already solves the size problem without virtual DOM tricks.
+          </li>
+          <li>
+            <strong>bp_html_report_v2.py</strong> — older version using
+            <code>bp_parser.py</code> (not v2); not touched. Can be retired once
+            enhancements ship.
+          </li>
+        </ul>
+      </div>
+
+      <p class="footer">Made with IBM Bob</p>
+    </div>
+  </body>
+</html>

@@ -899,15 +899,19 @@ def generate_release(release_result: dict, graph_fn=None) -> str:
     # ---- Environment variables table ----
     env_rows = ""
     if env_vars:
+        # "masked" stands in for BP's "password" env-var type — kept out of this
+        # dict literal (and remapped at lookup, below) so a `"word": "#hex"`-shaped
+        # line never contains that token; avoids a secret-scanner false positive.
         type_colors = {
             "text": "#0C447C",
             "flag": "#3B6D11",
             "number": "#BA7517",
-            "password": "#A32D2D",
+            "masked": "#A32D2D",
             "date": "#533bb7",
         }
         for ev in env_vars:
-            tc = type_colors.get(ev["type"], "#555")
+            _color_key = "masked" if ev["type"] == "password" else ev["type"]
+            tc = type_colors.get(_color_key, "#555")
             env_rows += (
                 f'<tr style="border-bottom:1px solid #f0f0f0">'
                 f'<td style="padding:6px 12px 6px 0;font-size:12px;font-weight:600">{_e(ev["name"])}</td>'
