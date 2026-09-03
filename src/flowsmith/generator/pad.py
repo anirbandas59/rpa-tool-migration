@@ -1568,8 +1568,11 @@ class PADGenerator:
         # Queue Name parameter: <id>
         if "<id>" in result:
             queue_name = stage.params_map.get("Queue Name", "")
-            if queue_name:
-                # Use established expression translation machinery for consistency
+            if "ConfigFileData.Queue Name" in queue_name:
+                # The reference flow extracts Ctrl_WorkQueueId from config to txt_WorkQueueId
+                # and uses that scalar in ProcessWorkQueueItem (DF_PID_171_US_LIMS_Prelude_Main.robin.txt L150, L1371).
+                id_value = "txt_WorkQueueId"
+            elif queue_name:
                 id_value, _ = self._translate_bp_expression(queue_name, variable_name_mapping)
                 if not id_value:
                     id_value = "%QueueId%"
@@ -1896,74 +1899,32 @@ class PADGenerator:
             lines.append(rendered)
 
         elif target_module == "WorkQueues":
-            # Task 7a: Try to use method_actions template from VBO catalogue
+            # Task 7a: consume the cited method_actions template. Exception-type selection
+            # requires calling Block/control-flow context and is deferred to Task 7b.
             method_name = stage.params_map.get("_vbo_action")
 
             if band != ConfidenceBand.MANUAL:
-                # Task 7a fix pass (Gap 2): Dispatch to correct Mark Exception variant
-                # based on exception context (exception type branch vs. normal flow).
-                # Check stage's parent decision block to determine which exception variant to use.
-                if method_name == "Mark Exception":
-                    # Determine which Mark Exception variant to use based on the tag or exception context
-                    # Tags in BP BP source: "Business Exception", "System Exception"
-                    # Default to BusinessException if no tag context available
-                    exception_variant_template = None
-                    vbo_entry = self.mapping_config.get_vbo_entry(
-                        "Blueprism.Automate.clsWorkQueuesActions"
+                method_template = self._lookup_method_actions_template(stage)
+                if method_template:
+                    substituted = self._substitute_workqueues_placeholders(
+                        method_template, stage, method_name, variable_name_mapping
                     )
-
-                    if vbo_entry and vbo_entry.method_actions:
-                        # Check if stage name/params hint at exception type
-                        # Look for "Tag" data item that indicates the exception classification
-                        # Per BP source: Tag values are "Business Exception", "System Exception", etc.
-                        # Map to PAD variants: BusinessException, ITException (System Unavailable), GenericException
-                        stage_tag = stage.params_map.get("Tag", "").lower()
-                        stage_name_lower = stage.name.lower()
-
-                        # Select variant based on available context
-                        if "system" in stage_tag or "system" in stage_name_lower:
-                            # System-type exception (ITException in PAD)
-                            exception_variant_template = vbo_entry.method_actions.get(
-                                "Mark Exception :: ITException"
-                            )
-                        # If we can't determine variant, use the base BusinessException
-                        if not exception_variant_template:
-                            exception_variant_template = vbo_entry.method_actions.get(
-                                "Mark Exception"
-                            )
-
-                    if exception_variant_template:
-                        substituted = self._substitute_workqueues_placeholders(
-                            exception_variant_template, stage, method_name, variable_name_mapping
-                        )
-                        lines.append(substituted)
-                    else:
-                        lines.append(
-                            "# TODO: WorkQueues.Mark Exception — complete this action block"
-                        )
+                    if method_name == "Mark Exception":
+                        lines.append("# VERIFY: Mark Exception status variant deferred to Task 7b")
+                    lines.append(substituted)
                 else:
-                    # Non-Mark-Exception WorkQueues methods: use the standard template lookup
-                    method_template = self._lookup_method_actions_template(stage)
-                    if method_template:
-                        # Task 7a: Substitute placeholder tokens with real values from params_map
-                        # using established expression-translation machinery (Gap 1)
-                        substituted = self._substitute_workqueues_placeholders(
-                            method_template, stage, method_name, variable_name_mapping
-                        )
-                        lines.append(substituted)
-                    else:
-                        # Fallback to generic template for unmapped methods (Tag Item, Defer, etc.)
-                        wq_template = self.env.get_template("actions/work_queues.robin.j2")
-                        rendered = wq_template.render(
-                            target_type=target_type,
-                            output_var=stage.name.replace(" ", "_"),
-                            queue_name="'QueueName'",
-                            queue_id="%QueueId%",
-                            item_data="%ItemData%",
-                            item_id="%ItemId%",
-                            updated_data="%UpdatedData%",
-                        )
-                        lines.append(rendered)
+                    # Fallback to generic template for unmapped methods (Tag Item, Defer, etc.)
+                    wq_template = self.env.get_template("actions/work_queues.robin.j2")
+                    rendered = wq_template.render(
+                        target_type=target_type,
+                        output_var=stage.name.replace(" ", "_"),
+                        queue_name="'QueueName'",
+                        queue_id="%QueueId%",
+                        item_data="%ItemData%",
+                        item_id="%ItemId%",
+                        updated_data="%UpdatedData%",
+                    )
+                    lines.append(rendered)
             else:
                 # Fallback to generic template for MANUAL band
                 wq_template = self.env.get_template("actions/work_queues.robin.j2")

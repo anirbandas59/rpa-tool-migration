@@ -2695,15 +2695,8 @@ def test_mark_exception_has_three_status_variants() -> None:
     )
 
 
-def test_mark_exception_dispatch_selects_correct_variant(tmp_path: Path) -> None:
-    """Task 7a third pass (Gap 2): Mark Exception dispatch renders correct variant.
-
-    Verifies that the dispatch logic correctly selects different Mark Exception
-    variants based on exception context (Business vs. System exceptions).
-    Against PID_0171, confirms that at least BusinessException and ITException
-    variants appear in generated output (not all Mark Exception calls use the
-    same status value).
-    """
+def test_mark_exception_variant_selection_is_deferred_to_task_7b(tmp_path: Path) -> None:
+    """Task 7a must not infer Mark Exception status from Tag or stage names."""
     sample_path = Path("samples/blueprism/PID_0171.bprelease")
     if not sample_path.exists():
         pytest.skip("Sample file not found")
@@ -2718,43 +2711,14 @@ def test_mark_exception_dispatch_selects_correct_variant(tmp_path: Path) -> None
 
     gen = PADGenerator()
     files = gen.generate_process(process, tmp_path / "robin")
-
     performer_file = next((f for f in files if "Performer" in f.name), None)
     assert performer_file is not None, "No Performer file generated"
-    content = performer_file.read_text(encoding="utf-8")
+    lines = performer_file.read_text(encoding="utf-8").splitlines()
 
-    # Extract all Mark Exception (UpdateWorkQueueItem with Mark Exception context) lines
-    mark_exception_lines = [
-        line
-        for line in content.split("\n")
-        if "UpdateWorkQueueItem.UpdateWithProcessingNotes" in line
-        and "WorkQueueItemStatus" in line
-        and not line.strip().startswith("#")
+    mark_exception_indexes = [
+        index for index, line in enumerate(lines) if "WorkQueueItemStatus.BusinessException" in line
     ]
-
-    # Verify: At least BusinessException status appears
-    has_business_exception = any(
-        "WorkQueueItemStatus.BusinessException" in line for line in mark_exception_lines
-    )
-    assert has_business_exception, (
-        "At least one Mark Exception call should use BusinessException status"
-    )
-
-    # Verify: Variant dispatch is attempted (check for at least one variant in catalogue)
-    # This test documents the current dispatch capability: if no ITException or GenericException
-    # actually appear in generated output, it means those paths weren't triggered by the BP source,
-    # not that the dispatch mechanism is broken. The key is that the mechanism is present and
-    # would fire if the BP source actually had those exception branches.
-    from flowsmith.mapper import load_rules
-
-    config = load_rules(force_reload=True)
-    wq_entry = config.get_vbo_entry("Blueprism.Automate.clsWorkQueuesActions")
-    assert wq_entry is not None, "WorkQueues VBO entry should exist in catalogue"
-
-    # Confirm all three variants are available in the catalogue (dispatch mechanism is ready)
-    assert "Mark Exception :: ITException" in (wq_entry.method_actions or {}), (
-        "ITException variant should be in catalogue for dispatch to use"
-    )
-    assert "Mark Exception :: GenericException" in (wq_entry.method_actions or {}), (
-        "GenericException variant should be in catalogue for dispatch to use"
-    )
+    assert mark_exception_indexes, "PID_0171 should render its documented default exception action"
+    for index in mark_exception_indexes:
+        preceding = lines[max(0, index - 2) : index]
+        assert any("status variant deferred to Task 7b" in line for line in preceding)
