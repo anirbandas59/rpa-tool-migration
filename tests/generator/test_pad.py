@@ -2507,3 +2507,60 @@ def test_intentional_fold_mapping_no_disambiguation(tmp_path: Path) -> None:
     # We can't directly assert both pages' original names are referenced as calls
     # (they might be inlined), but the presence of exactly one "Move Emails" FUNCTION
     # with no suffix is the litmus test for intentional fold behavior.
+
+
+def test_work_queues_method_actions_are_rendered(tmp_path: Path) -> None:
+    """Task 7a — real PID_0171 sample: WorkQueues method_actions templates are used.
+
+    Verifies that Get Next Item, Mark Completed, Mark Exception, Update Status
+    render with their real PAD syntax from vbo_catalogue.yaml's method_actions,
+    not as generic TODO stubs.
+    """
+    sample_path = Path("samples/blueprism/PID_0171.bprelease")
+    if not sample_path.exists():
+        pytest.skip("Sample file not found")
+
+    from flowsmith.ast.builder import build_ast
+    from flowsmith.engine import create_annotator
+    from flowsmith.parser import parse_process
+
+    raw = parse_process(sample_path)
+    process = build_ast(raw)
+    create_annotator().annotate_process(process)
+
+    gen = PADGenerator()
+    files = gen.generate_process(process, tmp_path / "robin")
+
+    performer_file = next((f for f in files if "Performer" in f.name), None)
+    assert performer_file is not None, "No Performer file generated"
+    content = performer_file.read_text(encoding="utf-8")
+
+    # Verify: Real Get Next Item template is rendered (from method_actions)
+    # The template is: WorkQueues.ProcessWorkQueueItem.ProcessWorkQueueItem WorkQueue: <id> WorkQueueItem=> <var>
+    assert "WorkQueues.ProcessWorkQueueItem.ProcessWorkQueueItem" in content, (
+        "Get Next Item should render real PAD syntax from method_actions, not a TODO stub"
+    )
+
+    # Verify: Mark Completed template is rendered (from method_actions)
+    # The template is: WorkQueues.UpdateWorkQueueItem.UpdateWithProcessingNotes ... Processed
+    assert "WorkQueues.UpdateWorkQueueItem.UpdateWithProcessingNotes" in content, (
+        "Mark Completed should render real PAD syntax from method_actions"
+    )
+
+    # Verify: No generic TODO stubs for the 4 documented methods
+    # (Tag Item and Defer can still be TODO'd — they're intentionally unmapped)
+    todo_count = content.count("# TODO: WorkQueues.Get Next Item")
+    assert todo_count == 0, (
+        f"Get Next Item should not render as TODO stub (found {todo_count} occurrences)"
+    )
+
+    todo_count = content.count("# TODO: WorkQueues.Mark Completed")
+    assert todo_count == 0, (
+        f"Mark Completed should not render as TODO stub (found {todo_count} occurrences)"
+    )
+
+    # Verify: Tag Item and Defer should still be TODO'd (they're out of scope per Task 7a)
+    # They should appear as generic stubs since they have no method_actions entry
+    assert (
+        "# TODO: WorkQueues.Tag Item" in content or "# TODO: WorkQueues.Set Item Tags" in content
+    ), "Tag Item/Set Item Tags should remain as TODO stub (no confirmed PAD template exists)"

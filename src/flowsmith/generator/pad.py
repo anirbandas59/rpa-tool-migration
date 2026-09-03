@@ -20,6 +20,7 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined
 from flowsmith.ast.models import BPProcess, BPStage, ConfidenceBand, StageType
 from flowsmith.exceptions import GenerationError
 from flowsmith.generator.naming import flow_file_stem
+from flowsmith.mapper.config import load_rules
 
 # Data types that always make a variable sensitive in the generated @SENSITIVE list.
 SENSITIVE_DATA_TYPES: frozenset[str] = frozenset({"password", "binary"})
@@ -121,6 +122,12 @@ class PADGenerator:
                         self.page_target_map = data
             except Exception as e:
                 raise GenerationError(f"Failed to load page_target_map.yaml: {e}") from e
+
+        # Load MappingConfig to access VBO catalogue for method_actions lookup (Task 7a).
+        try:
+            self.mapping_config = load_rules()
+        except Exception as e:
+            raise GenerationError(f"Failed to load mapping config: {e}") from e
 
         # Instance variable to hold the current page name resolution map (built during
         # role-based generation to handle collision disambiguation — Task 6b2).
@@ -1493,6 +1500,35 @@ class PADGenerator:
 
         return result, separate_actions
 
+    def _lookup_method_actions_template(self, stage: BPStage) -> str | None:
+        """Look up a method_actions template for a VBO call stage.
+
+        Used by Task 7a to wire WorkQueues and other VBO method_actions into generation.
+        Tries to find an exact method match in the VBO catalogue's method_actions field.
+
+        Args:
+            stage: A BPStage with _vbo_object and _vbo_action in params_map.
+
+        Returns:
+            The PAD action template string if found in method_actions, None otherwise.
+        """
+        vbo_name = stage.params_map.get("_vbo_object")
+        method_name = stage.params_map.get("_vbo_action")
+
+        if not vbo_name or not method_name:
+            return None
+
+        # Look up VBO entry from catalogue
+        vbo_entry = self.mapping_config.get_vbo_entry(vbo_name)
+        if not vbo_entry:
+            vbo_entry = self.mapping_config.get_vbo_entry_fuzzy(vbo_name)
+
+        if not vbo_entry or not vbo_entry.method_actions:
+            return None
+
+        # Check for exact method match in method_actions
+        return vbo_entry.method_actions.get(method_name)
+
     def _render_stage(
         self,
         stage: BPStage,
@@ -1774,17 +1810,24 @@ class PADGenerator:
             lines.append(rendered)
 
         elif target_module == "WorkQueues":
-            wq_template = self.env.get_template("actions/work_queues.robin.j2")
-            rendered = wq_template.render(
-                target_type=target_type,
-                output_var=stage.name.replace(" ", "_"),
-                queue_name="'QueueName'",
-                queue_id="%QueueId%",
-                item_data="%ItemData%",
-                item_id="%ItemId%",
-                updated_data="%UpdatedData%",
-            )
-            lines.append(rendered)
+            # Task 7a: Try to use method_actions template from VBO catalogue
+            method_template = self._lookup_method_actions_template(stage)
+            if method_template and band != ConfidenceBand.MANUAL:
+                # Use the documented real PAD syntax from vbo_catalogue.yaml
+                lines.append(method_template)
+            else:
+                # Fallback to generic template for unmapped methods (Tag Item, Defer, etc.)
+                wq_template = self.env.get_template("actions/work_queues.robin.j2")
+                rendered = wq_template.render(
+                    target_type=target_type,
+                    output_var=stage.name.replace(" ", "_"),
+                    queue_name="'QueueName'",
+                    queue_id="%QueueId%",
+                    item_data="%ItemData%",
+                    item_id="%ItemId%",
+                    updated_data="%UpdatedData%",
+                )
+                lines.append(rendered)
 
         elif target_module == "Scripting":
             scripting_template = self.env.get_template("actions/scripting.robin.j2")

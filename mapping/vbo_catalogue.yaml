@@ -446,6 +446,11 @@
     per docs/pad-reference/vbo-action-mapping.md (Work Queues table) and
     DF_PID_171_US_LIMS_Prelude_Main.robin.txt (L1371, L1212, L1140, L1211+).
     Work Queue schema migration required.
+  method_actions:
+    "Get Next Item": "WorkQueues.ProcessWorkQueueItem.ProcessWorkQueueItem WorkQueue: <id> WorkQueueItem=> <var>"
+    "Mark Completed": "WorkQueues.UpdateWorkQueueItem.UpdateWithProcessingNotes WorkQueueItem: <obj> Status: WorkQueues.WorkQueueItemStatus.Processed"
+    "Mark Exception": "WorkQueues.UpdateWorkQueueItem.UpdateWithProcessingNotes WorkQueueItem: <obj> Status: WorkQueues.WorkQueueItemStatus.BusinessException ProcessingResult: <msg>"
+    "Update Status": "WorkQueues.UpdateProcessingNotes.WithProcessingNotes WorkQueueItem: <obj> ProcessingNotes: <text>"
 
 - vbo_name: "Blueprism.Automate.clsCredentialsActions"
   method_patterns:
