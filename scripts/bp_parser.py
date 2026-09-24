@@ -40,8 +40,8 @@ def _txt(el: ET.Element, tag: str) -> str | None:
     return None
 
 
-def _parse_inputs(stage: ET.Element) -> list[dict]:
-    inputs = []
+def _parse_inputs(stage: ET.Element) -> list[dict[str, str]]:
+    inputs: list[dict[str, str]] = []
     container = stage.find(f"{BP}inputs")
     if container is None:
         return inputs
@@ -57,8 +57,8 @@ def _parse_inputs(stage: ET.Element) -> list[dict]:
     return inputs
 
 
-def _parse_outputs(stage: ET.Element) -> list[dict]:
-    outputs = []
+def _parse_outputs(stage: ET.Element) -> list[dict[str, str]]:
+    outputs: list[dict[str, str]] = []
     container = stage.find(f"{BP}outputs")
     if container is None:
         return outputs
@@ -110,9 +110,7 @@ def _resolve_edge(target_id: str | None, anchor_map: dict[str, str]) -> str | No
     return anchor_map.get(target_id, target_id)
 
 
-def _parse_stage(
-    stage: ET.Element, artifact_type: str, anchor_map: dict[str, str]
-) -> dict[str, Any] | None:
+def _parse_stage(stage: ET.Element, anchor_map: dict[str, str]) -> dict[str, Any] | None:
     """Parse a single stage element into a dict. Returns None for skip types."""
     raw_type = stage.attrib.get("type", "")
 
@@ -124,11 +122,7 @@ def _parse_stage(
 
     # Page membership (schema §4 page identity rule)
     ssid_el = stage.find(f"{BP}subsheetid")
-    page_id = (
-        ssid_el.text.strip()
-        if ssid_el is not None and ssid_el.text
-        else IMPLICIT_MAIN_KEY(artifact_type)
-    )
+    page_id = ssid_el.text.strip() if ssid_el is not None and ssid_el.text else IMPLICIT_PAGE_ID
 
     # Normalisation flags
     normalised_type = NORMALISE_MAP.get(raw_type, raw_type)
@@ -195,17 +189,6 @@ def _parse_stage(
     # Narrative
     narrative = _txt(stage, "narrative")
 
-    # WaitStart/WaitEnd bracket fields
-    timeout_el = stage.find(f"{BP}timeout")
-    timeout_seconds = (
-        int(timeout_el.text.strip())
-        if (timeout_el is not None and timeout_el.text and timeout_el.text.strip().isdigit())
-        else None
-    )
-
-    groupid_el = stage.find(f"{BP}groupid")
-    group_id = groupid_el.text.strip() if (groupid_el is not None and groupid_el.text) else None
-
     return {
         "id": sid,
         "name": sname,
@@ -243,26 +226,12 @@ def _parse_stage(
         "is_skill": is_skill,
         # narrative
         "narrative": narrative,
-        # WaitStart/WaitEnd bracket fields (schema §6.14)
-        "timeout_seconds": timeout_seconds,
-        "group_id": group_id,
     }
 
 
-def IMPLICIT_MAIN_KEY(artifact_type: str) -> str:
-    return IMPLICIT_PAGE_ID
-
-
-def parse_element(root_el: ET.Element, release_id: str | None = None) -> dict[str, Any]:
+def parse(filepath: str) -> dict[str, Any]:
     """
-    Parse a Blue Prism XML root element and return a structured dict.
-    Accepts either a <process> or <object> root element directly —
-    used by bp_release_parser to parse in-memory elements without temp files.
-
-    Args:
-        root_el:    Root ET.Element — either <process> or <object>
-        release_id: Optional UUID from the release <contents> wrapper,
-                    used by bp_release_parser to tag each result.
+    Parse a Blue Prism XML file and return a structured dict.
 
     Returns:
         {
@@ -270,13 +239,11 @@ def parse_element(root_el: ET.Element, release_id: str | None = None) -> dict[st
             pages: {page_id: {name, type, published}},
             stages: [...],
             edges: [{from_id, to_id, label}],
-            stage_by_id: {id: stage},
-            stats: {total_raw, parsed, skipped, pages,
-                    explicit_edges, implicit_edges, total_edges},
-            release_id: str | None,
+            stats: {total_raw, parsed, skipped, pages, edges}
         }
     """
-    root = root_el
+    tree = ET.parse(filepath)
+    root = tree.getroot()
 
     # Root discriminator (schema §2)
     root_tag = root.tag.replace(BP, "")
@@ -284,10 +251,7 @@ def parse_element(root_el: ET.Element, release_id: str | None = None) -> dict[st
 
     inner_proc = root.find(f"{BP}process")
     if inner_proc is None:
-        raise ValueError(
-            f"No inner <process> element found in element "
-            f"<{root_tag} name={root.attrib.get('name', '?')}>"
-        )
+        raise ValueError(f"No inner <process> element found in {filepath}")
 
     # Metadata
     meta = {
@@ -330,7 +294,7 @@ def parse_element(root_el: ET.Element, release_id: str | None = None) -> dict[st
     parsed_stages = []
     skipped_count = 0
     for raw_s in raw_stages:
-        result = _parse_stage(raw_s, artifact_type, anchor_map)
+        result = _parse_stage(raw_s, anchor_map)
         if result is None:
             skipped_count += 1
         else:
@@ -346,6 +310,9 @@ def parse_element(root_el: ET.Element, release_id: str | None = None) -> dict[st
     def add_edge(from_id: str, to_id: str, label: str):
         if to_id is None:
             return
+        # Skip edges that point to skipped/anchor stages not in stage_by_id
+        # (they were already resolved through anchors; if still missing, target
+        # is a skipped type like Note — drop the edge)
         if to_id not in stage_by_id:
             return
         key = (from_id, to_id, label)
@@ -363,6 +330,7 @@ def parse_element(root_el: ET.Element, release_id: str | None = None) -> dict[st
             add_edge(sid, s["onfalse"], "false")
 
     # Implicit Block → Recover edges (schema §7)
+    # Group by page, find Block/Recover pairs
     page_blocks: dict[str, list] = defaultdict(list)
     page_recovers: dict[str, list] = defaultdict(list)
     for s in parsed_stages:
@@ -394,23 +362,7 @@ def parse_element(root_el: ET.Element, release_id: str | None = None) -> dict[st
         "edges": edges,
         "stage_by_id": stage_by_id,
         "stats": stats,
-        "release_id": release_id,
     }
-
-
-def parse(filepath: str) -> dict[str, Any]:
-    """
-    Parse a Blue Prism XML file from disk and return a structured dict.
-    Thin wrapper around parse_element() for file-based usage.
-
-    Args:
-        filepath: Path to .bprelease / .bpprocess / .bpobject XML file
-
-    Returns:
-        Same structure as parse_element()
-    """
-    tree = ET.parse(filepath)
-    return parse_element(tree.getroot())
 
 
 def print_summary(result: dict, filepath: str) -> None:

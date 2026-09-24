@@ -1,7 +1,7 @@
 """
 bp_release_parser.py — Blue Prism .bprelease diagnostic parser
 Parses a .bprelease file and extracts all processes, objects,
-and environment variables using bp_parser.parse_element() for each artefact.
+and environment variables using bp_parser.parse_element() for each artifact.
 
 Usage:
     python bp_release_parser.py <file.bprelease>
@@ -200,7 +200,7 @@ def parse_release(filepath: str) -> dict[str, Any]:
         # All other tags are silently skipped
 
     # ---- Build cross-reference: process/object id → group names ----
-    # Attach group membership to each artefact's meta
+    # Attach group membership to each artifact's meta
     id_to_groups: dict[str, list[str]] = {}
     for g in groups:
         for mid in g["member_ids"]:
@@ -263,7 +263,7 @@ def print_summary(result: dict, filepath: str) -> None:
         m = p["meta"]
         s = p["stats"]
         grps = ", ".join(m.get("groups", [])) or "—"
-        print(f"  [{m['artefact_type']}] {m['name']}")
+        print(f"  [{m['artifact_type']}] {m['name']}")
         print(f"    version={m['version']}  BP={m['bpversion']}")
         print(
             f"    pages={s['pages']}  parsed={s['parsed']}  "
@@ -278,7 +278,7 @@ def print_summary(result: dict, filepath: str) -> None:
         m = o["meta"]
         s = o["stats"]
         grps = ", ".join(m.get("groups", [])) or "—"
-        print(f"  [{m['artefact_type']}] {m['name']}")
+        print(f"  [{m['artifact_type']}] {m['name']}")
         print(f"    version={m['version']}  BP={m['bpversion']}")
         print(
             f"    pages={s['pages']}  parsed={s['parsed']}  "

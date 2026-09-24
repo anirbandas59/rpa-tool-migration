@@ -1,6 +1,6 @@
 """One-off script: analyse Power Automate Desktop sample package.
 
-Inspects all artefact types present in samples/pad/:
+Inspects all artifact types present in samples/pad/:
   - ManifestFile JSON     → PAD module references + engine version
   - ConnectorDefinition JSON → Cloud connector IDs and operations
   - Cloud Flow Workflow JSON → Cloud Flow action types and structure
@@ -41,7 +41,7 @@ console = Console()
 
 
 # ---------------------------------------------------------------------------
-# Parsers for each artefact type
+# Parsers for each artifact type
 # ---------------------------------------------------------------------------
 
 
@@ -914,7 +914,7 @@ def main() -> None:
     )
 
     if total_files == 0:
-        console.print(f"[red]No recognised PAD artefact files found in {SAMPLES_DIR}[/red]")
+        console.print(f"[red]No recognised PAD artifact files found in {SAMPLES_DIR}[/red]")
         sys.exit(1)
 
     DOCS_DIR.mkdir(parents=True, exist_ok=True)
