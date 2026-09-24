@@ -2955,3 +2955,441 @@ def test_verify_markers_are_adjacent_to_call_sites(tmp_path: Path) -> None:
                 f"VERIFY marker should reference the queue variable. "
                 f"Marker: {preceding_line}, Call: {call_line}"
             )
+
+
+# ── Task 7b0 (fix pass 2): GLOBAL FUNCTIONs with In_/Out_ parameters ────────
+#
+# Synthetic process using non-PID_171 names throughout, per the section's Do
+# item 7. Parameter names deliberately differ from the data items they bind
+# to (the `stage=` attribute target), mirroring the real BP shape confirmed
+# against samples/blueprism/PID_0171.bprelease (e.g. `ScreenShot path` ->
+# `File Path`).
+
+
+def _annotated_start(
+    stage_id: str,
+    inputs: list[tuple[str, str, str]],
+) -> BPStage:
+    """Build a START stage with data_items + inputs_stage_map for the given
+    (parameter_name, data_type, bound_data_item_name) triples."""
+    data_items = [
+        BPDataItem(name=name, data_type=dtype, is_input=True, is_output=False)
+        for name, dtype, _target in inputs
+    ]
+    inputs_stage_map = {name: target for name, _dtype, target in inputs}
+    return BPStage(
+        stage_id=stage_id,
+        stage_type=StageType.START,
+        name="Start",
+        data_items=data_items,
+        inputs_stage_map=inputs_stage_map,
+        pa_annotation=PAAnnotation(
+            target_type="",
+            target_module="System",
+            runtime=Runtime.DESKTOP,
+            params_map={},
+            confidence=0.95,
+            band=ConfidenceBand.AUTO,
+        ),
+    )
+
+
+def _annotated_end(
+    stage_id: str,
+    outputs: list[tuple[str, str, str]],
+) -> BPStage:
+    """Build an END stage with data_items + outputs_stage_map for the given
+    (parameter_name, data_type, bound_data_item_name) triples."""
+    data_items = [
+        BPDataItem(name=name, data_type=dtype, is_input=False, is_output=True)
+        for name, dtype, _target in outputs
+    ]
+    outputs_stage_map = {name: target for name, _dtype, target in outputs}
+    return BPStage(
+        stage_id=stage_id,
+        stage_type=StageType.END,
+        name="End",
+        data_items=data_items,
+        outputs_stage_map=outputs_stage_map,
+        pa_annotation=PAAnnotation(
+            target_type="",
+            target_module="System",
+            runtime=Runtime.DESKTOP,
+            params_map={},
+            confidence=0.95,
+            band=ConfidenceBand.AUTO,
+        ),
+    )
+
+
+def _data_stage(stage_id: str, name: str, data_type: str = "text") -> BPStage:
+    """Build a DATA stage that declares/initialises `name` (Task 7b0 suppression target)."""
+    return BPStage(
+        stage_id=stage_id,
+        stage_type=StageType.DATA,
+        name=name,
+        data_items=[],
+        pa_annotation=PAAnnotation(
+            target_type="SetVariable",
+            target_module="Variables",
+            runtime=Runtime.DESKTOP,
+            params_map={
+                "variable_name": name,
+                "variable_type": data_type,
+                "initial_value": "%SomeInitialVar%",
+            },
+            confidence=0.85,
+            band=ConfidenceBand.SPOT_CHECK,
+        ),
+    )
+
+
+def _calc_stage(stage_id: str, name: str, target: str, expr: str) -> BPStage:
+    """Build a CALCULATION stage assigning `expr` to `target`."""
+    return BPStage(
+        stage_id=stage_id,
+        stage_type=StageType.CALCULATION,
+        name=name,
+        data_items=[],
+        params_map={target: expr},
+        pa_annotation=PAAnnotation(
+            target_type="SetVariable",
+            target_module="Variables",
+            runtime=Runtime.DESKTOP,
+            params_map={},
+            confidence=0.9,
+            band=ConfidenceBand.AUTO,
+        ),
+    )
+
+
+def _call_stage(
+    stage_id: str,
+    name: str,
+    processid: str,
+    params_map: dict[str, str],
+    outputs_stage_map: dict[str, str] | None = None,
+) -> BPStage:
+    """Build a SubSheet-call ACTION stage targeting `processid`."""
+    return BPStage(
+        stage_id=stage_id,
+        stage_type=StageType.ACTION,
+        name=name,
+        is_subsheet_call=True,
+        processid=processid,
+        data_items=[],
+        params_map=params_map,
+        outputs_stage_map=outputs_stage_map or {},
+        pa_annotation=PAAnnotation(
+            target_type="SubFlow",
+            target_module="System",
+            runtime=Runtime.DESKTOP,
+            params_map={},
+            confidence=0.9,
+            band=ConfidenceBand.AUTO,
+        ),
+    )
+
+
+def test_7b0_header_uses_stage_bound_param_names() -> None:
+    """Header parameter names come from the stage= binding, not the Start/End
+    parameter's own name (Task 7b0 Do item 2)."""
+    gen = PADGenerator()
+    page = BPPage(
+        page_id="P_FETCH",
+        name="Fetch Widget Data",
+        role="performer",
+        stages=[
+            _annotated_start(
+                "s0",
+                [
+                    ("SourceLoc", "text", "widget_source_path"),
+                    ("Retries", "number", "widget_retry_limit"),
+                ],
+            ),
+            _annotated_end("s1", [("ResultLoc", "text", "widget_result_path")]),
+        ],
+    )
+    params = gen._extract_function_parameters(page)
+    assert params == (
+        "In_txt_WidgetSourcePath, In_num_WidgetRetryLimit, OUTPUT Out_txt_WidgetResultPath"
+    )
+
+
+def test_7b0_header_repeats_output_keyword_for_multiple_outputs() -> None:
+    """Multi-output header form repeats OUTPUT before each output parameter
+    (reference L232, L622, L1167), not just the first."""
+    gen = PADGenerator()
+    page = BPPage(
+        page_id="P_MULTI",
+        name="Multi Output Page",
+        role="performer",
+        stages=[
+            _annotated_start("s0", []),
+            _annotated_end(
+                "s1",
+                [
+                    ("StatusOut", "boolean", "widget_status"),
+                    ("MessageOut", "text", "widget_message"),
+                ],
+            ),
+        ],
+    )
+    params = gen._extract_function_parameters(page)
+    assert params == "OUTPUT Out_flg_WidgetStatus, OUTPUT Out_txt_WidgetMessage"
+    assert params.count("OUTPUT") == 2
+
+
+def test_7b0_body_uses_in_name_and_suppresses_reinit(tmp_path: Path) -> None:
+    """Inside the FUNCTION body: a bound input renders as its In_ name wherever
+    referenced, and its own DATA-stage initialising SET is suppressed entirely
+    (Task 7b0 Do item 3)."""
+    gen = PADGenerator()
+    page = BPPage(
+        page_id="P_FETCH",
+        name="Fetch Widget Data",
+        role="performer",
+        stages=[
+            _annotated_start(
+                "s0",
+                [
+                    ("SourceLoc", "text", "widget_source_path"),
+                    ("Retries", "number", "widget_retry_limit"),
+                ],
+            ),
+            # This DATA stage re-declares the bound input — must NOT be re-emitted.
+            _data_stage("s1", "widget_source_path"),
+            # This CALCULATION reads the bound input by its regular BP name — must
+            # render using the In_ parameter name, not txt_WidgetSourcePath.
+            _calc_stage("s2", "Compute Status", "widget_status", "[widget_source_path]"),
+            _annotated_end("s3", [("ResultLoc", "text", "widget_result_path")]),
+        ],
+    )
+    process = make_process(pages=[page], name="WidgetFlow")
+    # Task 5b's process-wide variable_name_mapping applies its own prefix to
+    # unbound data items (e.g. widget_status -> txt_WidgetStatus); build it the
+    # same way _generate_consolidated_flow does before rendering page bodies.
+    variable_name_mapping = gen._build_variable_name_mapping(process)
+
+    rendered = gen._render_page_as_function(
+        page, process, {"shape": "function"}, variable_name_mapping=variable_name_mapping
+    )
+
+    assert "In_txt_WidgetSourcePath" in rendered
+    assert "SET txt_WidgetSourcePath TO" not in rendered, (
+        "The bound input's own initialising SET must be suppressed"
+    )
+    assert "SET widget_status TO In_txt_WidgetSourcePath" in rendered, (
+        "A body reference to the bound data item must use its In_ parameter name"
+    )
+    assert "GLOBAL." not in rendered
+
+
+def test_7b0_body_assigns_out_for_input_and_output_bound_item() -> None:
+    """A data item bound to BOTH an input and an output uses the In_ name inside
+    the body, then is copied to Out_ before END FUNCTION (reference L944)."""
+    gen = PADGenerator()
+    page = BPPage(
+        page_id="P_BOTH",
+        name="Both Bound Page",
+        role="performer",
+        stages=[
+            _annotated_start("s0", [("Count", "number", "widget_counter")]),
+            _annotated_end("s1", [("FinalCount", "number", "widget_counter")]),
+        ],
+    )
+    process = make_process(pages=[page], name="WidgetFlow")
+
+    rendered = gen._render_page_as_function(page, process, {"shape": "function"})
+
+    assert "In_num_WidgetCounter" in rendered
+    assert "OUTPUT Out_num_WidgetCounter" in rendered
+    assert "SET Out_num_WidgetCounter TO In_num_WidgetCounter" in rendered
+    lines = rendered.splitlines()
+    end_idx = next(i for i, ln in enumerate(lines) if ln.strip() == "END FUNCTION")
+    assign_idx = next(i for i, ln in enumerate(lines) if "SET Out_num_WidgetCounter TO" in ln)
+    assert assign_idx < end_idx, "The Out_ copy must be emitted before END FUNCTION"
+
+
+def test_7b0_call_site_passes_arguments_no_tuple_repr() -> None:
+    """CALL sites pass In_/Out_ arguments matching the header, with helper actions
+    (Trim/Lower) emitted before the CALL and no tuple repr (Task 7b0 Do item 4)."""
+    gen = PADGenerator()
+    target_page = BPPage(
+        page_id="P_FETCH",
+        name="Fetch Widget Data",
+        role="performer",
+        stages=[
+            _annotated_start(
+                "s0",
+                [
+                    ("SourceLoc", "text", "widget_source_path"),
+                    ("Retries", "number", "widget_retry_limit"),
+                ],
+            ),
+            _annotated_end("s1", [("ResultLoc", "text", "widget_result_path")]),
+        ],
+    )
+    call_stage = _call_stage(
+        "c0",
+        "Call Fetch",
+        processid="P_FETCH",
+        params_map={
+            "SourceLoc": "Trim([raw_path])",
+            # "Retries" deliberately omitted — unresolvable input case (next test).
+        },
+        outputs_stage_map={"ResultLoc": "final_result_var"},
+    )
+    variable_name_mapping = {"raw_path": "txt_RawPath"}
+
+    rendered = gen._render_page_call_with_arguments(
+        call_stage, target_page, "Fetch Widget Data", variable_name_mapping
+    )
+
+    assert "TO ('" not in rendered, "No tuple repr from an unpacked translate result"
+    lines = rendered.splitlines()
+    call_idx = next(i for i, ln in enumerate(lines) if ln.startswith("CALL "))
+    helper_idx = next(i for i, ln in enumerate(lines) if ln.startswith("Text.Trim"))
+    assert helper_idx < call_idx, "Helper actions (Trim) must precede the CALL"
+    call_line = lines[call_idx]
+    assert "In_txt_WidgetSourcePath: txt_trimmed_0" in call_line
+    assert "Out_txt_WidgetResultPath=> final_result_var" in call_line
+
+
+def test_7b0_call_site_unresolvable_input_gets_todo_before_call() -> None:
+    """An unresolvable input gets a `# TODO` on its own line before the CALL, never
+    inline inside the CALL's argument string (Task 7b0 gap 6)."""
+    gen = PADGenerator()
+    target_page = BPPage(
+        page_id="P_FETCH",
+        name="Fetch Widget Data",
+        role="performer",
+        stages=[
+            _annotated_start(
+                "s0",
+                [
+                    ("SourceLoc", "text", "widget_source_path"),
+                    ("Retries", "number", "widget_retry_limit"),
+                ],
+            ),
+            _annotated_end("s1", [("ResultLoc", "text", "widget_result_path")]),
+        ],
+    )
+    call_stage = _call_stage(
+        "c0",
+        "Call Fetch",
+        processid="P_FETCH",
+        params_map={"SourceLoc": "[raw_path]"},  # "Retries" is missing entirely
+        outputs_stage_map={"ResultLoc": "final_result_var"},
+    )
+
+    rendered = gen._render_page_call_with_arguments(
+        call_stage, target_page, "Fetch Widget Data", {"raw_path": "txt_RawPath"}
+    )
+
+    lines = rendered.splitlines()
+    call_idx = next(i for i, ln in enumerate(lines) if ln.startswith("CALL "))
+    todo_idx = next(i for i, ln in enumerate(lines) if "# TODO: unresolvable input" in ln)
+    assert todo_idx < call_idx, "The TODO must be on its own line before the CALL"
+    call_line = lines[call_idx]
+    assert "#" not in call_line, "No inline comment inside the CALL line"
+    assert "In_num_WidgetRetryLimit" not in call_line, (
+        "An unresolvable input must not appear as a bogus CALL argument"
+    )
+
+
+def test_7b0_output_binding_ignores_params_map_fallback() -> None:
+    """Outputs come only from outputs_stage_map — a same-named entry in params_map
+    (inputs) must never be used as the output's target (Task 7b0 gap 7)."""
+    gen = PADGenerator()
+    target_page = BPPage(
+        page_id="P_FETCH",
+        name="Fetch Widget Data",
+        role="performer",
+        stages=[
+            _annotated_start("s0", [("SourceLoc", "text", "widget_source_path")]),
+            _annotated_end("s1", [("ResultLoc", "text", "widget_result_path")]),
+        ],
+    )
+    call_stage = _call_stage(
+        "c0",
+        "Call Fetch",
+        processid="P_FETCH",
+        # "ResultLoc" appears only in params_map (input shape), never in
+        # outputs_stage_map — must NOT be picked up as the output binding.
+        params_map={"SourceLoc": "[raw_path]", "ResultLoc": "some_input_looking_expr"},
+        outputs_stage_map={},
+    )
+
+    rendered = gen._render_page_call_with_arguments(
+        call_stage, target_page, "Fetch Widget Data", {}
+    )
+
+    assert "some_input_looking_expr" not in rendered
+    assert "# TODO: unresolvable output 'ResultLoc'" in rendered
+
+
+def test_7b0_split_page_only_entry_function_gets_parameters() -> None:
+    """Split pages: only the entry FUNCTION carries the page's In_/Out_ parameter
+    list; other sub-FUNCTIONs stay bare `FUNCTION '<name>' GLOBAL` (Task 7b0 Do
+    item 3, split-page sub-case, user decision 2026-09-24)."""
+    gen = PADGenerator()
+    page = BPPage(
+        page_id="P_SPLIT",
+        name="Multi Step Page",
+        role="performer",
+        stages=[
+            _annotated_start("s0", [("SourceLoc", "text", "widget_source_path")]),
+            _calc_stage("s1", "Step A", "widget_step_a", "1"),
+            _calc_stage("s2", "Step B", "widget_step_b", "2"),
+            _annotated_end("s3", [("ResultLoc", "text", "widget_result_path")]),
+        ],
+    )
+    process = make_process(pages=[page], name="WidgetFlow")
+    shape_info = {
+        "shape": "split",
+        "targets": ["Multi Step Page Part A", "Multi Step Page Part B"],
+        "stage_counts": [2, 2],
+    }
+
+    rendered = gen._split_page_into_functions(page, process, shape_info)
+
+    assert (
+        "FUNCTION 'Multi Step Page Part A' GLOBAL In_txt_WidgetSourcePath, "
+        "OUTPUT Out_txt_WidgetResultPath" in rendered
+    )
+    assert "FUNCTION 'Multi Step Page Part B' GLOBAL\n" in rendered, (
+        "The non-entry sub-FUNCTION must be bare GLOBAL with no parameter list"
+    )
+    assert "# TODO: split page — Out_ parameter(s) Out_txt_WidgetResultPath" in rendered
+    assert "GLOBAL." not in rendered
+
+
+def test_7b0_split_page_call_site_binds_to_entry_function() -> None:
+    """A CALL to a split-shaped page resolves to its entry FUNCTION and passes
+    arguments (Task 7b0 Do item 4 — 'split resolves to its entry FUNCTION')."""
+    gen = PADGenerator()
+    target_page = BPPage(
+        page_id="P_SPLIT",
+        name="Multi Step Page",
+        role="performer",
+        stages=[
+            _annotated_start("s0", [("SourceLoc", "text", "widget_source_path")]),
+            _annotated_end("s1", [("ResultLoc", "text", "widget_result_path")]),
+        ],
+    )
+    call_stage = _call_stage(
+        "c0",
+        "Call Multi Step",
+        processid="P_SPLIT",
+        params_map={"SourceLoc": "[raw_path]"},
+        outputs_stage_map={"ResultLoc": "final_result_var"},
+    )
+
+    rendered = gen._render_page_call_with_arguments(
+        call_stage, target_page, "Multi Step Page Part A", {"raw_path": "txt_RawPath"}
+    )
+
+    assert "CALL 'Multi Step Page Part A'" in rendered
+    assert "In_txt_WidgetSourcePath: txt_RawPath" in rendered
+    assert "Out_txt_WidgetResultPath=> final_result_var" in rendered

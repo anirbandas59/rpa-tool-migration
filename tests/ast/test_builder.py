@@ -1327,3 +1327,50 @@ def test_pid171_block_recover_pairing_persisted(pid_0171_process) -> None:  # ty
     assert recover_stage.stage_type == StageType.RECOVER, (
         f"Expected recover_stage_id to point to a RECOVER stage, but got {recover_stage.stage_type}"
     )
+
+
+# ── Task 7b0: inputs_stage_map / outputs_stage_map reach the AST ───────────
+
+
+def test_inputs_stage_map_reaches_ast() -> None:
+    """A Start stage's inputs_stage_map (parameter name -> bound data item name) is
+    carried through build_ast onto the BPStage (Task 7b0)."""
+    raw_stage = RawStage(
+        stage_id="s_start",
+        stage_type="Start",
+        name="Start",
+        data_items=[],
+        inputs_stage_map={"ScreenShot path": "File Path"},
+    )
+    raw = single_page_process(raw_stage)
+    result = build_ast(raw)
+
+    stage = result.pages[0].stages[0]
+    assert stage.inputs_stage_map == {"ScreenShot path": "File Path"}
+
+
+def test_outputs_stage_map_reaches_ast() -> None:
+    """An End stage's outputs_stage_map (parameter name -> bound data item name) is
+    carried through build_ast onto the BPStage (Task 7b0)."""
+    raw_stage = RawStage(
+        stage_id="s_end",
+        stage_type="End",
+        name="End",
+        data_items=[],
+        outputs_stage_map={"Mail Items": "Items"},
+    )
+    raw = single_page_process(raw_stage)
+    result = build_ast(raw)
+
+    stage = result.pages[0].stages[0]
+    assert stage.outputs_stage_map == {"Mail Items": "Items"}
+
+
+def test_inputs_outputs_stage_map_default_empty() -> None:
+    """A stage with no stage= bindings gets empty inputs_stage_map/outputs_stage_map,
+    never None (Task 7b0 — no silent attribute-missing failure)."""
+    raw = single_page_process(make_raw_stage(stage_type="Start", name="Start"))
+    stage = build_ast(raw).pages[0].stages[0]
+
+    assert stage.inputs_stage_map == {}
+    assert stage.outputs_stage_map == {}

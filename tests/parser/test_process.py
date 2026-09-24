@@ -1566,3 +1566,90 @@ def test_pid_0171_environment_variables_extraction() -> None:
         assert data_type_map[var_name] == "text", (
             f"Environment variable {var_name} has data_type {data_type_map[var_name]}, expected 'text'"
         )
+
+
+# ── Task 7b0: stage= attribute capture on Start/End params and call outputs ────
+
+
+@pytest.fixture
+def stage_bound_params_bprelease(tmp_path: Path) -> Path:
+    """Blue Prism .bprelease with a page whose Start/End parameter names differ from
+    the data item they bind to via the ``stage=`` attribute, plus a caller page whose
+    call-stage output also carries ``stage=``.
+
+    Modelled on the real shape confirmed against samples/blueprism/PID_0171.bprelease
+    (sample line 10, ``<input type="flag" name="flg_SendDatatoDataGateways"
+    narrative="..." stage="flg_SendDatatoDataGateways" />``; sample line 12,
+    ``<output type="collection" name="Mail Items" narrative="..." stage="Mail Items" />``)
+    — the parameter's own ``name`` and the ``stage=`` target can differ, as in
+    ``ScreenShot path`` -> ``File Path``.
+    """
+    xml_content = """\
+<?xml version="1.0" encoding="utf-8"?>
+<process id="proc_bind" name="BindTest" version="1.0">
+  <subsheet subsheetid="pg_callee" name="Callee Page" type="0">
+    <stage stageid="s_start" type="Start" name="Start">
+      <inputs>
+        <input name="ScreenShot path" type="text" expr="" stage="File Path"/>
+      </inputs>
+    </stage>
+    <stage stageid="s_end" type="End" name="End">
+      <outputs>
+        <output name="Mail Items" type="collection" stage="Items"/>
+      </outputs>
+    </stage>
+  </subsheet>
+  <subsheet subsheetid="pg_caller" name="Caller Page" type="0">
+    <stage stageid="c_001" type="Start" name="Start"/>
+    <stage stageid="c_002" type="SubSheet" name="Call Callee">
+      <outputs>
+        <output name="Mail Items" type="collection" stage="dtb_CallerItems"/>
+      </outputs>
+      <processid>pg_callee</processid>
+      <onsuccess>c_003</onsuccess>
+    </stage>
+    <stage stageid="c_003" type="End" name="End"/>
+  </subsheet>
+</process>
+"""
+    filepath = tmp_path / "test_stage_bound.bprelease"
+    filepath.write_text(xml_content, encoding="utf-8")
+    return filepath
+
+
+def test_start_stage_input_captures_stage_attribute(
+    stage_bound_params_bprelease: Path,
+) -> None:
+    """A Start stage's <input stage="..."> binds the parameter name to a data item name
+    that can differ from the parameter's own name (Task 7b0)."""
+    result = parse_process(stage_bound_params_bprelease)
+    callee_page = next(p for p in result["processes"][0]["pages"] if p["name"] == "Callee Page")
+    start_stage = next(s for s in callee_page["stages"] if s["stage_type"] == "Start")
+
+    assert start_stage["inputs_stage_map"]["ScreenShot path"] == "File Path"
+
+
+def test_end_stage_output_captures_stage_attribute(
+    stage_bound_params_bprelease: Path,
+) -> None:
+    """An End stage's <output stage="..."> binds the parameter name to a data item name
+    that can differ from the parameter's own name (Task 7b0)."""
+    result = parse_process(stage_bound_params_bprelease)
+    callee_page = next(p for p in result["processes"][0]["pages"] if p["name"] == "Callee Page")
+    end_stage = next(s for s in callee_page["stages"] if s["stage_type"] == "End")
+
+    assert end_stage["outputs_stage_map"]["Mail Items"] == "Items"
+
+
+def test_call_stage_output_captures_stage_attribute(
+    stage_bound_params_bprelease: Path,
+) -> None:
+    """A call (SubSheet) stage's <output stage="..."> captures which caller data item
+    receives the callee's output — stored separately from params_map (Task 7b0)."""
+    result = parse_process(stage_bound_params_bprelease)
+    caller_page = next(p for p in result["processes"][0]["pages"] if p["name"] == "Caller Page")
+    call_stage = next(s for s in caller_page["stages"] if s["name"] == "Call Callee")
+
+    assert call_stage["outputs_stage_map"]["Mail Items"] == "dtb_CallerItems"
+    # The output binding must not leak into params_map (which holds inputs only).
+    assert "Mail Items" not in call_stage["params_map"]

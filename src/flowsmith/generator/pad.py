@@ -151,6 +151,13 @@ class PADGenerator:
         # suffixes for accidental collisions, not intentional folds).
         self._current_page_name_map: dict[str, str] = {}
 
+        # Instance variable holding the set of lowercase BP data-item names whose
+        # initialising SET must be suppressed while rendering the current FUNCTION body
+        # (Task 7b0 Do item 3) — set from _render_page_as_function/_split_page_into_functions
+        # before rendering that FUNCTION's stages, and restored afterward. Consulted by
+        # _render_stage's DATA/COLLECTION branches.
+        self._current_suppress_init_names: set[str] = set()
+
     def generate_process(
         self,
         process: BPProcess,
@@ -272,8 +279,7 @@ class PADGenerator:
             subflow = subflow_template.render(
                 subflow_name=self._sanitise_filename(page.name),
                 actions=actions_content,
-                construct_type="function",
-                is_global=True,  # Task 7b0: every FUNCTION is GLOBAL
+                construct_type="function",  # Task 7b0: every FUNCTION is GLOBAL (template-fixed)
             )
             lines.append(subflow)
 
@@ -763,7 +769,6 @@ class PADGenerator:
                 subflow_name=block_name,
                 actions=actions_content,
                 construct_type="block",
-                is_global=False,
             )
 
             # Add citation comment
@@ -885,17 +890,19 @@ class PADGenerator:
                     param_name = f"Out_{pad_var_name}"
                     output_params.append(param_name)
 
-        # Format parameter list: In_x, In_y, OUTPUT Out_z, Out_w (comma-separated per reference L1226)
-        # The "OUTPUT" keyword separates inputs from outputs, with commas between all elements
-        if input_params and output_params:
-            # Both inputs and outputs: "In_a, In_b, OUTPUT Out_c, Out_d"
-            return ", ".join(input_params) + ", OUTPUT " + ", ".join(output_params)
+        # Format parameter list. Single-output form (reference L1226, L1155): "In_x, OUTPUT Out_z".
+        # Multi-output form: OUTPUT is repeated before EACH output parameter, not just the
+        # first — reference L232 ("OUTPUT out_txt_SampleId, OUTPUT out_dtb_DataCollection"),
+        # L622 (4 outputs, each prefixed with OUTPUT), L1167 ("OUTPUT Out_flg_Success, OUTPUT
+        # Out_txt_Message"). Without the repeated keyword, PAD reads the second+ output as an
+        # (untyped) input.
+        output_part = ", ".join(f"OUTPUT {name}" for name in output_params)
+        if input_params and output_part:
+            return ", ".join(input_params) + ", " + output_part
         elif input_params:
-            # Only inputs: "In_a, In_b"
             return ", ".join(input_params)
-        elif output_params:
-            # Only outputs: "OUTPUT Out_a, Out_b"
-            return "OUTPUT " + ", ".join(output_params)
+        elif output_part:
+            return output_part
         else:
             # No parameters
             return ""
@@ -945,6 +952,10 @@ class PADGenerator:
         helper_actions: list[str] = []
         input_args: list[str] = []
         output_args: list[str] = []
+        # Task 7b0 gap 6: unresolvable-binding TODOs go on their own line BEFORE the CALL,
+        # never inline inside the argument string — a `#` mid-line comments out every
+        # argument after it in PAD, which is a silent drop.
+        pre_call_todos: list[str] = []
 
         # Process input bindings from START stage
         if start_stage and start_stage.data_items:
@@ -972,15 +983,28 @@ class PADGenerator:
                         if actions:
                             helper_actions.extend(actions)
 
+                        # Task 7b0 gap 5: a translated expression containing a space (e.g. a
+                        # raw BP field name like `dtb_ConfigFileData.Sub Folder`) is not valid
+                        # PAD syntax unmarked at a call site. Flag it with a TODO on its own
+                        # line before the CALL, but keep the argument in the CALL (per Do item
+                        # 4's "never a silent drop" — the root cause is Task 5b's translator).
+                        if " " in translated_expr.strip():
+                            pre_call_todos.append(
+                                f"# TODO: call argument '{param_name}' → '{translated_expr}' "
+                                f"for page '{target_page.name}' contains a raw BP field name "
+                                "with a space — not valid PAD syntax as-is"
+                            )
+
                         # Format as In_param: <expr>
                         input_args.append(f"{param_name}: {translated_expr}")
                     elif caller_expr == "":
                         # Empty expression — skip this input (per task)
                         pass
                     else:
-                        # Unresolvable input — emit TODO
-                        input_args.append(
-                            f"# TODO: unresolvable input '{data_item.name}' → {param_name}"
+                        # Unresolvable input — emit TODO on its own line, never inline
+                        pre_call_todos.append(
+                            f"# TODO: unresolvable input '{data_item.name}' → {param_name} "
+                            f"for page '{target_page.name}'"
                         )
 
         # Process output bindings from END stage
@@ -994,29 +1018,36 @@ class PADGenerator:
                     pad_var_name = self._apply_type_prefix(data_item_name, data_item.data_type)
                     param_name = f"Out_{pad_var_name}"
 
-                    # Try to get the caller's target variable from call_stage params_map
-                    # Look for the output parameter name in the call stage's outputs_stage_map
+                    # Task 7b0 gap 7: outputs come ONLY from the call stage's captured
+                    # outputs_stage_map (the <output stage="..."> binding) — the params_map
+                    # fallback removed here was the input/output crossover both reviews
+                    # flagged (an input's expression could land as an output's target).
                     caller_var = None
                     if (
                         call_stage.outputs_stage_map
                         and data_item.name in call_stage.outputs_stage_map
                     ):
                         caller_var = call_stage.outputs_stage_map[data_item.name]
-                    elif call_stage.params_map and data_item.name in call_stage.params_map:
-                        # Fallback: legacy approach (might not work correctly)
-                        caller_var = call_stage.params_map[data_item.name]
 
                     if caller_var:
                         # Translate the caller's variable name if needed
                         if variable_name_mapping and caller_var.lower() in variable_name_mapping:
                             caller_var = variable_name_mapping[caller_var.lower()]
 
+                        if " " in caller_var.strip():
+                            pre_call_todos.append(
+                                f"# TODO: call argument '{param_name}' → '{caller_var}' "
+                                f"for page '{target_page.name}' contains a raw BP field name "
+                                "with a space — not valid PAD syntax as-is"
+                            )
+
                         # Format as Out_param=> <var>
                         output_args.append(f"{param_name}=> {caller_var}")
                     else:
-                        # Unresolvable output — emit TODO
-                        output_args.append(
-                            f"# TODO: unresolvable output '{data_item.name}' → {param_name}"
+                        # Unresolvable output — emit TODO on its own line, never inline
+                        pre_call_todos.append(
+                            f"# TODO: unresolvable output '{data_item.name}' → {param_name} "
+                            f"for page '{target_page.name}'"
                         )
 
         # Build the CALL statement
@@ -1025,13 +1056,83 @@ class PADGenerator:
 
         call_stmt = f"CALL '{target_name}' {args_str}" if args_str else f"CALL '{target_name}'"
 
-        # Combine helper actions and CALL
+        # Combine helper actions, TODO comments (own line, before CALL) and the CALL itself
         result_parts: list[str] = []
         if helper_actions:
             result_parts.extend(helper_actions)
+        if pre_call_todos:
+            result_parts.extend(pre_call_todos)
         result_parts.append(call_stmt)
 
         return "\n".join(result_parts)
+
+    def _build_body_variable_overrides(
+        self,
+        page: Any,
+    ) -> tuple[dict[str, str], list[tuple[str, str]], list[str]]:
+        """Build per-FUNCTION body variable-name overrides for parameter-bound data items.
+
+        Task 7b0 Do item 3: inside a parameterised FUNCTION, every reference to a data item
+        bound (via the ``stage=`` attribute captured by the parser — ``inputs_stage_map``/
+        ``outputs_stage_map``) to an In_/Out_ parameter must render as that parameter's name,
+        not its regular txt_/dtb_ name, and the data item's own initialising SET must be
+        suppressed. Reference L944 (``SET out_dtb_filteredTable TO In_dtb_FinalProduct``,
+        'Enter Results in App') and L395-396 (``SET out_dtb_DataCollection TO dtb_ExcelData`` /
+        ``SET out_txt_SampleId TO txt_SampleId``, 'Fetch Data from Excel file') confirm bodies
+        read/write the parameter name directly and copy to the Out_ name before END FUNCTION.
+
+        Args:
+            page: The BPPage whose Start/End stages carry the ``stage=`` bindings.
+
+        Returns:
+            A 3-tuple:
+            - overrides: dict mapping lowercase BP data-item name -> PAD parameter name
+              (``In_x`` for input-bound and input+output-bound items, ``Out_x`` for
+              output-only items). Merge over (so it takes priority over) the page's regular
+              ``variable_name_mapping`` when rendering this FUNCTION's body.
+            - both_bindings: list of (in_name, out_name) pairs for data items bound to both
+              an input and an output parameter — emit ``SET <out_name> TO <in_name>`` before
+              ``END FUNCTION`` for each (reference L944).
+            - output_param_names: every Out_ parameter name the page declares (output-only
+              and input+output), in declaration order — used to flag unassigned Out_
+              parameters on split pages (Do item 3, split-page sub-case).
+        """
+        overrides: dict[str, str] = {}
+        input_names: dict[str, str] = {}  # bp_name_lower -> In_ name
+        both_bindings: list[tuple[str, str]] = []
+        output_param_names: list[str] = []
+
+        start_stage = next((s for s in page.stages if s.stage_type == StageType.START), None)
+        end_stage = next((s for s in page.stages if s.stage_type == StageType.END), None)
+
+        if start_stage and start_stage.data_items:
+            for data_item in start_stage.data_items:
+                if data_item.is_input:
+                    data_item_name = start_stage.inputs_stage_map.get(
+                        data_item.name, data_item.name
+                    )
+                    pad_var_name = self._apply_type_prefix(data_item_name, data_item.data_type)
+                    in_name = f"In_{pad_var_name}"
+                    key = data_item_name.lower()
+                    overrides[key] = in_name
+                    input_names[key] = in_name
+
+        if end_stage and end_stage.data_items:
+            for data_item in end_stage.data_items:
+                if data_item.is_output:
+                    data_item_name = end_stage.outputs_stage_map.get(data_item.name, data_item.name)
+                    pad_var_name = self._apply_type_prefix(data_item_name, data_item.data_type)
+                    out_name = f"Out_{pad_var_name}"
+                    key = data_item_name.lower()
+                    output_param_names.append(out_name)
+                    if key in input_names:
+                        # Both input- and output-bound: the body uses the In_ name for
+                        # reads and writes; overrides[key] already holds the In_ name.
+                        both_bindings.append((input_names[key], out_name))
+                    else:
+                        overrides[key] = out_name
+
+        return overrides, both_bindings, output_param_names
 
     def _render_page_as_function(
         self,
@@ -1062,28 +1163,54 @@ class PADGenerator:
             else:
                 target_name = shape_info.get("target_name", page.name)
 
-            # Per Task 7b0: every FUNCTION is GLOBAL. No scope decision in generator.
-            is_global = True
-
             # Extract parameter list for FUNCTION header (Task 7b0)
             parameters = self._extract_function_parameters(page)
 
-            # Render all stages in the page, applying coarse BLOCK pattern (§A5, §B15)
-            # where the page has Block stages with a persisted recover_stage_id (Task 4b).
-            actions_content = self._render_stage_list_with_coarse_blocks(
-                page.stages, process, process_map, variable_name_mapping
+            # Task 7b0 Do item 3: build the body-local override map so every reference to a
+            # parameter-bound data item renders as its In_/Out_ name inside this FUNCTION's
+            # body, and suppress that data item's own initialising SET (the parameter already
+            # carries the value). Reference L944 (`SET out_dtb_filteredTable TO
+            # In_dtb_FinalProduct`) and L395-396 confirm bodies read/write the parameter name.
+            overrides, both_bindings, _output_param_names = self._build_body_variable_overrides(
+                page
             )
+            body_variable_name_mapping = dict(variable_name_mapping or {})
+            body_variable_name_mapping.update(overrides)
+
+            previous_suppress = self._current_suppress_init_names
+            self._current_suppress_init_names = set(overrides.keys())
+            try:
+                # Render all stages in the page, applying coarse BLOCK pattern (§A5, §B15)
+                # where the page has Block stages with a persisted recover_stage_id (Task 4b).
+                actions_content = self._render_stage_list_with_coarse_blocks(
+                    page.stages, process, process_map, body_variable_name_mapping
+                )
+
+                # Task 7b0 Do item 3: a data item bound to both an input and an output uses
+                # the In_ name throughout the body, then is copied to its Out_ name right
+                # before END FUNCTION (reference L944).
+                if both_bindings:
+                    assign_lines = [
+                        f"SET {out_name} TO {in_name}" for in_name, out_name in both_bindings
+                    ]
+                    actions_content = (
+                        f"{actions_content}\n" + "\n".join(assign_lines)
+                        if actions_content
+                        else "\n".join(assign_lines)
+                    )
+            finally:
+                self._current_suppress_init_names = previous_suppress
+
             epilogue = self._render_goto_epilogue(actions_content)
             if epilogue:
                 actions_content = f"{actions_content}\n{epilogue}"
 
-            # Render the FUNCTION wrapper
+            # Render the FUNCTION wrapper (always GLOBAL — template-fixed, Task 7b0)
             subflow_template = self.env.get_template("subflow.robin.j2")
             return subflow_template.render(
                 subflow_name=target_name,
                 actions=actions_content,
                 construct_type="function",
-                is_global=is_global,
                 parameters=parameters,  # Task 7b0
             )
 
@@ -1133,7 +1260,6 @@ class PADGenerator:
             subflow_name=block_name,
             actions=actions_content,
             construct_type="block",
-            is_global=False,
         )
 
         # Add citation comment
@@ -1226,34 +1352,69 @@ class PADGenerator:
             # Evenly divide stages across targets
             boundaries = self._compute_even_boundaries(num_stages, len(targets))
 
+        # Task 7b0 Do item 3 (split pages, user decision 2026-09-24): only the entry
+        # FUNCTION (targets[0]) carries the page's In_/Out_ parameter list; the other
+        # sub-FUNCTIONs stay bare `FUNCTION '<name>' GLOBAL`. Because the page's End
+        # stage lands in the last sub-FUNCTION and the split call chain (Task 5a) doesn't
+        # exist yet, the entry FUNCTION's Out_ parameter(s) cannot be assigned here — a
+        # TODO naming them is emitted instead of a silent unassigned output.
+        entry_overrides, _both_bindings, entry_output_param_names = (
+            self._build_body_variable_overrides(page)
+        )
+        entry_parameters = self._extract_function_parameters(page)
+
         # Render each target FUNCTION
         function_blocks: list[str] = []
         for target_idx, target_name in enumerate(targets):
             start_idx, end_idx = boundaries[target_idx]
             stages_for_target = page.stages[start_idx:end_idx]
+            is_entry = target_idx == 0
 
-            # Render stages for this target
-            action_lines: list[str] = []
-            for stage in stages_for_target:
-                rendered = self._render_stage(stage, process, process_map, variable_name_mapping)
-                if rendered:
-                    action_lines.append(rendered)
+            if is_entry:
+                body_variable_name_mapping = dict(variable_name_mapping or {})
+                body_variable_name_mapping.update(entry_overrides)
+                suppress_names = set(entry_overrides.keys())
+            else:
+                body_variable_name_mapping = variable_name_mapping
+                suppress_names = set()
 
-            actions_content = "\n".join(action_lines)
+            previous_suppress = self._current_suppress_init_names
+            self._current_suppress_init_names = suppress_names
+            try:
+                # Render stages for this target
+                action_lines: list[str] = []
+                for stage in stages_for_target:
+                    rendered = self._render_stage(
+                        stage, process, process_map, body_variable_name_mapping
+                    )
+                    if rendered:
+                        action_lines.append(rendered)
+
+                actions_content = "\n".join(action_lines)
+
+                if is_entry and entry_output_param_names:
+                    todo = (
+                        "# TODO: split page — Out_ parameter(s) "
+                        + ", ".join(entry_output_param_names)
+                        + f" are not yet assigned; the page's End stage lands in the last "
+                        f"split target ('{targets[-1]}'), and the split call chain "
+                        "(Task 5a follow-up) does not yet exist to return the value here"
+                    )
+                    actions_content = f"{actions_content}\n{todo}" if actions_content else todo
+            finally:
+                self._current_suppress_init_names = previous_suppress
+
             epilogue = self._render_goto_epilogue(actions_content)
             if epilogue:
                 actions_content = f"{actions_content}\n{epilogue}"
 
-            # Render the FUNCTION wrapper
-            # Per Task 7b0: every FUNCTION is GLOBAL.
-            # Extract parameters for FUNCTION header (Task 7b0)
-            parameters = self._extract_function_parameters(page)
+            # Render the FUNCTION wrapper (always GLOBAL — template-fixed, Task 7b0)
+            parameters = entry_parameters if is_entry else ""
             subflow_template = self.env.get_template("subflow.robin.j2")
             function = subflow_template.render(
                 subflow_name=target_name,
                 actions=actions_content,
                 construct_type="function",
-                is_global=True,
                 parameters=parameters,  # Task 7b0
             )
             function_blocks.append(function)
@@ -2007,6 +2168,22 @@ class PADGenerator:
                     target_var_name = stage.name
                     bp_expr = ""
 
+            # Task 7b0 Do item 3: suppress the initialising SET for a data item bound to a
+            # FUNCTION parameter — the parameter already carries the caller-supplied value
+            # (input) or will be assigned via `SET Out_<x> TO In_<x>`/its own body writes
+            # before END FUNCTION (output); re-emitting the BP declaration's SET here would
+            # overwrite the bound value with the BP-authored default/`DataTable.Create()`.
+            # Only applies to DATA/COLLECTION declarations, never CALCULATION assignments.
+            if (
+                stage.stage_type
+                in (
+                    StageType.DATA,
+                    StageType.COLLECTION,
+                )
+                and target_var_name.lower() in self._current_suppress_init_names
+            ):
+                return ""
+
             # Map target variable name using dotted reference resolution if needed
             if variable_name_mapping and "." in target_var_name:
                 mapped_target = self._resolve_dotted_reference(
@@ -2050,6 +2227,9 @@ class PADGenerator:
             set_template = self.env.get_template("actions/set_variable.robin.j2")
 
             target_var_name = stage.name
+            # Task 7b0 Do item 3: same suppression as the SetVariable/COLLECTION branch above.
+            if target_var_name.lower() in self._current_suppress_init_names:
+                return ""
             if variable_name_mapping:
                 target_lower = target_var_name.lower()
                 mapped_target = variable_name_mapping.get(target_lower, target_var_name)
@@ -2577,7 +2757,6 @@ class PADGenerator:
             subflow_name="Get Error",
             actions=stub_body,
             construct_type="function",
-            is_global=True,
         )
 
     @staticmethod

@@ -309,6 +309,23 @@ def test_bp_stage_narrative() -> None:
     assert stage.narrative == "This stage does X"
 
 
+def test_bp_stage_inputs_outputs_stage_map_default_empty() -> None:
+    """Task 7b0: inputs_stage_map/outputs_stage_map default to empty dicts, never None."""
+    stage = _make_stage()
+    assert stage.inputs_stage_map == {}
+    assert stage.outputs_stage_map == {}
+
+
+def test_bp_stage_inputs_outputs_stage_map_set() -> None:
+    """Task 7b0: inputs_stage_map/outputs_stage_map hold parameter_name -> data_item_name."""
+    stage = _make_stage(
+        inputs_stage_map={"ScreenShot path": "File Path"},
+        outputs_stage_map={"Mail Items": "Items"},
+    )
+    assert stage.inputs_stage_map == {"ScreenShot path": "File Path"}
+    assert stage.outputs_stage_map == {"Mail Items": "Items"}
+
+
 # ── BPPage ────────────────────────────────────────────────────────────────
 
 
