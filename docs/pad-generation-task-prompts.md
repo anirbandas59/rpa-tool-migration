@@ -1166,70 +1166,102 @@ generated calls' output variables will need (Task 7b).
 
 ---
 
-## Task 7b0 — `generator/pad.py`: every `FUNCTION` `GLOBAL`, parameterless, with shared-variable call binding
+## Task 7b0 — every `FUNCTION` `GLOBAL`, with BP page inputs/outputs as `FUNCTION` parameters
 
 **Depends on:** Task 6b
-**Files in scope:** `src/flowsmith/generator/pad.py` (`FUNCTION` header emission / `is_global`
-handling, and the page-call rendering `_render_call_or_inline` path), `templates/pad/subflow.robin.j2`,
-`mapping/page_target_map.yaml` (removing the `global:` field only), `tests/generator/test_pad.py`
-**Required reading:** `docs/bp-to-pad-architecture-PID171.md` §A3/§A4; the reference `GLOBAL`
-`FUNCTION`s in `docs/pad-reference/DF_PID_171_US_LIMS_Prelude_Main.robin.txt` (L118, L219, L402,
-L1356, L1368) and `docs/pad-reference/DF_PID_171_US_Loader.robin.txt` (L155, L213, L274), all
-parameterless and called bare (e.g. `CALL 'Get Error'`); `docs/reviews/7b-2026-09-24.md` (the
-reverted `GLOBAL.`-qualification attempt this task replaces).
+**Files in scope** (widened by the user on 2026-09-24 to include the parser/AST):
+`src/flowsmith/parser/process.py`, `src/flowsmith/ast/models.py`, `src/flowsmith/ast/builder.py`,
+`src/flowsmith/generator/pad.py` (`FUNCTION` header emission, `_render_call_or_inline` and the
+page-call path, per-`FUNCTION` variable naming), `templates/pad/subflow.robin.j2`,
+`mapping/page_target_map.yaml` (removing the `global:` field and stale parameter notes only),
+`tests/parser/test_process.py`, `tests/ast/test_models.py`, `tests/ast/test_builder.py`,
+`tests/generator/test_pad.py`
+**Required reading:** `docs/bp-to-pad-architecture-PID171.md` §A3/§A4 (the `In_`/`Out_` parameter
+convention: always capitalised `In_`/`Out_` plus the type-prefixed name); the reference headers and
+calls cited below; `docs/reviews/7b0-2026-09-24.md` (first pass, `59fe817`, 45%: its gap list is
+the work order for what carries over); `docs/reviews/7b-2026-09-24.md`.
 
 **Decisions (user, 2026-09-24):**
-- A `FUNCTION`'s PAD scope is a developer's choice with no Blue Prism equivalent; it isn't part of
-  the migration. **Every generated `FUNCTION` is emitted as `GLOBAL`.** This keeps the flows
-  consistent and means the generator never works out scope.
-- **`GLOBAL` `FUNCTION`s take no input/output parameters**, because every variable is already
-  accessible. Header form: `FUNCTION '<name>' GLOBAL` (as reference L219). **`CALL` takes no
-  arguments:** `CALL '<name>'` (e.g. `CALL 'Mark Exception'`, as reference `CALL 'Get Error'`).
-- No variable ever needs the `GLOBAL.`/`global.` prefix (that prefix only matters when a local
-  `FUNCTION` touches a global-scope variable, §A4), so the generator emits none. This supersedes
-  the per-page `global:` flag in `mapping/page_target_map.yaml`, the earlier idea of deriving
-  `GLOBAL.` qualification, and the reference's `In_`/`Out_` `FUNCTION` parameters (§A4's
-  parameter naming no longer applies to generated `FUNCTION`s).
+- A `FUNCTION`'s PAD scope is a developer's choice with no Blue Prism equivalent. **Every generated
+  `FUNCTION` is emitted as `GLOBAL`**, and the generator never works out scope. No variable gets a
+  `GLOBAL.`/`global.` prefix. The per-page `global:` flag is gone (done in `59fe817`; keep it that
+  way).
+- **Keep the BP page pattern.** A BP page receives its inputs when called and returns its outputs,
+  and the generated `FUNCTION` does the same through PAD `FUNCTION` parameters, which a `GLOBAL`
+  `FUNCTION` can take. This **replaces** the first pass's shared-variable `SET` bindings around
+  bare `CALL`s; remove those.
+  - Header: `FUNCTION '<name>' GLOBAL In_<a>, In_<b>, OUTPUT Out_<c>`. The parameter list form is
+    cited from reference L1226 (`FUNCTION 'Mark Exception' In_obj_WorkQueueItem, OUTPUT
+    Out_obj_WorkQueueItem`) and `GLOBAL` placement from L219 (`FUNCTION 'Get Error' GLOBAL`). The
+    user confirmed on 2026-09-24 that `GLOBAL` combined with parameters is valid PAD. A page with no
+    inputs/outputs stays `FUNCTION '<name>' GLOBAL`.
+  - Call: `CALL '<name>' In_<a>: <expr> Out_<c>=> <caller variable>`, cited from reference L438 and
+    L1483. A call to a page with no inputs/outputs stays bare, `CALL '<name>'`.
 
-**Consequence: BP page-call inputs/outputs move through shared variables.** A BP page call passes
-inputs into the called page's input data items and copies its output data items back into the
-caller's (e.g. the Main page's `Send mail` call passes 6 inputs such as
-`SystemException_Maiil ID=[ConfigFileData.MailToOnSystemException]`). Today the generated bare
-`CALL` silently drops these. With parameterless `FUNCTION`s, the generator must emit, around each
-`CALL`:
-- one `SET <called page's input variable> TO <caller's input expression>` per BP input, before
-  the `CALL`;
-- one `SET <caller's target variable> TO <called page's output variable>` per BP output, after
-  the `CALL`;
-
-using the existing naming (`variable_name_mapping`) and expression translation. Skip a `SET` where
-both sides resolve to the same PAD name. An input with no value in BP (empty expression) gets no
-`SET`. Where a name or expression can't be resolved, emit a `# TODO` naming the BP input/output;
-never drop it silently. This applies to `function`-shaped targets; the `inline_block`/`fold`/
-`split`/`stop` branches keep their current behaviour, except that the same bindings are applied
-for `split` (resolves to a `FUNCTION`).
+**Where the data comes from.** Per `docs/reviews/7b0-2026-09-24.md` gap 3, the BP XML records, via
+a `stage=` attribute, which data item each page Start/End parameter reads or writes, and which
+caller data item each call-stage output feeds. Examples where the parameter name differs from the
+data item: `ScreenShot path`→`File Path`, `Mail Items`→`Items`, `sheetName`→`SheetName`,
+`Parameter_WorkSheet_Name`→`Config_Parameter_WorkSheet_Name`. `parser/process.py` (~L260-343)
+currently drops it. Cite the exact XML shape from `samples/blueprism/PID_0171.bprelease` (quote a
+line range); do not assume it.
 
 **Do:**
-1. Emit `FUNCTION '<name>' GLOBAL` on every generated `FUNCTION` header, with no parameters.
-   Remove the per-page `global:` lookup (`pad.py` `shape_info.get("global")`), the `global:` fields
-   and their header comment in `mapping/page_target_map.yaml`, and every hardcoded
-   `is_global=False`.
-2. Emit bare `CALL '<name>'` everywhere, with no arguments.
-3. Implement the shared-variable input/output binding above.
-4. Ensure no `GLOBAL.`/`global.` variable prefix appears anywhere in generated output.
-5. Report (don't rename) variable names that are now shared and could clobber each other: a name
-   assigned in two `FUNCTION`s where one calls the other (e.g. a reused loop counter), or a
-   binding `SET` that overwrites a variable the caller still needs.
-6. Tests: every `FUNCTION` header in output is `FUNCTION '<name>' GLOBAL` with no parameters;
-   every `CALL` is bare; input `SET`s precede and output `SET`s follow a `CALL` for a synthetic
-   page call with 2 inputs + 1 output (non-PID_171 names); an unresolvable input yields a `# TODO`;
-   no `GLOBAL.` prefix in output; no `global:` key left in `page_target_map.yaml`.
+1. **Parser/AST:** capture the `stage=` attribute on page Start/End parameters and on call-stage
+   inputs/outputs, and carry it through the AST models/builder. Call-stage outputs must be stored
+   separately from inputs; today `params_map` holds inputs only, and the review found an output
+   lookup there could put an input's expression on the wrong side.
+2. **Parameter naming:** a parameter is named from the data item it binds to (its `stage=`
+   target), under the existing naming convention, prefixed `In_`/`Out_` (e.g. data item
+   `File Path` → `In_txt_FilePath`). Use the same name in the header, in the `FUNCTION` body and at
+   every call site.
+3. **`FUNCTION` body:** inside the `FUNCTION`, references to a data item bound to a parameter render
+   as the parameter name (as the reference does, e.g. `In_txt_ErrorMessage` in its bodies). Do
+   **not** emit the initialising `SET` for those data items; this fixes the review's gap-5
+   finding that bodies reset their inputs to `%SomeVar%` on entry. Other data items keep their
+   initialisation. If a data item is both an input and an output, the body uses the `In_` name and
+   `SET Out_<x> TO In_<x>` is emitted before `END FUNCTION`.
+4. **Call sites:** emit `CALL '<name>' In_<a>: <expr> ... Out_<c>=> <caller var>` for
+   `function`- **and** `split`-shaped targets. `split` resolves to its entry `FUNCTION`; the review
+   found `Result Entry`'s 7 inputs + 1 output dropped silently. Rules:
+   - Unpack `_translate_bp_expression`'s `(expr, helper_actions)` result and emit helper actions
+     before the `CALL`, following the Calculation path's pattern (the review found 36 tuple reprs
+     at `pad.py` L1228-1231).
+   - A BP input with no value is omitted from the `CALL`.
+   - An unresolvable name or expression gets a `# TODO` naming the BP input/output and page; never
+     a raw BP name with spaces, never a silent drop.
+   - `inline_block`/`fold`/`stop` keep their current behaviour.
+5. **Cleanup from the first pass:** remove the shared-variable binding `SET`s and
+   `_render_page_call_bindings()`. Remove the leftover `is_global=False` at `pad.py` ~L276 (the
+   legacy `generate_page` path must also emit `GLOBAL`), the dead `is_global` line (~L865), and the
+   `is_global` conditional in `subflow.robin.j2`. Fix the stale `In_txt_DestinationFolder` note at
+   `page_target_map.yaml` L126. BLOCK renders are unaffected.
+6. **Clobber-risk report (report only, don't rename):** use Task 4a's call graph to list variables
+   that are assigned in more than one `FUNCTION` where one calls the other (e.g. `txt_SampleID` at
+   3 sites, `dtb_FinalProductCollection` re-created twice, per the review).
+7. **Tests:**
+   - parser test for `stage=` on Start/End params and call outputs;
+   - builder/model tests that it reaches the AST;
+   - generator tests on a synthetic process with non-PID_171 names, a 2-input/1-output page whose
+     parameter names differ from their `stage=` data items, checking:
+     - the header `FUNCTION 'X' GLOBAL In_..., In_..., OUTPUT Out_...`;
+     - the body uses parameter names and has no input re-initialisation;
+     - the call site `In_...: <expr> Out_...=> <var>` with no tuple repr;
+     - helper actions come before the `CALL`;
+     - a `split` target binds;
+     - an unresolvable input yields a `# TODO`;
+     - no `GLOBAL.` prefix appears.
 
-**Done when:** regenerating `PID_0171.bprelease` shows `FUNCTION '<name>' GLOBAL` (parameterless)
-on every `FUNCTION` in both `.robin` files, bare `CALL`s, BP page-call inputs/outputs bound by
-`SET`s around each `CALL` (e.g. the 6 `Send mail` inputs), no `GLOBAL.` prefix, and no
-scope-decision logic left in `src/`; `uv run pytest tests/generator -q` green and the full suite
-has no new failures beyond the known PID_0127 ones.
+**Done when:** regenerating `PID_0171.bprelease` shows:
+- every `FUNCTION` in both `.robin` files is `GLOBAL`, with a parameter list matching its BP page's
+  Start/End parameters;
+- every call to a parameterised page passes `In_...:`/`Out_...=>` arguments, including `Send mail`'s
+  6 inputs and `Result Entry`'s 7 inputs + 1 output;
+- no `TO ('` tuple reprs, no shared-variable binding `SET`s, no input re-initialisation inside
+  bodies, no `GLOBAL.` prefix, and no `is_global=False` in `src/`;
+- the clobber-risk report is in the implementer's summary;
+- `uv run pytest tests/parser tests/ast tests/generator -q` is green, and the full suite has no new
+  failures beyond the 10 known PID_0127 ones.
 
 **Out of scope:** `Mark Exception`'s consecutive-exception logic (Task 7b); renaming shared
 variables (report only); the flow-level `@INPUT`/`@OUTPUT` contract (Task 7c).
@@ -1250,7 +1282,7 @@ attempt, `2701fc8`, was reverted in `8960ef8`).
 **Decisions (user, 2026-09-24):**
 - **Follow BP behaviour, not the deployed reference's.** Reproducing the reference's
   always-increment (§A8 D6) or its extra machinery is a defect, not fidelity.
-- **Every generated `FUNCTION` is `GLOBAL` (Task 7b0),** so all variables below are referenced by
+- **Every generated `FUNCTION` is `GLOBAL`, with BP page inputs/outputs as parameters (Task 7b0),** so all variables below are referenced by
   bare name: no `GLOBAL.` prefix.
 - **No dedicated exception-mail `FUNCTION`s (option A).** `Send Consecutive Exception Mail` and
   `Send System Exception Mail` are reference-only redesigns (reference L1096, L1026) with no BP page.
@@ -1309,7 +1341,7 @@ neither resets nor increments. With limit 3, a breach needs 4 identical consecut
 from the BP page with reset-to-0/terminal-on-mismatch semantics and a `System Unavailable
 Exception` throw on breach; no `Send Consecutive Exception Mail`/`Send System Exception Mail`
 `FUNCTION` or `CALL`; no dropped stages without a `# TODO`; the sequence and variant-selection tests
-pass; every `CALL` is bare and `Mark Exception` is `GLOBAL` and parameterless (Task 7b0); no hardcoded `Mark Exception` body in
+pass; `Mark Exception` is a `GLOBAL` `FUNCTION` whose parameters and call sites follow Task 7b0; no hardcoded `Mark Exception` body in
 `src/`.
 
 **Out of scope:** making every `FUNCTION` `GLOBAL` (Task 7b0); Task 5c's `BLOCK`/`ON BLOCK ERROR`
