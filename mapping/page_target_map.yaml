@@ -145,22 +145,6 @@ PID_171_US_Process_LIMS_Prelude:
     global: false
     citation: "§B14 row 13"
 
-  # Task 7b: Send mail functions for exception dispatch
-  # These are called from Mark Exception based on exception type
-  # Send Consecutive Exception Mail is called when consecutive exception limit breached
-  Send Consecutive Exception Mail:
-    shape: "function"
-    target_name: "Send Consecutive Exception Mail"
-    global: false
-    citation: "DF_PID_171_US_LIMS_Prelude_Main.robin.txt L1283-1302 (Mark Exception breach path), reference L1300"
-
-  # Send System Exception Mail is called for plain System Exceptions below limit
-  Send System Exception Mail:
-    shape: "function"
-    target_name: "Send System Exception Mail"
-    global: false
-    citation: "DF_PID_171_US_LIMS_Prelude_Main.robin.txt L1303-1319 (Mark Exception non-breach path), reference L1318"
-
   DataGateway:
     shape: "inline_block"
     block_name: "Data gateway block"

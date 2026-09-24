@@ -79,53 +79,6 @@ _COARSE_CATCHALL_ACTIONS: list[str] = [
 # Main Page split point (Get Next Item stage ID, per architecture doc §B11)
 GET_NEXT_ITEM_STAGE_ID = "85fbb578-f410-4f72-8ca9-58513939bc51"
 
-# Task 7b: Main-body variables that require GLOBAL. prefix when accessed from non-GLOBAL functions
-# (architecture doc §A4: a non-GLOBAL FUNCTION must prefix GLOBAL. to read/write variables owned
-# by main body or a GLOBAL FUNCTION)
-MAIN_BODY_VARIABLES: frozenset[str] = frozenset(
-    {
-        # Counters and state (initialized in main body, read/written by functions)
-        "num_consecutiveexccount",  # lowercase for case-insensitive matching
-        "num_consecutiveexclimit",
-        "num_itemsexception",
-        "num_itemscompleted",
-        "num_maxretrylimit",
-        "num_delay_s",
-        "num_delay_m",
-        "num_delay_l",
-        "num_delay_xl",
-        # Exception state
-        "txt_exceptiontype",
-        "txt_exceptionmessage",
-        "txt_exceptiondetail",
-        "txt_previousexceptionmessage",
-        "txt_previousexceptiondetail",
-        # Process state
-        "txt_faileditemslog",
-        "txt_lastscreenshotpath",
-        "txt_processtarttime",
-        "txt_resourcename",
-        "txt_username",
-        "txt_processname",
-        "txt_excelprocessname",
-        "txt_appprocessname",
-        "txt_summaryfilepath",
-        "txt_app_servername",
-        "txt_apppassword",
-        "txt_dbpassword",
-        # Boolean flags
-        "flg_screenshot",
-        "flg_sendexceptionemail",
-        "flg_haltrun",
-        "flg_queueupdatesuccess",
-        # Configuration and data objects
-        "obj_config",
-        "obj_lasterror",
-        # Collections/results
-        "lst_senderemaillist",
-    }
-)
-
 
 class PADGenerator:
     """Generate .robin files for annotated BP processes."""
@@ -197,10 +150,6 @@ class PADGenerator:
         # FUNCTION definitions and CALL sites use consistent resolved names (with
         # suffixes for accidental collisions, not intentional folds).
         self._current_page_name_map: dict[str, str] = {}
-
-        # Task 7b: Track current function context for GLOBAL. qualification
-        # Set to True when rendering inside a GLOBAL function, False for non-GLOBAL functions
-        self._current_function_is_global: bool = False
 
     def generate_process(
         self,
@@ -506,25 +455,6 @@ class PADGenerator:
                 get_error_fn = self._render_get_error_boilerplate()
                 lines.append(get_error_fn)
                 lines.append("")
-
-            # Task 7b: Emit send-mail stub functions for Mark Exception dispatch
-            # These are called from Mark Exception but may not have corresponding BP pages
-            if role == "performer":
-                if (
-                    "CALL 'Send Consecutive Exception Mail'" in full_content
-                    and "FUNCTION 'Send Consecutive Exception Mail'" not in full_content
-                ):
-                    send_consecutive_mail_fn = self._render_send_consecutive_exception_mail_stub()
-                    lines.append(send_consecutive_mail_fn)
-                    lines.append("")
-
-                if (
-                    "CALL 'Send System Exception Mail'" in full_content
-                    and "FUNCTION 'Send System Exception Mail'" not in full_content
-                ):
-                    send_system_mail_fn = self._render_send_system_exception_mail_stub()
-                    lines.append(send_system_mail_fn)
-                    lines.append("")
 
             # Only return if we have content beyond the header
             if len(lines) > 3:  # header + banner lines + empty line
@@ -918,190 +848,26 @@ class PADGenerator:
             # Determine GLOBAL qualifier
             is_global = shape_info.get("global", False)
 
-            # Task 7b: Set function context for GLOBAL. qualification
-            old_is_global = self._current_function_is_global
-            self._current_function_is_global = is_global
+            # Render all stages in the page, applying coarse BLOCK pattern (§A5, §B15)
+            # where the page has Block stages with a persisted recover_stage_id (Task 4b).
+            actions_content = self._render_stage_list_with_coarse_blocks(
+                page.stages, process, process_map, variable_name_mapping
+            )
+            epilogue = self._render_goto_epilogue(actions_content)
+            if epilogue:
+                actions_content = f"{actions_content}\n{epilogue}"
 
-            try:
-                # Task 7b: Special handling for Mark Exception function
-                # This function needs to emit the exception dispatch logic based on GLOBAL.txt_ExceptionType
-                if target_name == "Mark Exception":
-                    actions_content = self._render_mark_exception_function(variable_name_mapping)
-                else:
-                    # Render all stages in the page, applying coarse BLOCK pattern (§A5, §B15)
-                    # where the page has Block stages with a persisted recover_stage_id (Task 4b).
-                    actions_content = self._render_stage_list_with_coarse_blocks(
-                        page.stages, process, process_map, variable_name_mapping
-                    )
-                    epilogue = self._render_goto_epilogue(actions_content)
-                    if epilogue:
-                        actions_content = f"{actions_content}\n{epilogue}"
-
-                # Render the FUNCTION wrapper
-                subflow_template = self.env.get_template("subflow.robin.j2")
-                return subflow_template.render(
-                    subflow_name=target_name,
-                    actions=actions_content,
-                    construct_type="function",
-                    is_global=is_global,
-                )
-            finally:
-                # Restore previous function context
-                self._current_function_is_global = old_is_global
+            # Render the FUNCTION wrapper
+            subflow_template = self.env.get_template("subflow.robin.j2")
+            return subflow_template.render(
+                subflow_name=target_name,
+                actions=actions_content,
+                construct_type="function",
+                is_global=is_global,
+            )
 
         except Exception as e:
             raise GenerationError(f"Failed to render page '{page.name}' as function: {e}") from e
-
-    def _render_mark_exception_function(
-        self,
-        variable_name_mapping: dict[str, str] | None = None,
-    ) -> str:
-        """Task 7b: Generate the Mark Exception function body with exception dispatch logic.
-
-        The Mark Exception function checks GLOBAL.txt_ExceptionType at runtime and dispatches
-        to three paths:
-        1. Business Exception → WorkQueues.UpdateWorkQueueItem with BusinessException status
-        2. System Unavailable Exception → ITException status
-        3. System Exception (plain) →
-           - If consecutive-exception limit breached: ITException + Send Consecutive Exception Mail
-           - Otherwise: GenericException + Send System Exception Mail
-
-        Per architecture doc §A7, the breach check is:
-        GLOBAL.num_ConsecutiveExcCount >= GLOBAL.num_ConsecutiveExcLimit
-
-        Args:
-            variable_name_mapping: Optional dict mapping lowercase BP names to PAD names.
-
-        Returns:
-            Rendered function body with the dispatch logic.
-        """
-        lines: list[str] = []
-
-        # Business Exception path (L1239-L1257 of reference)
-        lines.append("IF GLOBAL.txt_ExceptionType.ToLower = $'''business exception''' THEN")
-        lines.append("    SET flg_QueueUpdateSuccess TO False")
-        lines.append("    LOOP num_QueueUpdateRetryCount FROM 1 TO GLOBAL.num_MaxRetryLimit STEP 1")
-        lines.append("        BLOCK 'Queue update block - BE'")
-        lines.append("ON BLOCK ERROR")
-        lines.append("END")
-        lines.append(
-            "            WorkQueues.UpdateWorkQueueItem.UpdateWithProcessingNotes WorkQueueItem: obj_WorkQueueItem Status: WorkQueues.WorkQueueItemStatus.BusinessException ProcessingResult: GLOBAL.txt_ExceptionMessage"
-        )
-        lines.append("            SET flg_QueueUpdateSuccess TO True")
-        lines.append("            EXIT LOOP")
-        lines.append("        END")
-        lines.append("        WAIT GLOBAL.num_Delay_S * num_QueueUpdateRetryCount")
-        lines.append("    END")
-        lines.append("    IF flg_QueueUpdateSuccess = False THEN")
-        lines.append(
-            "        FlowControl.ThrowCustomError CustomErrorCode: $'''System Unavailable Exception''' CustomErrorMessage: 'Unable to update work queue item status after ' + GLOBAL.num_MaxRetryLimit + ' attempts.'"
-        )
-        lines.append("    END")
-        lines.append(
-            "    CALL 'Send Business Exception Mail' In_txt_To_Email: GLOBAL.obj_Config['Mail_BusinessExceptionTo'] In_txt_Cc_Email: GLOBAL.obj_Config['Mail_BusinessExceptionCc'] In_txt_Subject: $'''%GLOBAL.txt_ProcessName% - Business Error''' In_txt_ErrorMessage: GLOBAL.txt_ExceptionMessage In_lst_Attachments: []"
-        )
-        lines.append("    SET GLOBAL.txt_PreviousExceptionMessage TO $'''%''%'''")
-        lines.append("    SET GLOBAL.num_ConsecutiveExcCount TO 0")
-
-        # System Unavailable Exception path (L1258-L1273 of reference)
-        lines.append(
-            "ELSE IF GLOBAL.txt_ExceptionType.ToLower = $'''system unavailable exception''' THEN"
-        )
-        lines.append("    SET flg_QueueUpdateSuccess TO False")
-        lines.append("    LOOP num_QueueUpdateRetryCount FROM 1 TO GLOBAL.num_MaxRetryLimit STEP 1")
-        lines.append("        BLOCK 'Queue update block - SUE'")
-        lines.append("ON BLOCK ERROR")
-        lines.append("END")
-        lines.append(
-            "            WorkQueues.UpdateWorkQueueItem.UpdateWithProcessingNotes WorkQueueItem: obj_WorkQueueItem Status: WorkQueues.WorkQueueItemStatus.ITException ProcessingResult: GLOBAL.txt_ExceptionMessage"
-        )
-        lines.append("            SET flg_QueueUpdateSuccess TO True")
-        lines.append("            EXIT LOOP")
-        lines.append("        END")
-        lines.append("        WAIT GLOBAL.num_Delay_S * num_QueueUpdateRetryCount")
-        lines.append("    END")
-        lines.append("    IF flg_QueueUpdateSuccess = False THEN")
-        lines.append(
-            "        FlowControl.ThrowCustomError CustomErrorCode: $'''System Unavailable Exception''' CustomErrorMessage: 'Unable to update work queue item status after ' + GLOBAL.num_MaxRetryLimit + ' attempts.'"
-        )
-        lines.append("    END")
-
-        # System Exception path (L1274-L1319 of reference)
-        # This has a sub-dispatch based on breach check
-        lines.append("ELSE")
-        lines.append("    # System Exception path — check consecutive exception limit")
-        lines.append("    # Per §A7: increment counter in both branches (L1276-L1281)")
-        lines.append("    IF GLOBAL.txt_PreviousExceptionMessage = GLOBAL.txt_ExceptionDetail THEN")
-        lines.append(
-            "        SET GLOBAL.num_ConsecutiveExcCount TO GLOBAL.num_ConsecutiveExcCount + 1"
-        )
-        lines.append("    ELSE")
-        lines.append(
-            "        SET GLOBAL.txt_PreviousExceptionMessage TO GLOBAL.txt_ExceptionDetail"
-        )
-        lines.append(
-            "        SET GLOBAL.num_ConsecutiveExcCount TO GLOBAL.num_ConsecutiveExcCount + 1"
-        )
-        lines.append("    END")
-        lines.append(
-            "    # Breach check: per §A7 L1283, breach when num_ConsecutiveExcCount >= num_ConsecutiveExcLimit"
-        )
-        lines.append("    IF GLOBAL.num_ConsecutiveExcCount >= GLOBAL.num_ConsecutiveExcLimit THEN")
-        lines.append("        # Consecutive exception breach — halts the run")
-        lines.append("        SET flg_QueueUpdateSuccess TO False")
-        lines.append(
-            "        LOOP num_QueueUpdateRetryCount FROM 1 TO GLOBAL.num_MaxRetryLimit STEP 1"
-        )
-        lines.append("            BLOCK 'Queue update block - SE breach'")
-        lines.append("ON BLOCK ERROR")
-        lines.append("END")
-        lines.append(
-            "                WorkQueues.UpdateWorkQueueItem.UpdateWithProcessingNotes WorkQueueItem: obj_WorkQueueItem Status: WorkQueues.WorkQueueItemStatus.ITException ProcessingResult: GLOBAL.num_ConsecutiveExcLimit + ' consecutive incidents of ' + GLOBAL.txt_ExceptionType + ': ' + GLOBAL.txt_ExceptionMessage"
-        )
-        lines.append("                SET flg_QueueUpdateSuccess TO True")
-        lines.append("                EXIT LOOP")
-        lines.append("            END")
-        lines.append("            WAIT GLOBAL.num_Delay_S * num_QueueUpdateRetryCount")
-        lines.append("        END")
-        lines.append("        IF flg_QueueUpdateSuccess = False THEN")
-        lines.append(
-            "            FlowControl.ThrowCustomError CustomErrorCode: $'''System Unavailable Exception''' CustomErrorMessage: 'Unable to update work queue item status after ' + GLOBAL.num_MaxRetryLimit + ' attempts.'"
-        )
-        lines.append("        END")
-        lines.append(
-            "        CALL 'Send Consecutive Exception Mail' In_txt_To_Email: GLOBAL.obj_Config['Mail_SystemExceptionTo'] In_txt_Cc_Email: GLOBAL.obj_Config['Mail_SystemExceptionCc'] In_txt_Subject: $'''%GLOBAL.txt_ProcessName% - Consecutive error encountered''' In_txt_ErrorMessage: GLOBAL.txt_ExceptionMessage In_lst_Attachments: []"
-        )
-        lines.append("        SET GLOBAL.flg_SendExceptionEmail TO False")
-        lines.append("        SET GLOBAL.flg_HaltRun TO True")
-        lines.append("    ELSE")
-        lines.append("        # Plain System Exception below limit")
-        lines.append("        SET flg_QueueUpdateSuccess TO False")
-        lines.append(
-            "        LOOP num_QueueUpdateRetryCount FROM 1 TO GLOBAL.num_MaxRetryLimit STEP 1"
-        )
-        lines.append("            BLOCK 'Queue update block - SE'")
-        lines.append("ON BLOCK ERROR")
-        lines.append("END")
-        lines.append(
-            "                WorkQueues.UpdateWorkQueueItem.UpdateWithProcessingNotes WorkQueueItem: obj_WorkQueueItem Status: WorkQueues.WorkQueueItemStatus.GenericException ProcessingResult: GLOBAL.txt_ExceptionMessage"
-        )
-        lines.append("                SET flg_QueueUpdateSuccess TO True")
-        lines.append("                EXIT LOOP")
-        lines.append("            END")
-        lines.append("            WAIT GLOBAL.num_Delay_S * num_QueueUpdateRetryCount")
-        lines.append("        END")
-        lines.append("        IF flg_QueueUpdateSuccess = False THEN")
-        lines.append(
-            "            FlowControl.ThrowCustomError CustomErrorCode: $'''System Unavailable Exception''' CustomErrorMessage: 'Unable to update work queue item status after ' + GLOBAL.num_MaxRetryLimit + ' attempts.'"
-        )
-        lines.append("        END")
-        lines.append(
-            "        CALL 'Send System Exception Mail' In_txt_To_Email: GLOBAL.obj_Config['Mail_SystemExceptionTo'] In_txt_Cc_Email: GLOBAL.obj_Config['Mail_SystemExceptionCc'] In_txt_Subject: $'''%GLOBAL.txt_ProcessName% - System error encountered''' In_txt_ErrorMessage: GLOBAL.txt_ExceptionMessage In_lst_Attachments: []"
-        )
-        lines.append("    END")
-        lines.append("END")
-
-        return "\n".join(lines)
 
     def _render_inline_block(
         self,
@@ -1607,42 +1373,6 @@ class PADGenerator:
 
         return prefix + sanitized_name
 
-    def _needs_global_qualification(self, var_name: str) -> bool:
-        """Check if a variable needs GLOBAL. prefix per architecture doc §A4.
-
-        A non-GLOBAL FUNCTION must prefix GLOBAL. to read/write variables owned by the
-        main body or a GLOBAL FUNCTION. This method returns True if:
-        1. We're currently in a non-GLOBAL function context AND
-        2. The variable is a known main-body variable
-
-        Args:
-            var_name: The variable name (with or without existing prefix).
-
-        Returns:
-            True if the variable needs GLOBAL. prefix, False otherwise.
-        """
-        # Only qualify if we're in a non-GLOBAL function
-        if self._current_function_is_global:
-            return False
-
-        # Check if variable is in the main-body variables set (case-insensitive)
-        var_lower = var_name.lower()
-
-        # Strip any existing GLOBAL. prefix for the check
-        if var_lower.startswith("global."):
-            var_lower = var_lower[7:]
-
-        # Check against main-body variables, handling prefix variations
-        # E.g., "num_ConsecutiveExcCount" matches "num_consecutiveexccount"
-        for main_var in MAIN_BODY_VARIABLES:
-            if var_lower.startswith(main_var):
-                # Match if it's the exact var or followed by a dot (e.g., obj_Config.field)
-                rest = var_lower[len(main_var) :]
-                if not rest or rest[0] == ".":
-                    return True
-
-        return False
-
     def _resolve_dotted_reference(
         self,
         reference: str,
@@ -1754,26 +1484,15 @@ class PADGenerator:
 
         def replace_bracket_ref(match):
             ref = match.group(1).strip()
-            mapped_ref = None
             if variable_name_mapping and "." in ref:
                 # Dotted reference like [Collection.Field]
-                mapped_ref = self._resolve_dotted_reference(ref, variable_name_mapping)
+                return self._resolve_dotted_reference(ref, variable_name_mapping)
             elif variable_name_mapping:
                 # Simple reference like [DataItem]
                 ref_lower = ref.lower()
                 if ref_lower in variable_name_mapping:
-                    mapped_ref = variable_name_mapping[ref_lower]
-
-            if not mapped_ref:
-                mapped_ref = ref
-
-            # Task 7b: Add GLOBAL. qualification if needed
-            if self._needs_global_qualification(mapped_ref) and not mapped_ref.startswith(
-                "global."
-            ):
-                mapped_ref = f"GLOBAL.{mapped_ref}"
-
-            return mapped_ref
+                    return variable_name_mapping[ref_lower]
+            return ref
 
         result = re.sub(bracket_pattern, replace_bracket_ref, result)
 
@@ -1784,21 +1503,10 @@ class PADGenerator:
             base_name = match.group(1)
             field_name = match.group(2)
             base_lower = base_name.lower()
-            mapped_base = None
             if variable_name_mapping and base_lower in variable_name_mapping:
                 mapped_base = variable_name_mapping[base_lower]
-            else:
-                mapped_base = base_name
-
-            full_ref = f"{mapped_base}.{field_name}"
-
-            # Task 7b: Add GLOBAL. qualification if needed
-            if self._needs_global_qualification(mapped_base) and not mapped_base.startswith(
-                "global."
-            ):
-                full_ref = f"GLOBAL.{mapped_base}.{field_name}"
-
-            return full_ref
+                return f"{mapped_base}.{field_name}"
+            return match.group(0)
 
         result = re.sub(bare_dotted_pattern, replace_bare_dotted, result)
 
@@ -2641,58 +2349,6 @@ class PADGenerator:
         )
         return template.render(
             subflow_name="Get Error",
-            actions=stub_body,
-            construct_type="function",
-            is_global=False,
-        )
-
-    def _render_send_consecutive_exception_mail_stub(self) -> str:
-        """Task 7b: Render the 'Send Consecutive Exception Mail' FUNCTION stub.
-
-        Per architecture doc §A7, this function is called from Mark Exception when
-        the consecutive exception limit is breached. It sends an email notification
-        about the breach.
-
-        Called with: In_txt_To_Email, In_txt_Cc_Email, In_txt_Subject,
-        In_txt_ErrorMessage, In_lst_Attachments
-
-        Returns:
-            A FUNCTION 'Send Consecutive Exception Mail' stub (reference L1300).
-        """
-        template = self.env.get_template("subflow.robin.j2")
-        stub_body = (
-            "# TODO: Implement consecutive exception email notification\n"
-            "# Called from Mark Exception when consecutive-exception limit breached\n"
-            "# (reference DF_PID_171_US_LIMS_Prelude_Main.robin.txt L1283-1302)"
-        )
-        return template.render(
-            subflow_name="Send Consecutive Exception Mail",
-            actions=stub_body,
-            construct_type="function",
-            is_global=False,
-        )
-
-    def _render_send_system_exception_mail_stub(self) -> str:
-        """Task 7b: Render the 'Send System Exception Mail' FUNCTION stub.
-
-        Per architecture doc §A7, this function is called from Mark Exception when
-        a plain System Exception occurs (and the consecutive limit has not been breached).
-        It sends an email notification about the exception.
-
-        Called with: In_txt_To_Email, In_txt_Cc_Email, In_txt_Subject,
-        In_txt_ErrorMessage, In_lst_Attachments
-
-        Returns:
-            A FUNCTION 'Send System Exception Mail' stub (reference L1318).
-        """
-        template = self.env.get_template("subflow.robin.j2")
-        stub_body = (
-            "# TODO: Implement system exception email notification\n"
-            "# Called from Mark Exception for plain System Exceptions below limit\n"
-            "# (reference DF_PID_171_US_LIMS_Prelude_Main.robin.txt L1303-1319)"
-        )
-        return template.render(
-            subflow_name="Send System Exception Mail",
             actions=stub_body,
             construct_type="function",
             is_global=False,

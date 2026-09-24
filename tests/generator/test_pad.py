@@ -825,9 +825,6 @@ def test_translate_bp_expression_converts_brackets_to_variables() -> None:
 
     Per Task 5b §B10 point 3, BP expressions use [Data Item] notation that must be
     translated to PAD variable references.
-
-    Task 7b: Note that txt_ExceptionType is a main-body variable and will be GLOBAL-qualified
-    when used in non-GLOBAL function context. This test uses the default context (non-GLOBAL).
     """
     gen = PADGenerator()
     mapping = {"exception type": "txt_ExceptionType", "retry count": "num_RetryCount"}
@@ -835,9 +832,7 @@ def test_translate_bp_expression_converts_brackets_to_variables() -> None:
     expr = "[Exception Type]"
     result, actions = gen._translate_bp_expression(expr, mapping)
 
-    # Task 7b: txt_ExceptionType is a main-body variable, so it gets GLOBAL. qualification
-    # when used in non-GLOBAL function context (which is the default)
-    assert result == "GLOBAL.txt_ExceptionType"
+    assert result == "txt_ExceptionType"
     assert actions == []
 
 
@@ -947,11 +942,8 @@ def test_calculation_stage_renders_real_expression_not_placeholder() -> None:
     The test verifies:
     1. A CALCULATION stage with params_map = {"Exception Type": "[Exception Type]"}
     2. Rendered with variable_name_mapping {"exception type": "txt_ExceptionType"}
-    3. Produces the exact line (per Task 7b: now with GLOBAL. qualification)
+    3. Produces the exact line "SET txt_ExceptionType TO txt_ExceptionType" in output
     4. Does NOT produce a placeholder line like "SET txt_ExceptionType TO %SomeVar%"
-
-    Task 7b: Updated to account for GLOBAL. qualification. txt_ExceptionType is a
-    main-body variable, so it's GLOBAL-qualified when used in a non-GLOBAL function context.
     """
     gen = PADGenerator()
 
@@ -975,11 +967,10 @@ def test_calculation_stage_renders_real_expression_not_placeholder() -> None:
     # Render the stage through the full pipeline with the mapping
     result = gen._render_stage(calc_stage, process, {}, mapping)
 
-    # Task 7b: txt_ExceptionType is a main-body variable, so it's GLOBAL-qualified
-    # when used in a non-GLOBAL function context (the default)
-    assert "SET txt_ExceptionType TO GLOBAL.txt_ExceptionType" in result, (
-        f"Expected 'SET txt_ExceptionType TO GLOBAL.txt_ExceptionType' in rendered output "
-        f"(per Task 7b GLOBAL qualification), but got:\n{result}"
+    # Positive assertion: the exact real translation must appear
+    assert "SET txt_ExceptionType TO txt_ExceptionType" in result, (
+        f"Expected 'SET txt_ExceptionType TO txt_ExceptionType' in rendered output, "
+        f"but got:\n{result}"
     )
 
     # Negative assertion: the placeholder must NOT appear
@@ -2766,16 +2757,7 @@ def test_queue_bindings_are_in_catalogue_yaml() -> None:
 
 
 def test_mark_exception_variant_selection_is_deferred_to_task_7b(tmp_path: Path) -> None:
-    """Task 7b: Mark Exception dispatches on exception type with three variants.
-
-    Verifies that Mark Exception function:
-    1. Checks GLOBAL.txt_ExceptionType to dispatch to one of three paths
-    2. Business Exception → BusinessException status
-    3. System Unavailable Exception → ITException status
-    4. System Exception → checks breach limit, then either:
-       - ITException + Send Consecutive Exception Mail (breach)
-       - GenericException + Send System Exception Mail (non-breach)
-    """
+    """Task 7a must not infer Mark Exception status from Tag or stage names."""
     sample_path = Path("samples/blueprism/PID_0171.bprelease")
     if not sample_path.exists():
         pytest.skip("Sample file not found")
@@ -2792,168 +2774,15 @@ def test_mark_exception_variant_selection_is_deferred_to_task_7b(tmp_path: Path)
     files = gen.generate_process(process, tmp_path / "robin")
     performer_file = next((f for f in files if "Performer" in f.name), None)
     assert performer_file is not None, "No Performer file generated"
-    content = performer_file.read_text(encoding="utf-8")
-    lines = content.splitlines()
+    lines = performer_file.read_text(encoding="utf-8").splitlines()
 
-    # Find the Mark Exception function
-    mark_exc_func_start = None
-    mark_exc_func_end = None
-    for i, line in enumerate(lines):
-        if "FUNCTION 'Mark Exception'" in line:
-            mark_exc_func_start = i
-        if mark_exc_func_start is not None and i > mark_exc_func_start and "END FUNCTION" in line:
-            mark_exc_func_end = i
-            break
-
-    assert mark_exc_func_start is not None, "Mark Exception function should be present"
-    assert mark_exc_func_end is not None, (
-        "Mark Exception function should be closed with END FUNCTION"
-    )
-
-    func_content = "\n".join(lines[mark_exc_func_start : mark_exc_func_end + 1])
-
-    # Verify dispatch on GLOBAL.txt_ExceptionType
-    assert "GLOBAL.txt_ExceptionType" in func_content, (
-        "Mark Exception should check GLOBAL.txt_ExceptionType for dispatch"
-    )
-
-    # Verify three branches: Business, System Unavailable, System Exception
-    assert "business exception" in func_content, "Should have Business Exception branch"
-    assert "system unavailable exception" in func_content, (
-        "Should have System Unavailable Exception branch"
-    )
-
-    # Verify Business Exception variant (default)
-    assert "WorkQueues.WorkQueueItemStatus.BusinessException" in func_content, (
-        "Business Exception path should use BusinessException status"
-    )
-
-    # Verify System Unavailable Exception variant (ITException)
-    assert "WorkQueues.WorkQueueItemStatus.ITException" in func_content, (
-        "System Unavailable Exception path should use ITException status"
-    )
-
-    # Verify System Exception path has breach check
-    assert "GLOBAL.num_ConsecutiveExcCount >= GLOBAL.num_ConsecutiveExcLimit" in func_content, (
-        "System Exception path should check consecutive exception breach limit"
-    )
-
-    # Verify Generic Exception variant for non-breach
-    assert "WorkQueues.WorkQueueItemStatus.GenericException" in func_content, (
-        "Plain System Exception path should use GenericException status"
-    )
-
-    # Verify the two send-mail function calls
-    assert "CALL 'Send Consecutive Exception Mail'" in func_content, (
-        "Should call Send Consecutive Exception Mail on breach"
-    )
-    assert "CALL 'Send System Exception Mail'" in func_content, (
-        "Should call Send System Exception Mail for plain System Exception"
-    )
-
-
-def test_mark_exception_counter_persists_across_calls(tmp_path: Path) -> None:
-    """Task 7b: Consecutive exception counter uses GLOBAL. qualification for persistence.
-
-    The counter (GLOBAL.num_ConsecutiveExcCount) must be GLOBAL-qualified to persist
-    across multiple queue item processing iterations. If it were unqualified, each
-    non-GLOBAL function call would create a local shadow variable, resetting the counter
-    to 0 on every call.
-    """
-    sample_path = Path("samples/blueprism/PID_0171.bprelease")
-    if not sample_path.exists():
-        pytest.skip("Sample file not found")
-
-    from flowsmith.ast.builder import build_ast
-    from flowsmith.engine import create_annotator
-    from flowsmith.parser import parse_process
-
-    raw = parse_process(sample_path)
-    process = build_ast(raw)
-    create_annotator().annotate_process(process)
-
-    gen = PADGenerator()
-    files = gen.generate_process(process, tmp_path / "robin")
-    performer_file = next((f for f in files if "Performer" in f.name), None)
-    assert performer_file is not None
-    content = performer_file.read_text(encoding="utf-8")
-
-    # Verify that the counter is GLOBAL-qualified in Mark Exception function
-    # (so it persists across multiple calls, one per queue item)
-    assert "GLOBAL.num_ConsecutiveExcCount" in content, (
-        "Counter must be GLOBAL-qualified to persist across queue item iterations"
-    )
-
-    # Specifically in Mark Exception, verify both increment and breach check use GLOBAL.
-    lines = content.splitlines()
-    mark_exc_start = None
-    for i, line in enumerate(lines):
-        if "FUNCTION 'Mark Exception'" in line:
-            mark_exc_start = i
-            break
-
-    assert mark_exc_start is not None, "Mark Exception function not found"
-
-    func_lines = lines[mark_exc_start : mark_exc_start + 100]  # Look ahead 100 lines
-    func_text = "\n".join(func_lines)
-
-    # Count occurrences of counter access in the function
-    increment_lines = [
-        line
-        for line in func_text.split("\n")
-        if "num_ConsecutiveExcCount TO GLOBAL.num_ConsecutiveExcCount + 1" in line
+    mark_exception_indexes = [
+        index for index, line in enumerate(lines) if "WorkQueueItemStatus.BusinessException" in line
     ]
-    assert len(increment_lines) > 0, (
-        "Counter increment should use GLOBAL.num_ConsecutiveExcCount to persist"
-    )
-
-    breach_check_lines = [
-        line
-        for line in func_text.split("\n")
-        if "GLOBAL.num_ConsecutiveExcCount >= GLOBAL.num_ConsecutiveExcLimit" in line
-    ]
-    assert len(breach_check_lines) > 0, "Breach check should use GLOBAL-qualified counter"
-
-
-def test_global_qualification_in_functions(tmp_path: Path) -> None:
-    """Task 7b: Main-body variables are GLOBAL-qualified when used in non-GLOBAL functions.
-
-    Per architecture doc §A4, variables defined in the main body must be prefixed with
-    GLOBAL. when accessed from non-GLOBAL FUNCTIONs to ensure they reference the shared
-    main-body state, not local shadows.
-    """
-    sample_path = Path("samples/blueprism/PID_0171.bprelease")
-    if not sample_path.exists():
-        pytest.skip("Sample file not found")
-
-    from flowsmith.ast.builder import build_ast
-    from flowsmith.engine import create_annotator
-    from flowsmith.parser import parse_process
-
-    raw = parse_process(sample_path)
-    process = build_ast(raw)
-    create_annotator().annotate_process(process)
-
-    gen = PADGenerator()
-    files = gen.generate_process(process, tmp_path / "robin")
-    performer_file = next((f for f in files if "Performer" in f.name), None)
-    assert performer_file is not None
-    content = performer_file.read_text(encoding="utf-8")
-
-    # Main-body variables that should be GLOBAL-qualified in functions:
-    main_body_vars = [
-        "GLOBAL.num_MaxRetryLimit",
-        "GLOBAL.num_Delay_S",
-        "GLOBAL.txt_ExceptionType",
-        "GLOBAL.txt_ExceptionMessage",
-        "GLOBAL.obj_Config",
-        "GLOBAL.flg_HaltRun",
-        "GLOBAL.flg_SendExceptionEmail",
-    ]
-
-    # Verify each is present (at least in the Mark Exception function)
-    for var in main_body_vars:
-        assert var in content, f"{var} should be GLOBAL-qualified when used in non-GLOBAL functions"
+    assert mark_exception_indexes, "PID_0171 should render its documented default exception action"
+    for index in mark_exception_indexes:
+        preceding = lines[max(0, index - 2) : index]
+        assert any("status variant deferred to Task 7b" in line for line in preceding)
 
 
 def test_unmatched_queue_expression_emits_todo_marker(tmp_path: Path) -> None:
