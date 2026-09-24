@@ -1284,6 +1284,18 @@ line range); do not assume it.
    - never re-initialise a data item that is a flow `@INPUT` or one of the body's own
      `In_`/`Out_` parameters;
    - deduplicate identical initialisation lines within one body.
+   **Clarifications (user decisions, 2026-09-24, from `docs/reviews/7b0-2026-09-24-fixpass4.md`):**
+   - "Declared by both" is checked against **every** data item the host BP page declares, not only
+     the subset/slice the current role or sub-`FUNCTION` renders. Such a shared name is initialised
+     once at the host body's top (if the host body renders it at all) and **never** inside the
+     inlined copy. When the host's own declaration isn't rendered in this body (e.g. it's on the
+     other role's side), the inlined copy still doesn't re-initialise it.
+   - An inlined page's own **Start-stage input** data items are never re-initialised in the
+     inlined copy: BP applies the caller's input over the initial value.
+   - Where "declared by both" suppresses a per-copy reset the inlined page relied on (e.g.
+     `Retry Count` in both `Result Entry` and `Sample Manager - Explorer` → one PAD
+     `num_RetryCount`), emit a `# TODO` at the start of that inlined copy naming the variable and
+     that its per-run reset was suppressed because of a cross-page name collision (see Task 7b1).
 9. **Split sub-`FUNCTION` input TODO** (user decision, 2026-09-24): where a non-entry split
    sub-`FUNCTION` would otherwise reference or re-initialise a data item that is one of the entry
    `FUNCTION`'s `In_` parameters, emit a `# TODO` naming the parameter(s) and that the split call
@@ -1315,6 +1327,51 @@ line range); do not assume it.
 
 **Out of scope:** `Mark Exception`'s consecutive-exception logic (Task 7b); renaming shared
 variables (report only); the flow-level `@INPUT`/`@OUTPUT` contract (Task 7c).
+
+---
+
+## Task 7b1 — `generator/pad.py`: disambiguate cross-page data-item name collisions
+
+**Depends on:** Task 7b0
+**Files in scope:** `src/flowsmith/generator/pad.py` (variable naming / `variable_name_mapping`
+construction only), `tests/generator/test_pad.py`
+**Required reading:** `docs/bp-to-pad-architecture-PID171.md` §A4 (naming convention);
+`docs/reviews/7b0-2026-09-24-fixpass4.md` (gap 2 and the decisions it prompted); the Task 7b0
+section's item 8 clarifications.
+
+**Why:** in BP every page has its own data-item namespace. After Task 7b0 every generated
+`FUNCTION` is `GLOBAL`, and inlined (`inline_block`/`fold`) pages share their host's body, so two
+BP data items with the same name on different pages collapse into one PAD variable. Example:
+`Retry Count` is declared on both `Result Entry` and `Sample Manager - Explorer` and becomes one
+`num_RetryCount`. As a stop-gap, Task 7b0 initialises such a name once at the host top and
+`# TODO`-flags the lost per-copy reset. This task removes the collision.
+
+**Do:**
+1. Detect collisions from the AST, not from a name list: a data item name declared on more than
+   one BP page whose generated code ends up in the same flow namespace (always, under all-`GLOBAL`),
+   where the pages' declarations differ in role (e.g. one page is inlined into the other, or both
+   independently initialise it).
+   Exclude:
+   - names that are deliberately shared: a caller's argument bound to the callee's `In_`/`Out_`
+     parameter;
+   - identical declarations that BP itself uses as a single shared value. **Stop and report** if
+     you can't decide which case applies; don't guess.
+2. Give the colliding inlined/secondary page's item a deterministic, page-qualified PAD name, e.g.
+   a suffix derived from the page name under the §A4 convention. Report the exact scheme, justify
+   it against §A4, and apply it consistently in initialisation, body references and TODOs.
+3. With the collision removed, restore the inlined copy's own per-run reset (Task 7b0 item 8,
+   option A) and drop the corresponding 7b0 collision `# TODO`.
+4. Tests on a synthetic process (non-PID_171 names): two pages declaring the same data item, one
+   inlined into the other; after renaming, the host's counter isn't reset by the inlined copy and
+   the inlined copy resets its own. Mutation-check each test.
+
+**Done when:** regenerating `PID_0171.bprelease` shows `Result Entry`'s and
+`Sample Manager - Explorer`'s `Retry Count` as two distinct PAD variables, each inlined copy of
+`Sample Manager - Explorer` resetting its own, and no 7b0 collision `# TODO` left for resolved
+cases. Any remaining collisions are reported with a `# TODO`. No hardcoded names in `src/`. Tests
+green, and no new full-suite failures beyond the 10 known PID_0127 ones.
+
+**Out of scope:** renaming variables for style; the flow-level `@INPUT` contract (Task 7c).
 
 ---
 
