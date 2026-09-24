@@ -4,7 +4,7 @@ BLOCK '{{ subflow_name }}'
 {{ actions }}
 END
 {%- else -%}
-FUNCTION '{{ subflow_name }}'{% if is_global | default(true) %} GLOBAL{% endif %}
+FUNCTION '{{ subflow_name }}'{% if is_global | default(true) %} GLOBAL{% endif %}{% if parameters | default("") %} {{ parameters }}{% endif %}
 
 {{ actions }}
 END FUNCTION

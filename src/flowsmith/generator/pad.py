@@ -273,7 +273,7 @@ class PADGenerator:
                 subflow_name=self._sanitise_filename(page.name),
                 actions=actions_content,
                 construct_type="function",
-                is_global=False,
+                is_global=True,  # Task 7b0: every FUNCTION is GLOBAL
             )
             lines.append(subflow)
 
@@ -731,23 +731,12 @@ class PADGenerator:
             else:
                 target_name = shape_info.get("target_name", target_page.name)
 
-            # Task 7b0: generate page-call input/output bindings
-            input_bindings, output_bindings = self._render_page_call_bindings(
+            # Task 7b0: generate CALL with arguments instead of shared-variable bindings
+            call_with_args = self._render_page_call_with_arguments(
                 stage, target_page, target_name, variable_name_mapping
             )
 
-            # Assemble: input SETs, CALL, output SETs
-            call_template = self.env.get_template("actions/call_subflow.robin.j2")
-            call_stmt = call_template.render(subflow_name=target_name)
-
-            result_parts: list[str] = []
-            if input_bindings:
-                result_parts.append(input_bindings)
-            result_parts.append(call_stmt.rstrip())
-            if output_bindings:
-                result_parts.append(output_bindings)
-
-            return "\n".join(result_parts)
+            return call_with_args
 
         elif shape == "inline_block":
             # Inline BLOCK content into container
@@ -815,13 +804,15 @@ class PADGenerator:
             entry_point = targets[0] if targets else target_page.name
             citation = shape_info.get("citation", "§B14")
 
-            call_template = self.env.get_template("actions/call_subflow.robin.j2")
-            call = call_template.render(subflow_name=entry_point)
+            # Task 7b0: generate CALL with arguments
+            call_with_args = self._render_page_call_with_arguments(
+                stage, target_page, entry_point, variable_name_mapping
+            )
             comment = f"# {citation} — split: routed to entry point '{entry_point}'"
             comment += (
                 "\n# TODO: split routing to real per-function call chain still needs verification"
             )
-            return f"{comment}\n{call}"
+            return f"{comment}\n{call_with_args}"
 
         elif shape == "stop":
             # Orphan/unreachable page — emit a comment instead of a CALL
@@ -831,6 +822,216 @@ class PADGenerator:
 
         else:
             return f"# TODO: Unknown shape '{shape}' for target page '{target_page.name}'"
+
+    def _extract_function_parameters(
+        self,
+        page: Any,
+    ) -> str:
+        """Extract and format parameter list for a FUNCTION header (Task 7b0).
+
+        Examines START and END stages to extract input/output parameters,
+        maps them to PAD variable names, and formats as:
+        In_txt_FileName, In_num_Count, OUTPUT Out_txt_Result
+
+        Per architecture doc §A4, parameter names are prefixed with In_/Out_
+        and include the type prefix (txt_, num_, etc.) based on the data item's type.
+
+        Args:
+            page: The BPPage.
+
+        Returns:
+            Parameter list string, e.g., "In_txt_FileName, OUTPUT Out_txt_Result",
+            or empty string if no parameters.
+        """
+        input_params: list[str] = []
+        output_params: list[str] = []
+
+        # Find START and END stages
+        start_stage = None
+        end_stage = None
+        for stage in page.stages:
+            if stage.stage_type == StageType.START:
+                start_stage = stage
+            elif stage.stage_type == StageType.END:
+                end_stage = stage
+
+        # Extract inputs from START stage
+        if start_stage and start_stage.data_items:
+            for data_item in start_stage.data_items:
+                if data_item.is_input:
+                    # Get the data item name this parameter binds to (from stage= attribute)
+                    data_item_name = start_stage.inputs_stage_map.get(
+                        data_item.name, data_item.name
+                    )
+
+                    # Generate PAD variable name with type prefix
+                    pad_var_name = self._apply_type_prefix(data_item_name, data_item.data_type)
+
+                    # Add In_ prefix per §A4
+                    param_name = f"In_{pad_var_name}"
+                    input_params.append(param_name)
+
+        # Extract outputs from END stage
+        if end_stage and end_stage.data_items:
+            for data_item in end_stage.data_items:
+                if data_item.is_output:
+                    # Get the data item name this parameter binds to (from stage= attribute)
+                    data_item_name = end_stage.outputs_stage_map.get(data_item.name, data_item.name)
+
+                    # Generate PAD variable name with type prefix
+                    pad_var_name = self._apply_type_prefix(data_item_name, data_item.data_type)
+
+                    # Add Out_ prefix per §A4
+                    param_name = f"Out_{pad_var_name}"
+                    output_params.append(param_name)
+
+        # Format parameter list: In_x, In_y, OUTPUT Out_z, Out_w (comma-separated per reference L1226)
+        # The "OUTPUT" keyword separates inputs from outputs, with commas between all elements
+        if input_params and output_params:
+            # Both inputs and outputs: "In_a, In_b, OUTPUT Out_c, Out_d"
+            return ", ".join(input_params) + ", OUTPUT " + ", ".join(output_params)
+        elif input_params:
+            # Only inputs: "In_a, In_b"
+            return ", ".join(input_params)
+        elif output_params:
+            # Only outputs: "OUTPUT Out_a, Out_b"
+            return "OUTPUT " + ", ".join(output_params)
+        else:
+            # No parameters
+            return ""
+
+    def _render_page_call_with_arguments(
+        self,
+        call_stage: BPStage,
+        target_page: Any,
+        target_name: str,
+        variable_name_mapping: dict[str, str] | None = None,
+    ) -> str:
+        """Render a CALL statement with arguments (Task 7b0).
+
+        Generates `CALL '<name>' In_a: <expr> Out_c=> <var>` format, including
+        helper actions from expression translation before the CALL.
+
+        Per Task 7b0:
+        - Inputs are passed as `In_<data_item>: <caller_expr>`
+        - Outputs are captured as `Out_<data_item>=> <caller_var>`
+        - Helper actions (Trim, Lower, etc.) are emitted before the CALL
+
+        Args:
+            call_stage: The calling ACTION stage (is_subsheet_call or is_process_call).
+            target_page: The target BPPage.
+            target_name: The resolved PAD name of the target FUNCTION.
+            variable_name_mapping: Optional mapping for translating data item names.
+
+        Returns:
+            Rendered CALL statement with arguments and any helper actions, or
+            empty string with TODO comments for unresolvable bindings.
+
+        Raises:
+            GenerationError: If CALL rendering fails.
+        """
+        if not target_page or not target_page.stages:
+            return ""
+
+        # Find START and END stages in target page
+        start_stage = None
+        end_stage = None
+        for stage in target_page.stages:
+            if stage.stage_type == StageType.START:
+                start_stage = stage
+            elif stage.stage_type == StageType.END:
+                end_stage = stage
+
+        helper_actions: list[str] = []
+        input_args: list[str] = []
+        output_args: list[str] = []
+
+        # Process input bindings from START stage
+        if start_stage and start_stage.data_items:
+            for data_item in start_stage.data_items:
+                if data_item.is_input:
+                    # Get the data item this parameter binds to (from stage= attribute)
+                    data_item_name = start_stage.inputs_stage_map.get(
+                        data_item.name, data_item.name
+                    )
+
+                    # Generate the parameter name (In_ prefix)
+                    pad_var_name = self._apply_type_prefix(data_item_name, data_item.data_type)
+                    param_name = f"In_{pad_var_name}"
+
+                    # Get the caller's expression from call_stage params_map
+                    caller_expr = None
+                    if call_stage.params_map and data_item.name in call_stage.params_map:
+                        caller_expr = call_stage.params_map[data_item.name]
+
+                    if caller_expr:
+                        # Translate the expression and unpack helper actions
+                        translated_expr, actions = self._translate_bp_expression(
+                            caller_expr, variable_name_mapping or {}
+                        )
+                        if actions:
+                            helper_actions.extend(actions)
+
+                        # Format as In_param: <expr>
+                        input_args.append(f"{param_name}: {translated_expr}")
+                    elif caller_expr == "":
+                        # Empty expression — skip this input (per task)
+                        pass
+                    else:
+                        # Unresolvable input — emit TODO
+                        input_args.append(
+                            f"# TODO: unresolvable input '{data_item.name}' → {param_name}"
+                        )
+
+        # Process output bindings from END stage
+        if end_stage and end_stage.data_items:
+            for data_item in end_stage.data_items:
+                if data_item.is_output:
+                    # Get the data item this parameter binds to (from stage= attribute)
+                    data_item_name = end_stage.outputs_stage_map.get(data_item.name, data_item.name)
+
+                    # Generate the parameter name (Out_ prefix)
+                    pad_var_name = self._apply_type_prefix(data_item_name, data_item.data_type)
+                    param_name = f"Out_{pad_var_name}"
+
+                    # Try to get the caller's target variable from call_stage params_map
+                    # Look for the output parameter name in the call stage's outputs_stage_map
+                    caller_var = None
+                    if (
+                        call_stage.outputs_stage_map
+                        and data_item.name in call_stage.outputs_stage_map
+                    ):
+                        caller_var = call_stage.outputs_stage_map[data_item.name]
+                    elif call_stage.params_map and data_item.name in call_stage.params_map:
+                        # Fallback: legacy approach (might not work correctly)
+                        caller_var = call_stage.params_map[data_item.name]
+
+                    if caller_var:
+                        # Translate the caller's variable name if needed
+                        if variable_name_mapping and caller_var.lower() in variable_name_mapping:
+                            caller_var = variable_name_mapping[caller_var.lower()]
+
+                        # Format as Out_param=> <var>
+                        output_args.append(f"{param_name}=> {caller_var}")
+                    else:
+                        # Unresolvable output — emit TODO
+                        output_args.append(
+                            f"# TODO: unresolvable output '{data_item.name}' → {param_name}"
+                        )
+
+        # Build the CALL statement
+        all_args = input_args + output_args
+        args_str = " ".join(all_args) if all_args else ""
+
+        call_stmt = f"CALL '{target_name}' {args_str}" if args_str else f"CALL '{target_name}'"
+
+        # Combine helper actions and CALL
+        result_parts: list[str] = []
+        if helper_actions:
+            result_parts.extend(helper_actions)
+        result_parts.append(call_stmt)
+
+        return "\n".join(result_parts)
 
     def _render_page_as_function(
         self,
@@ -864,6 +1065,9 @@ class PADGenerator:
             # Per Task 7b0: every FUNCTION is GLOBAL. No scope decision in generator.
             is_global = True
 
+            # Extract parameter list for FUNCTION header (Task 7b0)
+            parameters = self._extract_function_parameters(page)
+
             # Render all stages in the page, applying coarse BLOCK pattern (§A5, §B15)
             # where the page has Block stages with a persisted recover_stage_id (Task 4b).
             actions_content = self._render_stage_list_with_coarse_blocks(
@@ -880,6 +1084,7 @@ class PADGenerator:
                 actions=actions_content,
                 construct_type="function",
                 is_global=is_global,
+                parameters=parameters,  # Task 7b0
             )
 
         except Exception as e:
@@ -1041,12 +1246,15 @@ class PADGenerator:
 
             # Render the FUNCTION wrapper
             # Per Task 7b0: every FUNCTION is GLOBAL.
+            # Extract parameters for FUNCTION header (Task 7b0)
+            parameters = self._extract_function_parameters(page)
             subflow_template = self.env.get_template("subflow.robin.j2")
             function = subflow_template.render(
                 subflow_name=target_name,
                 actions=actions_content,
                 construct_type="function",
                 is_global=True,
+                parameters=parameters,  # Task 7b0
             )
             function_blocks.append(function)
 
@@ -1170,105 +1378,6 @@ class PADGenerator:
         # design question (docs/reviews/) regarding whether to upgrade this to a real flag.
         # TODO: no page_target_map.yaml entry for '{page_name}' — treating as default FUNCTION
         return {"shape": "function", "unmapped_fallback": True, "fallback_page_name": page_name}
-
-    def _render_page_call_bindings(
-        self,
-        call_stage: BPStage,
-        target_page: Any,
-        target_name: str,
-        variable_name_mapping: dict[str, str] | None = None,
-    ) -> tuple[str, str]:
-        """Render input/output variable bindings for a page call (Task 7b0).
-
-        Generates SET statements before and after a CALL to bind inputs/outputs
-        through shared variables (since all FUNCTIONs are GLOBAL with no parameters).
-
-        Args:
-            call_stage: The calling ACTION stage (is_subsheet_call or is_process_call).
-            target_page: The target BPPage.
-            target_name: The resolved PAD name of the target FUNCTION.
-            variable_name_mapping: Optional mapping for translating data item names.
-
-        Returns:
-            Tuple of (input_bindings, output_bindings) where each is a newline-joined
-            string of SET statements, or empty string if none needed. Unresolvable
-            inputs/outputs generate # TODO comments instead of silent omission.
-        """
-        if not target_page or not target_page.stages:
-            return "", ""
-
-        # Find START and END stages
-        start_stage = None
-        end_stage = None
-        for stage in target_page.stages:
-            if stage.stage_type == StageType.START:
-                start_stage = stage
-            elif stage.stage_type == StageType.END:
-                end_stage = stage
-
-        input_lines: list[str] = []
-        output_lines: list[str] = []
-
-        if start_stage and start_stage.data_items:
-            # Generate input bindings: SET <target_input> TO <caller_input_expr>
-            for data_item in start_stage.data_items:
-                if data_item.is_input:
-                    # Translate the target page's input variable name
-                    target_input_name = data_item.name
-                    if variable_name_mapping and data_item.name.lower() in variable_name_mapping:
-                        target_input_name = variable_name_mapping[data_item.name.lower()]
-
-                    # Try to get the caller's input expression from call_stage params_map
-                    caller_expr = None
-                    if call_stage.params_map and data_item.name in call_stage.params_map:
-                        caller_expr = call_stage.params_map[data_item.name]
-
-                    if caller_expr:
-                        # Generate SET statement
-                        translated_expr = self._translate_bp_expression(
-                            caller_expr, variable_name_mapping or {}
-                        )
-                        input_lines.append(f"SET {target_input_name} TO {translated_expr}")
-                    elif caller_expr == "":
-                        # Empty expression means skip the SET
-                        pass
-                    else:
-                        # Unresolvable input — emit TODO
-                        input_lines.append(
-                            f"# TODO: page-call input '{data_item.name}' for '{target_name}' "
-                            f"— no expression in call stage params_map"
-                        )
-
-        if end_stage and end_stage.data_items:
-            # Generate output bindings: SET <caller_target> TO <target_output>
-            for data_item in end_stage.data_items:
-                if data_item.is_output:
-                    # Translate the target page's output variable name
-                    target_output_name = data_item.name
-                    if variable_name_mapping and data_item.name.lower() in variable_name_mapping:
-                        target_output_name = variable_name_mapping[data_item.name.lower()]
-
-                    # Try to get the caller's target variable from call_stage params_map
-                    # (by convention, output mappings use the same key name)
-                    caller_target = None
-                    if call_stage.params_map and data_item.name in call_stage.params_map:
-                        caller_target = call_stage.params_map[data_item.name]
-
-                    if caller_target:
-                        # Translate the caller's target variable name
-                        translated_target = caller_target
-                        if variable_name_mapping and caller_target.lower() in variable_name_mapping:
-                            translated_target = variable_name_mapping[caller_target.lower()]
-
-                        output_lines.append(f"SET {translated_target} TO {target_output_name}")
-                    else:
-                        # Unresolvable output — emit TODO
-                        output_lines.append(
-                            f"# TODO: page-call output '{data_item.name}' for '{target_name}' "
-                            f"— no target variable in call stage params_map"
-                        )
-
-        return "\n".join(input_lines), "\n".join(output_lines)
 
     @staticmethod
     def _compute_boundaries_from_counts(stage_counts: list[int]) -> list[tuple[int, int]]:

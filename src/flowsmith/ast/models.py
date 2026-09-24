@@ -249,6 +249,22 @@ class BPStage(BaseModel):
         default_factory=dict,
         description="Stage-level BP parameter name -> PA parameter name mapping.",
     )
+    inputs_stage_map: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "For START stages and ACTION (call) stages: parameter name -> data item name "
+            "(from stage= attribute in BP XML). Maps each input parameter to the data item "
+            "it reads from. Task 7b0."
+        ),
+    )
+    outputs_stage_map: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "For END stages and ACTION (call) stages: parameter name -> data item name "
+            "(from stage= attribute in BP XML). Maps each output parameter to the data item "
+            "it writes to. Task 7b0."
+        ),
+    )
     decision_expression: str | None = Field(
         default=None,
         description=(

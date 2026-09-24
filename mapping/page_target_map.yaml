@@ -123,7 +123,7 @@ PID_171_US_Process_LIMS_Prelude:
     shape: "function"
     target_name: "Move Emails"
     citation: "§B14 row 11"
-    notes: "Shares Move Emails FUNCTION with row 10 (parameterized by In_txt_DestinationFolder)"
+    notes: "Shares Move Emails FUNCTION with row 10"
 
   Mark Item As Completed:
     shape: "function"

@@ -64,6 +64,8 @@ class RawStage(TypedDict):
     exception_handler_id: str | None
     exception_type: str | None
     params_map: dict[str, str]
+    inputs_stage_map: dict[str, str]  # Task 7b0: parameter_name -> stage (data item)
+    outputs_stage_map: dict[str, str]  # Task 7b0: parameter_name -> stage (data item)
     decision_expression: str | None
     code_text: str | None
     narrative: str | None
@@ -142,6 +144,8 @@ def _extract_common_stage_fields(raw: RawStage) -> dict[str, object]:
         "exception_handler_id": raw.get("exception_handler_id"),
         "exception_type": raw.get("exception_type"),
         "params_map": raw.get("params_map") or {},
+        "inputs_stage_map": raw.get("inputs_stage_map") or {},  # Task 7b0
+        "outputs_stage_map": raw.get("outputs_stage_map") or {},  # Task 7b0
         "decision_expression": raw.get("decision_expression"),
         "code_text": raw.get("code_text"),
         "narrative": raw.get("narrative"),

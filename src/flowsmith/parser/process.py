@@ -259,6 +259,7 @@ def _parse_stage(stage_elem: Any) -> RawStage:
 
         # Parse params_map and extract inputs into data_items (namespace-aware)
         params_map: dict[str, str] = {}
+        inputs_stage_map: dict[str, str] = {}  # Task 7b0: parameter_name -> stage (data item)
         input_friendlynames: dict[str, str] = {}
         inputs_elem = stage_elem.find(_ns("inputs"))
         if inputs_elem is None:
@@ -268,8 +269,11 @@ def _parse_stage(stage_elem: Any) -> RawStage:
                 input_name = input_elem.get("name", "").strip()
                 input_expr = input_elem.get("expr", "").strip()
                 input_type = input_elem.get("type", "text").strip()
+                input_stage = input_elem.get("stage", "").strip()  # Task 7b0
                 if input_name:
                     params_map[input_name] = input_expr
+                    if input_stage:
+                        inputs_stage_map[input_name] = input_stage
                     friendlyname = input_elem.get("friendlyname", "").strip()
                     if friendlyname:
                         input_friendlynames[input_name] = friendlyname
@@ -289,8 +293,11 @@ def _parse_stage(stage_elem: Any) -> RawStage:
                     input_name = input_elem.get("name", "").strip()
                     input_expr = input_elem.get("expr", "").strip()
                     input_type = input_elem.get("type", "text").strip()
+                    input_stage = input_elem.get("stage", "").strip()  # Task 7b0
                     if input_name:
                         params_map[input_name] = input_expr
+                        if input_stage:
+                            inputs_stage_map[input_name] = input_stage
                         friendlyname = input_elem.get("friendlyname", "").strip()
                         if friendlyname:
                             input_friendlynames[input_name] = friendlyname
@@ -306,6 +313,7 @@ def _parse_stage(stage_elem: Any) -> RawStage:
                         )
 
         # Parse outputs for ACTION stages (namespace-aware) — Task 1a
+        outputs_stage_map: dict[str, str] = {}  # Task 7b0: parameter_name -> stage (data item)
         outputs_elem = stage_elem.find(_ns("outputs"))
         if outputs_elem is None:
             outputs_elem = stage_elem.find("outputs")
@@ -316,7 +324,10 @@ def _parse_stage(stage_elem: Any) -> RawStage:
                 for output_elem in ns_outputs:
                     output_name = output_elem.get("name", "").strip()
                     output_type = output_elem.get("type", "text").strip()
+                    output_stage = output_elem.get("stage", "").strip()  # Task 7b0
                     if output_name:
+                        if output_stage:
+                            outputs_stage_map[output_name] = output_stage
                         # Add to data_items with is_output=True for fusion detection
                         data_items.append(
                             RawDataItem(
@@ -332,7 +343,10 @@ def _parse_stage(stage_elem: Any) -> RawStage:
                 for output_elem in outputs_elem.findall("output"):
                     output_name = output_elem.get("name", "").strip()
                     output_type = output_elem.get("type", "text").strip()
+                    output_stage = output_elem.get("stage", "").strip()  # Task 7b0
                     if output_name:
+                        if output_stage:
+                            outputs_stage_map[output_name] = output_stage
                         data_items.append(
                             RawDataItem(
                                 name=output_name,
@@ -428,6 +442,8 @@ def _parse_stage(stage_elem: Any) -> RawStage:
             exception_handler_id=exception_handler_id,
             exception_type=exception_type,
             params_map=params_map,
+            inputs_stage_map=inputs_stage_map,  # Task 7b0
+            outputs_stage_map=outputs_stage_map,  # Task 7b0
             decision_expression=decision_expression,
             code_text=code_text,
             narrative=narrative,
