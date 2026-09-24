@@ -1166,42 +1166,123 @@ generated calls' output variables will need (Task 7b).
 
 ---
 
-## Task 7b — `generator/pad.py`: `GLOBAL.` qualification + consecutive-exception dispatch completion
+## Task 7b0 — parser/AST/generator: derive `GLOBAL.` qualification from BP data-item visibility
 
 **Depends on:** Task 6b
-**Files in scope:** `src/flowsmith/generator/pad.py`, `mapping/page_target_map.yaml`,
-`tests/generator/test_pad.py`
+**Files in scope:** `src/flowsmith/parser/process.py`, `src/flowsmith/ast/models.py`,
+`src/flowsmith/ast/builder.py`, `src/flowsmith/generator/pad.py` (variable-reference rendering /
+expression translation only), `tests/parser/test_process.py`, `tests/ast/test_models.py`,
+`tests/ast/test_builder.py`, `tests/generator/test_pad.py`
 **Required reading:** `docs/bp-to-pad-architecture-PID171.md` §A4 (the `GLOBAL.` qualification
-rule — named as "the root cause of the historical `Variables.IncreaseVariable`-on-`GLOBAL.var` bug"
-when omitted), §A7/§A8-D4 (the consecutive-exception BE/SUE/SE dispatch pattern, with real line
-citations for `Send Consecutive Exception Mail`/`Send System Exception Mail`).
+rule: a non-`GLOBAL` `FUNCTION` must prefix `GLOBAL.` to read *or write* a variable owned by the
+main body or a `GLOBAL FUNCTION`; omitting it silently creates a local shadow), §A3 (which
+reference `FUNCTION`s are `GLOBAL`); `docs/reviews/7b-2026-09-24.md` (why the first 7b attempt was
+reverted: hardcoded PID_171 variable list, read-only qualification, `GLOBAL.GLOBAL.x`).
 
-**Why these two are one task:** per `docs/reviews/7-2026-09-01.md`, they're causally linked, not
-two separate defects — `num_ConsecutiveExceptionCount`/`Limit` exist by name inside `Mark Exception`
-but are never `GLOBAL.`-qualified, so the counter resets to 0 on every per-item call instead of
-persisting across queue items, which is the entire point of "consecutive." Fixing the qualification
-without also completing the dispatch (or vice versa) leaves the pattern still non-functional.
+**Why split out of 7b:** per `docs/reviews/7b-2026-09-24.md`, a correct `GLOBAL.` rule can't be
+derived inside `pad.py` alone. BP's data-item visibility flag (`<private/>` on Data/Collection
+stages; 373 occurrences in `PID_0171.bprelease`) is never parsed, so the first attempt fell back to
+a hardcoded `MAIN_BODY_VARIABLES` list of PID_171 names. That doesn't generalise to the other ~199
+automations and breaks the "mappings are data, not Python" rule. This task builds the
+data-driven derivation; Task 7b then consumes it.
 
 **Do:**
-1. Implement §A4's `GLOBAL.` qualification rule: any variable referenced across `FUNCTION`
-   boundaries (main-body/cross-call state, not a function's own local declarations) must be
-   `GLOBAL.`-prefixed. Currently 0 occurrences anywhere in generated output despite 15 of 16
-   Performer `FUNCTION`s being non-`GLOBAL` and needing to read/write main-body state.
-2. Fill in `Mark Exception`'s `Limit?` gating `IF` — currently an unfilled `# VERIFY` comment, not
-   the real breach-check logic (`docs/bp-to-pad-architecture-PID171.md` §A7 already has this logic
-   fully reverse-engineered from the real BP page).
-3. Add `mapping/page_target_map.yaml` entries + generate the two missing `FUNCTION`s
-   (`Send Consecutive Exception Mail`, `Send System Exception Mail`) — real line citations already
-   exist in §A7/§A8-D4 (L1026, L1096, L1283-1302 of the reference Performer file).
+1. Parse the `<private/>` flag on Data/Collection stages (`parser/process.py`) and carry it through
+   the AST (`BPDataItem`, e.g. `is_private: bool = False`) via `ast/builder.py`. Cite the XML shape
+   from the real sample (quote one stage's XML line range); do not assume it.
+2. Derive the set of "main-body-owned" variables from the AST, not from a name list: data items
+   declared on the process's Main page (and on pages mapped to a `GLOBAL FUNCTION`) that are not
+   `<private/>`. Empirically verify the derivation against the reference Performer/Loader
+   (`docs/pad-reference/*.robin.txt`): report which reference `GLOBAL.`-qualified names the
+   derived set matches, misses and over-includes. Any mismatch gets explained or flagged, never
+   silently patched with a hardcoded exception.
+3. In `generator/pad.py`, qualify references to that set with `GLOBAL.` inside non-`GLOBAL`
+   `FUNCTION`s only: **both reads and `SET` left-hand sides**; never inside the main body or a
+   `GLOBAL FUNCTION`; never double-prefix an already-qualified name; never qualify a name the
+   current function declares locally or as an `In_`/`Out_` parameter.
+4. Tests: parser test for the flag; builder test that it reaches `BPDataItem`; generator tests for
+   read + write qualification, no `GLOBAL.GLOBAL.`, no qualification in main body / `GLOBAL`
+   functions, local-shadow case left unqualified; and at least one test built from a synthetic
+   process (not PID_171 names) proving the set is derived, not hardcoded.
 
-**Done when:** regenerating `PID_0171.bprelease` shows `GLOBAL.num_ConsecutiveExceptionCount`/
-`Limit` (not bare `num_...`); a test confirms the counter persists across simulated consecutive
-calls rather than resetting; `Limit?`'s `IF` contains real breach logic, not `# VERIFY`; both
-`Send Consecutive Exception Mail` and `Send System Exception Mail` `FUNCTION`s exist in generated
-output.
+**Done when:** regenerating `PID_0171.bprelease` shows `GLOBAL.`-qualified main-body references in
+non-`GLOBAL` Performer/Loader `FUNCTION`s (reads and writes), with no hardcoded variable-name list
+anywhere in `src/`; the reference comparison from item 2 is in the implementer's report; no
+`GLOBAL.GLOBAL.` anywhere in output; `uv run pytest tests/parser tests/ast tests/generator -q`
+green apart from known PID_0127 failures.
 
-**Out of scope:** Task 5c's `BLOCK`/`ON BLOCK ERROR` structural pattern (already done) — this task
-only fixes variable scoping and fills in the one named dispatch gap inside it.
+**Out of scope:** `Mark Exception`'s consecutive-exception logic and the send-mail `FUNCTION`s
+(Task 7b); declaring/initialising the global variables (Task 7b consumes this for the counter).
+
+---
+
+## Task 7b — `generator/pad.py`: consecutive-exception dispatch completion (BP behaviour)
+
+**Depends on:** Task 7b0
+**Files in scope:** `src/flowsmith/generator/pad.py`, `mapping/page_target_map.yaml`,
+`tests/generator/test_pad.py`
+**Required reading:** `docs/bp-to-pad-architecture-PID171.md` §A7 (BP ground truth for the
+`Mark Item As Exception` page, traced from `PID_0171.bprelease`) and §A8 D4/D6 (the deployed
+reference's 3-way dispatch, and its always-increment regression vs BP); §A4 (as implemented by
+Task 7b0); `docs/reviews/7b-2026-09-24.md` (why the first attempt, `2701fc8`, was reverted in
+`8960ef8`).
+
+**Decision (user, 2026-09-24): follow BP behaviour, not the deployed reference's.** Per §A7:
+on a plain System Exception, a message *match* increments `GLOBAL.num_ConsecutiveExcCount` then
+checks `Limit?` (breach if `>= GLOBAL.num_ConsecutiveExcLimit`); a *mismatch* sets
+`GLOBAL.txt_PreviousExceptionMessage` to the current message and resets the count to **0**, and is
+terminal for the item (no fall-through to `Limit?`). Reset to 0 on `Mark Complete` and on a
+Business Exception; SUE neither resets nor increments. Reproducing the reference's
+always-increment (§A8 D6) is a defect, not fidelity. Where BP's breach action (`TERMINATE`) is
+expressed with the reference's PAD mechanism (`SET GLOBAL.flg_HaltRun TO True`, checked per item
+at reference L1552-1554), cite both.
+
+**Hard constraints (from the reverted attempt):**
+- `Mark Exception`'s body is **translated from the BP page's actual stages** through the normal
+  page→`FUNCTION` pipeline. No Python string body, no `if target_name == "Mark Exception"`
+  special case. Stages not otherwise translatable get a `# TODO` naming them; none vanish.
+- The status variant comes from the catalogue (`mapping/vbo_catalogue.yaml`
+  `clsWorkQueuesActions.method_actions`: default `"Mark Exception"` = `BusinessException`;
+  `"Mark Exception :: ITException"` for SUE / consecutive breach, `vbo-action-mapping.md` L28,
+  reference L1265/L1290; `"Mark Exception :: GenericException"` for a plain System Exception, L29,
+  reference L1309). The generator selects it from the BP page's own decision structure (the
+  exception-type branch / breach branch the stage sits in), never by stage-name or `Tag`
+  heuristics (rejected in `docs/reviews/7a-2026-09-04-thirdpass.md`). Remove the
+  `# VERIFY: Mark Exception status variant deferred to Task 7b` marker wherever the variant is now
+  selected from real context; keep it wherever context isn't determinable.
+- No PAD syntax without a line citation to the reference or architecture doc.
+
+**Do:**
+1. Render the BP `Mark Item As Exception` page's `Previous Exception?` / `Count` /
+   `Reset Consecutive Exception Indicators` / `Limit?` stages to the §A7 BP semantics above, using
+   Task 7b0's `GLOBAL.` qualification (`GLOBAL.num_ConsecutiveExcCount`,
+   `GLOBAL.num_ConsecutiveExcLimit`, `GLOBAL.txt_PreviousExceptionMessage`). The `Limit?` `IF`
+   contains the real breach condition, not `# VERIFY`.
+2. Wire the counter's lifecycle: reset to 0 in `Mark Complete` (currently a placeholder) and in
+   the Business Exception path. Flag (`# TODO`/`# VERIFY` with citation) the counter's
+   initialisation and the limit's load from `Ctrl_ConsecutiveExceptionLimit` if they belong to
+   `Load Config Data` (not yet generated). Breach sets `GLOBAL.flg_HaltRun`, and there is a
+   per-item `flg_HaltRun` check (reference L1552-1554), or a `# TODO` naming where it is missing.
+3. Mark Exception status variant selection per the hard constraint above (the Task 7a hand-off).
+4. `Send Consecutive Exception Mail` / `Send System Exception Mail`: **pending user decision**
+   (translate from a cited `mapping/` template reproducing reference L1026-1060/L1096-1131, or keep
+   as stubs). Until decided: emit stubs that declare the `In_*` parameters their callers pass (no
+   argument/parameter mismatch) with a `# TODO` naming the reference line range; add
+   `page_target_map.yaml` entries only if they match a real BP page.
+5. Tests that exercise behaviour, not string presence: simulate a sequence of consecutive
+   exceptions (e.g. same/same/different/same messages) through the rendered logic's semantics and
+   assert count/breach per BP (breach at limit 3 needs 4 identical); assert ITException on the
+   breach and SUE paths and GenericException on the plain SE non-breach path, each selected from BP
+   structure; rename/replace `test_mark_exception_variant_selection_is_deferred_to_task_7b`.
+
+**Done when:** regenerating `PID_0171.bprelease` shows the `Mark Exception` `FUNCTION` translated
+from the BP page with BP reset-to-0/terminal-on-mismatch semantics and `GLOBAL.`-qualified
+counter/limit/previous-message; no dropped stages without a `# TODO`; the variant-selection test and
+the consecutive-sequence test pass; no `CALL` passes arguments a `FUNCTION` doesn't declare; no
+hardcoded `Mark Exception` body in `src/`.
+
+**Out of scope:** the `GLOBAL.` derivation itself (Task 7b0); Task 5c's `BLOCK`/`ON BLOCK ERROR`
+structure (already done); generating `Load Config Data` (Task 7d item 3).
 
 ---
 
