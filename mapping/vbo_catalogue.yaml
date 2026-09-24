@@ -453,6 +453,11 @@
     "Mark Exception :: ITException": "WorkQueues.UpdateWorkQueueItem.UpdateWithProcessingNotes WorkQueueItem: <obj> Status: WorkQueues.WorkQueueItemStatus.ITException ProcessingResult: <msg>"
     "Mark Exception :: GenericException": "WorkQueues.UpdateWorkQueueItem.UpdateWithProcessingNotes WorkQueueItem: <obj> Status: WorkQueues.WorkQueueItemStatus.GenericException ProcessingResult: <msg>"
     "Update Status": "WorkQueues.UpdateProcessingNotes.WithProcessingNotes WorkQueueItem: <obj> ProcessingNotes: <text>"
+  queue_bindings:
+    - expression_pattern: "ConfigFileData.Queue Name"
+      pad_variable: "txt_WorkQueueId"
+      citation: "DF_PID_171_US_LIMS_Prelude_Main.robin.txt L150 (SET txt_WorkQueueId TO obj_Config['Ctrl_WorkQueueId']), L1371 (ProcessWorkQueueItem call site)"
+      notes: "Config-driven queue ID from Load Config Data function. txt_WorkQueueId must be assigned from obj_Config['Ctrl_WorkQueueId'] before Get Next Item is called."
 
 - vbo_name: "Blueprism.Automate.clsCredentialsActions"
   method_patterns:

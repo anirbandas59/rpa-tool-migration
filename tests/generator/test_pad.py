@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
+import yaml
 
 from flowsmith.ast.models import (
     BPDataItem,
@@ -2623,18 +2624,30 @@ def test_work_queues_placeholders_are_substituted(tmp_path: Path) -> None:
         "Mark Exception/Mark Completed should substitute <obj> with obj_WorkQueueItem"
     )
 
-    # Verify: <id> is substituted via expression translation (should reference a variable, not literal text)
-    # The BP expression [ConfigFileData.Queue Name] should translate to a PAD variable reference
-    # Per _build_variable_name_mapping, this would be something like dtb_ConfigFileData or obj_Config
+    # Verify: <id> is substituted via queue_bindings catalogue or expression translation
+    # Task 7a (b): Queue bindings from catalogue should bind ConfigFileData.Queue Name to txt_WorkQueueId
+    # with a VERIFY comment naming the dependency.
     # Pattern check: any WorkQueues.ProcessWorkQueueItem line should have WorkQueue: <something>
     # where <something> is NOT a literal angle-bracket placeholder
     for line in workqueues_lines:
         if "ProcessWorkQueueItem" in line:
             assert "WorkQueue: <id>" not in line, (
-                "Queue Name <id> must be substituted via _translate_bp_expression, not left as literal"
+                "Queue Name <id> must be substituted via queue_bindings or _translate_bp_expression, not left as literal"
             )
             # Verify the line contains a WorkQueue parameter with some value
             assert "WorkQueue:" in line, "ProcessWorkQueueItem should have WorkQueue parameter"
+
+    # Task 7a (a): Verify VERIFY comment precedes Get Next Item if bound from catalogue
+    # (c): Assert the rendered WorkQueue: value is exactly txt_WorkQueueId for config-queue case
+    assert "WorkQueue: txt_WorkQueueId" in content, (
+        "Get Next Item should bind ConfigFileData.Queue Name to txt_WorkQueueId from catalogue"
+    )
+
+    # (c): Assert the VERIFY dependency marker precedes the action
+    verify_marker = "# VERIFY: Get Next Item queue ID 'txt_WorkQueueId'"
+    assert verify_marker in content, (
+        f"VERIFY comment should appear before Get Next Item call binding to txt_WorkQueueId: {verify_marker}"
+    )
 
     # Verify: <text> substitution uses correct Status parameter (not "Processing Notes")
     # Real BP call sites have Status values like "COMPLETED", "Sample Manager Launched Sucessfully", etc.
@@ -2692,6 +2705,54 @@ def test_mark_exception_has_three_status_variants() -> None:
     ge_template = wq_entry.method_actions.get("Mark Exception :: GenericException", "")
     assert "GenericException" in ge_template, (
         "GenericException variant should contain 'GenericException' status"
+    )
+
+
+def test_queue_bindings_are_in_catalogue_yaml() -> None:
+    """Task 7a (b): Queue bindings for config-driven queue ID are in vbo_catalogue.yaml.
+
+    Verifies that queue_bindings exist in the raw YAML for WorkQueues actions,
+    mapping BP expressions like 'ConfigFileData.Queue Name' to PAD variables
+    like 'txt_WorkQueueId' with proper citation.
+    """
+    catalogue_path = Path("mapping") / "vbo_catalogue.yaml"
+    assert catalogue_path.exists(), "vbo_catalogue.yaml should exist"
+
+    with open(catalogue_path, encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+
+    # Find WorkQueues entry
+    wq_entry = None
+    for entry in data:
+        if entry.get("vbo_name") == "Blueprism.Automate.clsWorkQueuesActions":
+            wq_entry = entry
+            break
+
+    assert wq_entry is not None, "WorkQueues VBO entry should exist in catalogue"
+    assert "queue_bindings" in wq_entry, (
+        "WorkQueues entry should have queue_bindings field (Task 7a (b))"
+    )
+
+    queue_bindings = wq_entry["queue_bindings"]
+    assert isinstance(queue_bindings, list), "queue_bindings should be a list"
+    assert len(queue_bindings) > 0, "queue_bindings should not be empty"
+
+    # Find ConfigFileData.Queue Name binding
+    config_binding = None
+    for binding in queue_bindings:
+        if binding.get("expression_pattern") == "ConfigFileData.Queue Name":
+            config_binding = binding
+            break
+
+    assert config_binding is not None, "ConfigFileData.Queue Name should be in queue_bindings"
+
+    # Verify binding has required fields
+    assert config_binding.get("pad_variable") == "txt_WorkQueueId", (
+        "ConfigFileData.Queue Name should bind to txt_WorkQueueId"
+    )
+    assert "citation" in config_binding, "Binding should have citation field"
+    assert "L150" in config_binding["citation"] or "Load Config Data" in config_binding["notes"], (
+        "Citation should reference Load Config Data function (L150)"
     )
 
 
