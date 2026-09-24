@@ -1260,6 +1260,34 @@ line range); do not assume it.
      - a `split` target binds;
      - an unresolvable input yields a `# TODO`;
      - no `GLOBAL.` prefix appears.
+8. **Data initialisation at the top of each body** (user decision, 2026-09-24, from
+   `docs/reviews/7b0-2026-09-24-fixpass2.md` gap 2). BP Data/Collection stages are not part of a
+   page's flow: their initial values apply when the page starts. So every initialising `SET` /
+   `DataTable.Create()` for a page's (non-parameter-bound) data items is emitted at the **top** of
+   that `FUNCTION` body (after the header, before any other action), and likewise at the top of the
+   main body for the Main page. It is never emitted at the stage's position in the flow. This
+   stops a caller's own initialisation from wiping a collection a `CALL` just returned (review
+   examples: P143→P286 `dtb_FinalProductCollection`, P291→P292 `dtb_SammaryCollection`, Loader
+   L109→L154 `dtb_MailItems`). Apply the same rule per sub-`FUNCTION` for `split` pages, and per
+   inlined content for `inline_block`/`fold` (emitted at the top of the inlined block's host body,
+   without duplicating the host's own initialisations).
+9. **Split sub-`FUNCTION` input TODO** (user decision, 2026-09-24): where a non-entry split
+   sub-`FUNCTION` would otherwise reference or re-initialise a data item that is one of the entry
+   `FUNCTION`'s `In_` parameters, emit a `# TODO` naming the parameter(s) and that the split call
+   chain doesn't yet pass them (Task 5a gap). Don't re-initialise them silently. This is the input
+   twin of the entry `FUNCTION`'s `Out_` TODO.
+10. **Unassigned `Out_` TODO** (user decision, 2026-09-24): in any `FUNCTION` (not just `split`
+    entries), if a declared `Out_` parameter is never assigned in the rendered body, emit a
+    `# TODO` before `END FUNCTION` naming it.
+11. **Tests must fail on regression.** The fix-pass-2 suppression test (`test_pad.py` ~L3179) is
+    vacuous: it asserts `SET txt_...` is absent, but a regression renders `SET In_txt_...`.
+    Assert that no `SET In_<x> TO` / `SET Out_<x> TO %SomeVar%` / `DataTable.Create()` targets a
+    bound name. Add tests for:
+    - output-only `Out_` naming in the body;
+    - collection (`DataTable.Create`) suppression;
+    - init-at-top ordering: a collection returned by a `CALL` isn't re-created later in the caller;
+    - the item-9 and item-10 TODOs.
+    Mutation-check each: disable the behaviour and confirm the test fails, then restore.
 
 **Done when:** regenerating `PID_0171.bprelease` shows:
 - every `FUNCTION` in both `.robin` files is `GLOBAL`, with a parameter list matching its BP page's
