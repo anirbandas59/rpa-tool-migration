@@ -442,6 +442,80 @@ def test_collection_stage_maps_to_collection() -> None:
     assert stage.stage_type == StageType.COLLECTION
 
 
+def test_data_item_always_init_true_reaches_ast() -> None:
+    """Task 7b3: a Data item parsed with always_init=True reaches BPDataItem."""
+    raw = single_page_process(
+        make_raw_stage(
+            stage_type="Data",
+            name="Consecutive Exception Limit",
+            data_items=[
+                RawDataItem(
+                    name="Consecutive Exception Limit",
+                    data_type="number",
+                    initial_value="3",
+                    is_input=False,
+                    is_output=False,
+                    always_init=True,
+                )
+            ],
+        )
+    )
+    stage = build_ast(raw).pages[0].stages[0]
+    assert stage.data_items[0].always_init is True
+
+
+def test_data_item_always_init_false_reaches_ast() -> None:
+    """Task 7b3: a Data item parsed with always_init=False reaches BPDataItem.
+
+    Mirrors samples/blueprism/PID_0171.bprelease's 'Consecutive Exception Count'
+    Data stage, which lacks <alwaysinit/>.
+    """
+    raw = single_page_process(
+        make_raw_stage(
+            stage_type="Data",
+            name="Consecutive Exception Count",
+            data_items=[
+                RawDataItem(
+                    name="Consecutive Exception Count",
+                    data_type="number",
+                    initial_value="0",
+                    is_input=False,
+                    is_output=False,
+                    always_init=False,
+                )
+            ],
+        )
+    )
+    stage = build_ast(raw).pages[0].stages[0]
+    assert stage.data_items[0].always_init is False
+
+
+def test_data_item_always_init_defaults_true_when_key_absent() -> None:
+    """A RawDataItem dict with no 'always_init' key defaults to True on BPDataItem.
+
+    Applies to non-Data/Collection RawDataItems (Start/End stage inputs/outputs),
+    where the parser never sets the key (<alwaysinit/> only applies to Data/
+    Collection stages).
+    """
+    raw = single_page_process(
+        make_raw_stage(
+            stage_type="Start",
+            name="Start",
+            data_items=[
+                RawDataItem(
+                    name="In Value",
+                    data_type="text",
+                    initial_value=None,
+                    is_input=True,
+                    is_output=False,
+                )
+            ],
+        )
+    )
+    stage = build_ast(raw).pages[0].stages[0]
+    assert stage.data_items[0].always_init is True
+
+
 def test_exception_type_preserved() -> None:
     raw = single_page_process(
         make_raw_stage(

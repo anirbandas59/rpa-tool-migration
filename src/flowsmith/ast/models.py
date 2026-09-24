@@ -194,6 +194,24 @@ class BPDataItem(BaseModel):
         default=False,
         description="True if this data item is a stage output parameter.",
     )
+    always_init: bool = Field(
+        default=True,
+        description=(
+            "True if the BP Data/Collection stage carries an <alwaysinit/> element: "
+            "the item resets to its initial value every time its page runs. False "
+            "when <alwaysinit/> is absent: BP keeps the item's value across page runs "
+            "within the same process run (Task 7b3; confirmed on "
+            "samples/blueprism/PID_0171.bprelease's 'Mark Item As Exception' subsheet, "
+            "stage 279f2417 'Consecutive Exception Count' and stage a08fa84e "
+            "'Previous Exception Detail', both lacking <alwaysinit/>, vs stage 36455e9b "
+            "'Consecutive Exception Limit', which has <private/><alwaysinit/>). "
+            "Defaults to True — the observed majority case (194 of 201 Data/Collection "
+            "stages in PID_171_US_Process_LIMS_Prelude carry <alwaysinit/>, per "
+            "docs/reviews/7b-2026-09-24-v2.md's 'Coordinator's key finding' table) and "
+            "the only value this field takes for non-Data/Collection data items (Start/"
+            "End stage inputs/outputs), where <alwaysinit/> does not apply."
+        ),
+    )
 
 
 class BPStage(BaseModel):

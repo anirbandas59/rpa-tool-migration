@@ -11,7 +11,7 @@ This is the single place where:
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import TYPE_CHECKING, TypedDict
+from typing import TYPE_CHECKING, NotRequired, TypedDict
 
 from pydantic import ValidationError as PydanticValidationError
 
@@ -52,6 +52,11 @@ class RawDataItem(TypedDict):
     initial_value: str | None
     is_input: bool
     is_output: bool
+    always_init: NotRequired[bool]
+    """True if the source <stage> carries <alwaysinit/> (Data/Collection stages
+    only, Task 7b3). Absent/omitted for non-Data/Collection RawDataItems (Start/
+    End stage inputs/outputs), where <alwaysinit/> does not apply — defaults to
+    True (see BPDataItem.always_init for the citation)."""
 
 
 class RawStage(TypedDict):
@@ -176,6 +181,7 @@ def _build_data_items(raw_items: list[RawDataItem]) -> list[BPDataItem]:
             initial_value=item.get("initial_value"),
             is_input=item.get("is_input", False),
             is_output=item.get("is_output", False),
+            always_init=item.get("always_init", True),
         )
         for item in raw_items
     ]

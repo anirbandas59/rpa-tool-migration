@@ -2894,37 +2894,23 @@ def _generate_pid171_performer_mark_exception_body(tmp_path: Path) -> list[str]:
     return _extract_function_body(text, "Mark Exception")
 
 
-def _logic_only(body: list[str]) -> list[str]:
-    """Drop the FUNCTION's leading DATA-declaration SET lines before the real logic.
-
-    Task 7b Do item 2 explicitly defers the counter/limit's persistent
-    initialisation to Task 7d ("Load Config Data... not yet generated") and only
-    requires the placeholder to stay flagged (the existing "# VERIFY: Previous
-    Exception Detail"/"Consecutive Exception Count"/"Consecutive Exception Limit"
-    comments on those SET lines already satisfy that). Because those lines are
-    still emitted inside this FUNCTION's own body (BP DATA stage inits, §B12),
-    replaying the *whole* function body across multiple simulated calls would
-    re-run them every call and clobber the cross-call state Task 7b's counter
-    logic depends on — a Task 7d concern, not this test's. This drops every
-    leading line up to the first real control-flow statement (the first `IF`),
-    so the sequence tests exercise §A7's state machine (Task 7b's actual scope)
-    against state the caller controls, as it will behave once Task 7d wires real
-    persistent initialisation.
-    """
-    for index, line in enumerate(body):
-        if not line.startswith("SET "):
-            return body[index:]
-    return body
-
-
 def test_mark_exception_sequence_resets_on_message_change(tmp_path: Path) -> None:
     """Task 7b Do item 4: same/same/different/same/same/same sequence per BP §A7.
 
     A message change is terminal for that item (reset to 0, no fall-through to
     Limit?) — only two consecutive identical messages ever accumulate here, so the
     count trajectory is [0, 1, 0, 0, 1, 2] and no breach occurs.
+
+    Task 7b3: runs the FULL generated FUNCTION body (no stripping) — Task 7b0's
+    'Consecutive Exception Count'/'Previous Exception Detail' Data stages lack
+    <alwaysinit/> (samples/blueprism/PID_0171.bprelease stages 279f2417/a08fa84e)
+    and no longer emit an initialising SET inside 'Mark Exception' at all (they
+    are hoisted once to the Performer Main body top instead), so replaying the
+    full body across calls no longer clobbers the cross-call counter state the
+    way it did before this task (docs/reviews/7b-2026-09-24-v2.md's confirmed
+    finding). The previous stripped-extract workaround (``_logic_only``) is gone.
     """
-    body = _logic_only(_generate_pid171_performer_mark_exception_body(tmp_path))
+    body = _generate_pid171_performer_mark_exception_body(tmp_path)
     messages = ["same", "same", "different", "same", "same", "same"]
     expected_counts = [0, 1, 0, 0, 1, 2]
 
@@ -2952,12 +2938,28 @@ def test_mark_exception_breach_on_fourth_identical_message(tmp_path: Path) -> No
     ThrowCustomError rendering, and that no dedicated-mail CALL exists anywhere in
     the body (user decision 2026-09-24: option A, no Send Consecutive/System
     Exception Mail FUNCTIONs).
+
+    Task 7b3 Do item 3: runs the FULL generated FUNCTION body (not a stripped/
+    logic-only extract) — see ``test_mark_exception_sequence_resets_on_message_change``
+    for why this is now safe: the counter/previous-message Data stages are
+    non-<alwaysinit/> and no longer (re-)initialised inside this FUNCTION body.
+    Also asserts neither name is (re-)set inside 'Mark Exception' at all.
     """
-    full_body = _generate_pid171_performer_mark_exception_body(tmp_path)
-    assert not any("CALL 'Send Consecutive Exception Mail'" in line for line in full_body)
-    assert not any("CALL 'Send System Exception Mail'" in line for line in full_body)
-    assert not any("flg_HaltRun" in line for line in full_body)
-    body = _logic_only(full_body)
+    body = _generate_pid171_performer_mark_exception_body(tmp_path)
+    assert not any("CALL 'Send Consecutive Exception Mail'" in line for line in body)
+    assert not any("CALL 'Send System Exception Mail'" in line for line in body)
+    assert not any("flg_HaltRun" in line for line in body)
+    # Task 7b3: neither non-alwaysinit item gets an entry-initialising SET inside
+    # this FUNCTION at all — only the mid-flow "Reset Consecutive Exception
+    # Indicators"/"Mark Item As Completed" resets (real BP flow logic, unaffected
+    # by this task) remain, each carrying that citation, never
+    # "%SomeVar%"/a bare placeholder init.
+    assert not any(line.startswith("SET txt_PreviousExceptionDetail TO %SomeVar%") for line in body)
+    assert not any(
+        line.startswith("SET num_ConsecutiveExceptionCount TO 0")
+        and "Reset Consecutive Exception Indicators" not in line
+        for line in body
+    )
 
     state: dict[str, object] = {
         "txt_PreviousExceptionDetail": "",
@@ -3345,13 +3347,30 @@ def _annotated_end(
     )
 
 
-def _data_stage(stage_id: str, name: str, data_type: str = "text") -> BPStage:
-    """Build a DATA stage that declares/initialises `name` (Task 7b0 suppression target)."""
+def _data_stage(
+    stage_id: str, name: str, data_type: str = "text", always_init: bool = True
+) -> BPStage:
+    """Build a DATA stage that declares/initialises `name` (Task 7b0 suppression target).
+
+    Task 7b3: carries a real ``BPDataItem`` (with the given ``always_init``) so
+    ``_collect_role_once_only_sources``/``_build_non_alwaysinit_role_map`` — which
+    read ``stage.data_items`` for the item's ``always_init`` flag, not
+    ``pa_annotation.params_map`` — can see it. Defaults to True (7b0's original
+    per-call/per-copy placement), matching every pre-7b3 caller of this helper.
+    """
     return BPStage(
         stage_id=stage_id,
         stage_type=StageType.DATA,
         name=name,
-        data_items=[],
+        data_items=[
+            BPDataItem(
+                name=name,
+                data_type=data_type,
+                is_input=False,
+                is_output=False,
+                always_init=always_init,
+            )
+        ],
         pa_annotation=PAAnnotation(
             target_type="SetVariable",
             target_module="Variables",
@@ -4620,3 +4639,163 @@ def test_7b0_render_page_in_consolidated_flow_raises_for_inline_shapes() -> None
 
     with pytest.raises(GenerationError):
         gen._render_page_in_consolidated_flow(page, process, process_map)
+
+
+# ── Task 7b3: BP alwaysinit lifetime → PAD init placement ───────────────────
+
+
+def test_7b3_non_alwaysinit_item_initialises_once_at_main_body_top_inlined() -> None:
+    """Task 7b3: a non-<alwaysinit/> item on a page inlined (fold) twice into the
+    Performer main body initialises exactly once, at the top of the Main body —
+    never inside either inlined copy — while an <alwaysinit/> item on the same
+    page keeps Task 7b0's per-copy reset (once per inlined copy).
+    """
+    gen = PADGenerator()
+    fold_page = BPPage(
+        page_id="P_FOLD",
+        name="Widget Worker",
+        role="performer",
+        stages=[
+            _data_stage("f0", "widget_retry_count", data_type="number", always_init=True),
+            _data_stage("f1", "widget_running_total", data_type="number", always_init=False),
+        ],
+    )
+    main_page = BPPage(
+        page_id="P_MAIN",
+        name="Main Page",
+        is_main=True,
+        stages=[
+            _annotated_start("s0", []),
+            _call_stage("s1", "Call Widget Worker First", processid="P_FOLD", params_map={}),
+            _call_stage("s2", "Call Widget Worker Second", processid="P_FOLD", params_map={}),
+            _annotated_end("s3", []),
+        ],
+    )
+    process = make_process(pages=[main_page, fold_page], name="WidgetFlow")
+    gen.page_target_map["WidgetFlow"] = {
+        "Widget Worker": {"shape": "fold", "container": "Performer_Main_Body"}
+    }
+
+    rendered = gen._generate_consolidated_flow(process, role="performer")
+
+    lines = rendered.splitlines()
+    banner_idx = next(i for i, ln in enumerate(lines) if ln.startswith("# Role: Performer"))
+    first_fold_idx = next(i for i, ln in enumerate(lines) if "# BEGIN fold" in ln)
+
+    retry_count_lines = [i for i, ln in enumerate(lines) if "num_WidgetRetryCount TO" in ln]
+    running_total_lines = [i for i, ln in enumerate(lines) if "num_WidgetRunningTotal TO" in ln]
+
+    assert len(running_total_lines) == 1, (
+        "A non-alwaysinit item must initialise exactly once across the whole role, "
+        f"got {len(running_total_lines)} occurrences: {[lines[i] for i in running_total_lines]}"
+    )
+    assert banner_idx < running_total_lines[0] < first_fold_idx, (
+        "The single non-alwaysinit init must sit at the Main body's top, before any inlined copy"
+    )
+    assert len(retry_count_lines) == 2, (
+        "The alwaysinit item must keep Task 7b0's per-copy reset (once per inlined copy)"
+    )
+    for idx in retry_count_lines:
+        assert idx > first_fold_idx, (
+            "The alwaysinit item's resets must stay inside the inlined copies, not be "
+            "hoisted to the Main body top"
+        )
+
+
+def test_7b3_non_alwaysinit_item_initialises_once_when_page_called_as_function() -> None:
+    """Task 7b3: a non-<alwaysinit/> item on a FUNCTION-shaped page called twice
+    initialises once, at the Performer Main body's top — never inside the
+    FUNCTION body itself (which is emitted once but CALLed on every run)."""
+    gen = PADGenerator()
+    function_page = BPPage(
+        page_id="P_FUNC",
+        name="Widget Fetcher",
+        role="performer",
+        stages=[
+            _data_stage("f0", "widget_retry_count", data_type="number", always_init=True),
+            _data_stage("f1", "widget_running_total", data_type="number", always_init=False),
+        ],
+    )
+    main_page = BPPage(
+        page_id="P_MAIN",
+        name="Main Page",
+        is_main=True,
+        stages=[
+            _annotated_start("s0", []),
+            _call_stage("s1", "Call Widget Fetcher First", processid="P_FUNC", params_map={}),
+            _call_stage("s2", "Call Widget Fetcher Second", processid="P_FUNC", params_map={}),
+            _annotated_end("s3", []),
+        ],
+    )
+    process = make_process(pages=[main_page, function_page], name="WidgetFlow")
+
+    rendered = gen._generate_consolidated_flow(process, role="performer")
+
+    lines = rendered.splitlines()
+    function_idx = next(i for i, ln in enumerate(lines) if "FUNCTION 'Widget Fetcher'" in ln)
+
+    retry_count_lines = [i for i, ln in enumerate(lines) if "num_WidgetRetryCount TO" in ln]
+    running_total_lines = [i for i, ln in enumerate(lines) if "num_WidgetRunningTotal TO" in ln]
+
+    assert len(running_total_lines) == 1, (
+        "A non-alwaysinit item on a FUNCTION-shaped page initialises exactly once "
+        f"across the whole role, got {len(running_total_lines)}"
+    )
+    assert running_total_lines[0] < function_idx, (
+        "The single non-alwaysinit init must sit at the Main body's top, before the "
+        "'Widget Fetcher' FUNCTION definition"
+    )
+    assert len(retry_count_lines) == 1, (
+        "The alwaysinit item stays inside the FUNCTION body (Task 7b0 placement), "
+        "unchanged — the FUNCTION is defined once regardless of how many times it "
+        "is CALLed"
+    )
+    assert retry_count_lines[0] > function_idx, (
+        "The alwaysinit item's reset must stay inside the FUNCTION body, not be "
+        "hoisted to the Main body top"
+    )
+
+
+def test_7b3_cross_role_non_alwaysinit_name_is_reported_not_guessed() -> None:
+    """Task 7b3: a non-<alwaysinit/> name declared on pages split across both
+    roles is reported with a TODO, not silently assigned to either role's Main
+    body."""
+    gen = PADGenerator()
+    loader_page = BPPage(
+        page_id="P_LOADER",
+        name="Loader Side Page",
+        role="loader",
+        stages=[_data_stage("l0", "widget_shared_counter", always_init=False)],
+    )
+    performer_page = BPPage(
+        page_id="P_PERFORMER",
+        name="Performer Side Page",
+        role="performer",
+        stages=[_data_stage("p0", "widget_shared_counter", always_init=False)],
+    )
+    main_page = BPPage(
+        page_id="P_MAIN",
+        name="Main Page",
+        is_main=True,
+        stages=[
+            _annotated_start("s0", []),
+            _call_stage("s1", "Call Loader Side", processid="P_LOADER", params_map={}),
+            _call_stage("s2", "Call Performer Side", processid="P_PERFORMER", params_map={}),
+            _annotated_end("s3", []),
+        ],
+    )
+    process = make_process(pages=[main_page, loader_page, performer_page], name="WidgetFlow")
+
+    performer_rendered = gen._generate_consolidated_flow(process, role="performer")
+    loader_rendered = gen._generate_consolidated_flow(process, role="loader")
+
+    all_lines = performer_rendered.splitlines() + loader_rendered.splitlines()
+    conflict_todos = [
+        ln
+        for ln in all_lines
+        if "TODO" in ln and "Task 7b3" in ln and "widget_shared_counter" in ln.lower()
+    ]
+    assert conflict_todos, (
+        "A cross-role non-alwaysinit name must be reported with a Task 7b3 TODO "
+        "naming it, not silently assigned to either role"
+    )

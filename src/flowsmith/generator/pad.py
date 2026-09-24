@@ -168,6 +168,20 @@ class PADGenerator:
         # subset — docs/reviews/7b0-2026-09-24-fixpass4.md gap 1(a)/(b).
         self._current_host_page: Any | None = None
 
+        # Task 7b3: the set of lowercase BP data-item names that are non-<alwaysinit/>
+        # and owned by the role currently being generated (_generate_consolidated_flow),
+        # computed once per role by _collect_role_once_only_sources and rendered exactly
+        # once, at the top of that role's Main body. BP keeps such an item's value
+        # across page runs within the same process run (no <alwaysinit/>), so — unlike
+        # Task 7b0 item 8's per-FUNCTION-body/per-inlined-copy placement for
+        # <alwaysinit/> items — it must never be (re-)initialised inside any FUNCTION
+        # body, split sub-FUNCTION or inlined copy. Every suppress-set assignment for
+        # the current role's render pass unions this set in, and
+        # _collect_hoistable_stage_sources/_hoist_data_inits_for_inline_copy skip any
+        # stage whose target name is in it, so it never renders anywhere but the one
+        # role-main-body hoisted line.
+        self._current_role_once_only_names: set[str] = set()
+
         # Task 7b: the exception-type branch ("system" | "business" | None) currently
         # being rendered, set by _render_decision_branch while walking a Decision's
         # true/false branches, consulted by _render_stage's WorkQueues branch to pick
@@ -421,67 +435,122 @@ class PADGenerator:
             # Build variable name mapping for Task 5b expression translation (per §A4, §B10)
             variable_name_mapping = self._build_variable_name_mapping(process)
 
-            # Render main page content (split by role)
-            if main_page:
-                main_content = self._render_main_page_for_role(
-                    main_page, process, role, variable_name_mapping
-                )
-                if main_content:
-                    lines.append(main_content)
-                    lines.append("")
-
             # Render sub-pages as FUNCTION blocks (or inline/fold if mapped)
             process_map = self.page_target_map.get(process.name, {})
             rendered_functions: list[str] = []
 
-            # Build the page name resolution mapping (handles collisions with disambiguation)
-            # This maps each page to its final resolved target name, distinguishing between
-            # intentional folds (explicit mapping) and accidental collisions (fallback names).
-            # Store in instance variable so it's accessible to _render_page_as_function and
-            # _render_call_or_inline without threading through every method signature.
-            self._current_page_name_map = self._build_page_name_resolution_map(
-                pages_for_role, process_map
+            # Task 7b3: a Data/Collection item without <alwaysinit/> keeps its value
+            # across page runs in BP — unlike an <alwaysinit/> item (Task 7b0 item 8,
+            # per-FUNCTION-body/per-inlined-copy placement, unchanged), it must be
+            # initialised exactly ONCE, at the top of this role's Main body, and never
+            # inside any FUNCTION body, split sub-FUNCTION or inlined copy. Compute
+            # this role's ownership before rendering anything (Main's own body can
+            # itself inline a page that declares one), so
+            # self._current_role_once_only_names is in effect for the whole role.
+            role_by_name = self._build_non_alwaysinit_role_map(process)
+            once_only_sources, once_only_conflict_todos = self._collect_role_once_only_sources(
+                pages_for_role, process_map, variable_name_mapping, role_by_name
             )
+            once_only_text, _once_only_suppress_unused = self._hoist_data_inits_from_sources(
+                once_only_sources, process, process_map, set()
+            )
+            previous_role_once_only = self._current_role_once_only_names
+            # Task 7b3: stays in effect for the rest of this role's generation (Main
+            # body AND every sub-page FUNCTION/split sub-FUNCTION/inlined copy below)
+            # — restored in the outer finally at the end of this method.
+            once_only_names: set[str] = set()
+            for stage, _mapping in once_only_sources:
+                target_name = self._data_collection_target_name(stage)
+                if target_name is not None:
+                    once_only_names.add(target_name.lower())
+            self._current_role_once_only_names = once_only_names
+            try:
+                # Render main page content (split by role)
+                if main_page:
+                    main_content = self._render_main_page_for_role(
+                        main_page, process, role, variable_name_mapping
+                    )
+                else:
+                    main_content = ""
 
-            seen_function_names: set[str] = set()
-            for page in pages_for_role:
-                # Skip pages that are shaped as inline_block/fold — they're rendered
-                # on-demand when called, not as top-level entities.
-                # BUT: split-shaped pages SHOULD be rendered (they emit multiple FUNCTIONs)
-                shape_info = self._get_page_shape(page.name, process_map)
-                shape = shape_info.get("shape", "function")
-                if shape in ("inline_block", "fold"):
-                    # These will be rendered when called from other pages
-                    continue
+                # Task 7b3: prepend this role's once-only inits (and any cross-role
+                # ownership-conflict TODOs) at the very top of the Main body — before
+                # Main's own <alwaysinit/> hoisted inits — so they run exactly once,
+                # before any FUNCTION/split sub-FUNCTION/inlined copy can reference
+                # them. Emitted even when there is no Main page content, so nothing is
+                # silently dropped.
+                once_only_prefix_parts = [p for p in (once_only_text,) if p]
+                once_only_prefix_parts = ["\n".join(once_only_conflict_todos)] * bool(
+                    once_only_conflict_todos
+                ) + once_only_prefix_parts
+                once_only_prefix = "\n".join(once_only_prefix_parts)
+                if once_only_prefix:
+                    main_content = (
+                        f"{once_only_prefix}\n{main_content}" if main_content else once_only_prefix
+                    )
 
-                # De-duplication: use resolved target name from the mapping built above
-                # This mapping distinguishes between:
-                # - Intentional folds: multiple pages map to same target_name via explicit
-                #   mapping entry — skip silently on collision (don't disambiguate)
-                # - Accidental collisions: pages fallback to their own name and happen to
-                #   collide — add disambiguation suffix (e.g., _2, _3)
-                resolved_target_name = self._current_page_name_map.get(page.page_id, page.name)
-                if resolved_target_name in seen_function_names:
-                    # FUNCTION with this name already emitted; skip the duplicate
-                    # (cite the first occurrence; the mapping file notes parameterization)
-                    continue
-
-                page_content = self._render_page_in_consolidated_flow(
-                    page, process, process_map, variable_name_mapping
-                )
-                if page_content:
-                    rendered_functions.append(page_content)
-                    lines.append(page_content)
+                if main_content:
+                    lines.append(main_content)
                     lines.append("")
-                    # Track this function name to prevent duplicates
-                    seen_function_names.add(resolved_target_name)
 
-            # Emit boilerplate "Get Error" FUNCTION if any page references it
-            full_content = "\n".join(lines)
-            if "CALL 'Get Error'" in full_content and "FUNCTION 'Get Error'" not in full_content:
-                get_error_fn = self._render_get_error_boilerplate()
-                lines.append(get_error_fn)
-                lines.append("")
+                # Build the page name resolution mapping (handles collisions with
+                # disambiguation). This maps each page to its final resolved target
+                # name, distinguishing between intentional folds (explicit mapping)
+                # and accidental collisions (fallback names). Store in instance
+                # variable so it's accessible to _render_page_as_function and
+                # _render_call_or_inline without threading through every method
+                # signature.
+                self._current_page_name_map = self._build_page_name_resolution_map(
+                    pages_for_role, process_map
+                )
+
+                seen_function_names: set[str] = set()
+                for page in pages_for_role:
+                    # Skip pages that are shaped as inline_block/fold — they're
+                    # rendered on-demand when called, not as top-level entities.
+                    # BUT: split-shaped pages SHOULD be rendered (they emit multiple
+                    # FUNCTIONs)
+                    shape_info = self._get_page_shape(page.name, process_map)
+                    shape = shape_info.get("shape", "function")
+                    if shape in ("inline_block", "fold"):
+                        # These will be rendered when called from other pages
+                        continue
+
+                    # De-duplication: use resolved target name from the mapping
+                    # built above. This mapping distinguishes between:
+                    # - Intentional folds: multiple pages map to same target_name via
+                    #   explicit mapping entry — skip silently on collision (don't
+                    #   disambiguate)
+                    # - Accidental collisions: pages fallback to their own name and
+                    #   happen to collide — add disambiguation suffix (e.g., _2, _3)
+                    resolved_target_name = self._current_page_name_map.get(page.page_id, page.name)
+                    if resolved_target_name in seen_function_names:
+                        # FUNCTION with this name already emitted; skip the duplicate
+                        # (cite the first occurrence; the mapping file notes
+                        # parameterization)
+                        continue
+
+                    page_content = self._render_page_in_consolidated_flow(
+                        page, process, process_map, variable_name_mapping
+                    )
+                    if page_content:
+                        rendered_functions.append(page_content)
+                        lines.append(page_content)
+                        lines.append("")
+                        # Track this function name to prevent duplicates
+                        seen_function_names.add(resolved_target_name)
+
+                # Emit boilerplate "Get Error" FUNCTION if any page references it
+                full_content = "\n".join(lines)
+                if (
+                    "CALL 'Get Error'" in full_content
+                    and "FUNCTION 'Get Error'" not in full_content
+                ):
+                    get_error_fn = self._render_get_error_boilerplate()
+                    lines.append(get_error_fn)
+                    lines.append("")
+            finally:
+                self._current_role_once_only_names = previous_role_once_only
 
             # Only return if we have content beyond the header
             if len(lines) > 3:  # header + banner lines + empty line
@@ -601,7 +670,12 @@ class PADGenerator:
 
             previous_suppress = self._current_suppress_init_names
             previous_host_page = self._current_host_page
-            self._current_suppress_init_names = suppress_names
+            # Task 7b3: union in this role's non-alwaysinit once-only names — they are
+            # hoisted/rendered exactly once by the caller (_generate_consolidated_flow)
+            # and must never also render at their in-place position here (e.g. an
+            # inline_block/fold call inside Main's own stages targeting a page that
+            # declares one).
+            self._current_suppress_init_names = suppress_names | self._current_role_once_only_names
             # Fix pass 5 gap 1: the host page for any inline_block/fold call rendered
             # inside this body is Main Page itself (its full declarations, not just
             # this role's rendered subset) — see _hoist_data_inits_for_inline_copy.
@@ -1221,6 +1295,129 @@ class PADGenerator:
             return stage.name
         return None
 
+    def _collect_role_once_only_sources(
+        self,
+        pages_for_role: list[Any],
+        process_map: dict[str, Any] | None,
+        variable_name_mapping: dict[str, str] | None,
+        role_by_name: dict[str, set[str]],
+    ) -> tuple[list[tuple[BPStage, dict[str, str] | None]], list[str]]:
+        """Collect this role's non-``<alwaysinit/>`` Data/Collection stages (Task 7b3).
+
+        BP resets a Data/Collection item to its initial value every time its page
+        *runs* only when the stage carries ``<alwaysinit/>``
+        (``BPDataItem.always_init`` — see that field's docstring for the confirmed
+        XML citation). Without it, BP keeps the item's value across page runs within
+        the same process run. Task 7b0 item 8 placed every item's init at its
+        FUNCTION body's top (or each inlined copy's top), which is correct only for
+        ``<alwaysinit/>`` items: a non-``<alwaysinit/>`` item must instead be
+        initialised exactly **once**, at the top of the owning role's Main body —
+        this method collects those sources so the caller can hoist them there
+        instead of at any FUNCTION/split sub-FUNCTION/inlined-copy position. The
+        Main page's own non-``<alwaysinit/>`` Data/Collection stages need no special
+        handling here: Task 7b0's existing Main-body hoisting
+        (``_render_main_page_for_role``) already renders the Main body exactly once
+        per role, which already satisfies the "once per flow run" rule for Main's
+        own declarations.
+
+        Args:
+            pages_for_role: This role's non-Main pages (``page.role == role``),
+                exactly as built by ``_generate_consolidated_flow``.
+            process_map: The process entry from ``page_target_map.yaml``, used to
+                skip ``stop``-shaped pages (never rendered, so nothing to hoist for).
+            variable_name_mapping: The flow's base variable-name mapping.
+            role_by_name: lowercase BP data-item name -> set of roles that declare
+                a non-``<alwaysinit/>`` Data/Collection stage with that name
+                (computed once per process by the caller across every role, so a
+                name split across both roles can be detected without a second scan).
+
+        Returns:
+            A 2-tuple: (sources, conflict_todos).
+            - sources: (stage, mapping) pairs ready for
+              ``_hoist_data_inits_from_sources``, one per uniquely-named
+              non-``<alwaysinit/>`` item this role owns unambiguously.
+            - conflict_todos: one ``# TODO`` per name declared by pages split across
+              both roles — per the task's "don't guess" instruction, these are left
+              at their Task 7b0 per-call/per-copy placement (not hoisted, not
+              suppressed) and reported here instead of auto-assigned to a role.
+        """
+        sources: list[tuple[BPStage, dict[str, str] | None]] = []
+        conflict_todos: list[str] = []
+        seen: set[str] = set()
+
+        for page in pages_for_role:
+            shape_info = self._get_page_shape(page.name, process_map or {})
+            if shape_info.get("shape") == "stop":
+                continue  # never rendered — nothing to hoist for
+
+            overrides, _both_bindings, _output_param_names = self._build_body_variable_overrides(
+                page
+            )
+            for stage in page.stages:
+                name = self._data_collection_target_name(stage)
+                if name is None:
+                    continue
+                name_lower = name.lower()
+                if name_lower in overrides:
+                    # Bound to an In_/Out_ FUNCTION parameter — never initialised by
+                    # this mechanism (Task 7b0 Do item 3).
+                    continue
+                data_item = next(
+                    (di for di in stage.data_items if not di.is_input and not di.is_output),
+                    None,
+                )
+                if data_item is None or data_item.always_init:
+                    continue
+                if name_lower in seen:
+                    continue
+                owning_roles = role_by_name.get(name_lower, {page.role})
+                if len(owning_roles) > 1:
+                    conflict_todos.append(
+                        f"# TODO: Task 7b3 — non-alwaysinit BP data item '{name}' is "
+                        f"declared on pages split across both roles "
+                        f"({', '.join(sorted(owning_roles))}); cannot determine a single "
+                        "owning role for its once-per-flow-run init, so it is left at "
+                        "its Task 7b0 per-call/per-copy placement instead"
+                    )
+                    continue
+                seen.add(name_lower)
+                sources.append((stage, variable_name_mapping))
+
+        return sources, conflict_todos
+
+    def _build_non_alwaysinit_role_map(self, process: BPProcess) -> dict[str, set[str]]:
+        """Map each non-``<alwaysinit/>`` Data/Collection name to its declaring role(s).
+
+        Scans every reachable non-Main page in ``process`` once, so
+        ``_collect_role_once_only_sources`` can detect (for each role in turn)
+        whether a name is declared only by pages of that role or split across both
+        roles, without re-scanning the whole process per role (Task 7b3).
+
+        Args:
+            process: The BPProcess.
+
+        Returns:
+            Dict mapping lowercase BP data-item name -> set of role strings
+            (``"loader"``/``"performer"``) whose pages declare a non-
+            ``<alwaysinit/>`` Data/Collection stage with that name.
+        """
+        role_by_name: dict[str, set[str]] = {}
+        for page in process.pages:
+            if not page.reachable or page.is_main or page.role is None:
+                continue
+            for stage in page.stages:
+                name = self._data_collection_target_name(stage)
+                if name is None:
+                    continue
+                data_item = next(
+                    (di for di in stage.data_items if not di.is_input and not di.is_output),
+                    None,
+                )
+                if data_item is None or data_item.always_init:
+                    continue
+                role_by_name.setdefault(name.lower(), set()).add(page.role)
+        return role_by_name
+
     def _get_page_declared_names(self, page: Any) -> set[str]:
         """Return the lowercase names of every DATA/COLLECTION stage a BP page declares.
 
@@ -1270,6 +1467,12 @@ class PADGenerator:
         already in ``self._current_suppress_init_names`` once the host's own version
         (collected here) has been hoisted.
 
+        Task 7b3: a non-``<alwaysinit/>`` item (``self._current_role_once_only_names``)
+        is excluded here too — it is hoisted exactly once, at the role's Main-body top
+        (``_generate_consolidated_flow``), never at this (possibly per-call) body's own
+        top. Its own original-flow-position rendering is separately suppressed via
+        ``_current_suppress_init_names`` (unioned in by ``_hoist_data_inits_from_sources``).
+
         Args:
             stages: The stage list to scan (a page's full ``page.stages``, a split
                 target's stage slice, or a Main-page role's rendered stage subset).
@@ -1282,11 +1485,15 @@ class PADGenerator:
             ``_hoist_data_inits_from_sources``.
         """
         del process, process_map  # unused: no recursion under option A — see docstring
-        return [
-            (stage, host_mapping)
-            for stage in stages
-            if self._data_collection_target_name(stage) is not None
-        ]
+        result: list[tuple[BPStage, dict[str, str] | None]] = []
+        for stage in stages:
+            name = self._data_collection_target_name(stage)
+            if name is None:
+                continue
+            if name.lower() in self._current_role_once_only_names:
+                continue
+            result.append((stage, host_mapping))
+        return result
 
     def _hoist_data_inits_for_inline_copy(
         self,
@@ -1354,6 +1561,12 @@ class PADGenerator:
             if name is None:
                 continue
             name_lower = name.lower()
+            if name_lower in self._current_role_once_only_names:
+                # Task 7b3: a non-alwaysinit item is hoisted exactly once, at the
+                # role's Main-body top — never re-initialised in any inlined copy.
+                # Not a collision (gap 1(a) below): no TODO, this is the Task 7b3
+                # lifetime rule, not two independent BP declarations colliding.
+                continue
             if name_lower in own_input_bound:
                 # This inlined page's own Start-stage input — the caller's argument
                 # applies over the initial value; never re-init it here (gap 1(b)).
@@ -1426,9 +1639,11 @@ class PADGenerator:
         Returns:
             A 2-tuple: (hoisted_inits_text, all_suppress_names). ``all_suppress_names``
             is ``param_suppress_names`` unioned with every DATA/COLLECTION stage's
-            target name found in ``stage_sources`` — pass this as the suppress set
+            target name found in ``stage_sources``, and (Task 7b3) with
+            ``self._current_role_once_only_names`` — pass this as the suppress set
             while rendering the body's (and any nested inline_block/fold's) normal
-            flow, so every hoisted stage renders as "" in place, wherever it lives.
+            flow, so every hoisted stage, and every non-alwaysinit once-only item,
+            renders as "" in place, wherever it lives.
         """
         hoist_targets: set[str] = set()
         for stage, _mapping in stage_sources:
@@ -1436,8 +1651,14 @@ class PADGenerator:
             if name is not None:
                 hoist_targets.add(name.lower())
 
+        # Task 7b3: a non-alwaysinit once-only name must never render at its
+        # in-place flow position anywhere in this role's output, including while
+        # rendering the hoisted lines themselves (a hoisted stage's expression could
+        # in principle reference one via a nested inline_block/fold — defensive).
+        effective_param_suppress = set(param_suppress_names) | self._current_role_once_only_names
+
         previous = self._current_suppress_init_names
-        self._current_suppress_init_names = set(param_suppress_names)
+        self._current_suppress_init_names = effective_param_suppress
         try:
             hoisted_lines: list[str] = []
             seen_lines: set[str] = set()
@@ -1449,7 +1670,7 @@ class PADGenerator:
         finally:
             self._current_suppress_init_names = previous
 
-        all_suppress = set(param_suppress_names) | hoist_targets
+        all_suppress = effective_param_suppress | hoist_targets
         return "\n".join(hoisted_lines), all_suppress
 
     def _get_input_bound_names(self, page: Any) -> dict[str, str]:
