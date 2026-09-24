@@ -1375,6 +1375,51 @@ green, and no new full-suite failures beyond the 10 known PID_0127 ones.
 
 ---
 
+## Task 7b2 — `generator/pad.py`: bind caller inputs/outputs for inlined (`inline_block`/`fold`) pages
+
+**Depends on:** Task 7b0
+**Files in scope:** `src/flowsmith/generator/pad.py` (`_render_call_or_inline` inline_block/fold
+branches and the per-copy init hoisting only), `tests/generator/test_pad.py`
+**Required reading:** the Task 7b0 section (item 4, item 8 and its clarifications);
+`docs/reviews/7b0-2026-09-24-fixpass5.md` gaps 1-2.
+
+**Why:** Task 7b0 gives `FUNCTION`-shaped pages real `In_`/`Out_` parameters, but an inlined page
+has no parameter mechanism. Its Start-stage inputs are (correctly) no longer re-initialised in the
+copy, but the caller's input value is never assigned either. 10 PID_0171 inputs are silently lost,
+e.g. Loader `txt_QueueName` (caller passes `[ConfigFileData.Queue Name]`) and Performer
+`txt_EntryID` (`[Item Data.EntryID]`). BP applies the caller's input when the page starts, so the
+inlined copy must do the same.
+
+**Do:**
+1. At the start of each inlined copy (with its other per-copy inits, Task 7b0 item 8), emit
+   `SET <inlined page's input variable> TO <caller's input expression>` for every BP input the
+   calling stage passes. Use the captured `stage=` binding (`inputs_stage_map`), the existing
+   naming and `_translate_bp_expression`, with helper actions emitted before the `SET`. Skip the
+   `SET` when both sides resolve to the same PAD name, or when BP passes no value. An unresolvable
+   name or expression gets a `# TODO` naming the BP input and page; never drop it silently.
+2. After each inlined copy, emit `SET <caller's target variable> TO <inlined page's output
+   variable>` for every BP output the calling stage maps (`outputs_stage_map`). Apply the same skip
+   and `# TODO` rules.
+3. Treat an inlined page's End-stage outputs like its inputs in the item-8 collision check: a name
+   that is an output handed back to the host is a designed hand-off, not a collision. This removes
+   the Loader `DataCollection` false-positive `# TODO` (review fp5 gap 2).
+4. Tests on a synthetic process (non-PID_171 names): an inlined page with 2 inputs (one whose
+   parameter name differs from its `stage=` data item) and 1 output, inlined twice with different
+   argument values. Check that each copy assigns its own caller's values at its start and copies
+   the output back after; that a same-name binding is skipped; that an unresolvable input yields a
+   `# TODO`; and that an output hand-off doesn't produce a collision TODO. Mutation-check each test.
+
+**Done when:** regenerating `PID_0171.bprelease` shows every inlined copy assigning its caller's
+inputs at its start (all 10 inputs listed in the fp5 review, or a `# TODO` for each unresolvable
+one) and copying mapped outputs back; there is no `DataCollection` collision TODO; and there are no
+regressions to Task 7b0's behaviour. Tests green, and no new full-suite failures beyond the 10
+known PID_0127 ones.
+
+**Out of scope:** renaming colliding variables (Task 7b1); translating the inlined pages' own
+stage bodies (Task 5b).
+
+---
+
 ## Task 7b — `generator/pad.py`: consecutive-exception dispatch completion (BP behaviour)
 
 **Depends on:** Task 7b0
