@@ -158,6 +158,16 @@ class PADGenerator:
         # _render_stage's DATA/COLLECTION branches.
         self._current_suppress_init_names: set[str] = set()
 
+        # Instance variable holding the BPPage currently being rendered as a body
+        # (Main page for a role, a "function"-shaped page, or a "split" page's whole
+        # page — never just a rendered subset/slice), set before rendering that body's
+        # stages and restored afterward. Task 7b0 fix pass 5 gap 1: consulted by
+        # _hoist_data_inits_for_inline_copy so the "declared by both the host page and
+        # the inlined page" check (item 8 clarification) is checked against the host's
+        # *full* BP page declarations, not just the current role/slice's rendered
+        # subset — docs/reviews/7b0-2026-09-24-fixpass4.md gap 1(a)/(b).
+        self._current_host_page: Any | None = None
+
     def generate_process(
         self,
         process: BPProcess,
@@ -579,7 +589,12 @@ class PADGenerator:
             )
 
             previous_suppress = self._current_suppress_init_names
+            previous_host_page = self._current_host_page
             self._current_suppress_init_names = suppress_names
+            # Fix pass 5 gap 1: the host page for any inline_block/fold call rendered
+            # inside this body is Main Page itself (its full declarations, not just
+            # this role's rendered subset) — see _hoist_data_inits_for_inline_copy.
+            self._current_host_page = main_page
             try:
                 actions_content = self._render_stage_list_with_coarse_blocks(
                     stages_to_render,
@@ -590,6 +605,7 @@ class PADGenerator:
                 )
             finally:
                 self._current_suppress_init_names = previous_suppress
+                self._current_host_page = previous_host_page
 
             if hoisted_inits:
                 actions_content = (
@@ -678,16 +694,21 @@ class PADGenerator:
                 )
                 return result
 
-            elif shape == "inline_block":
-                # Render as a BLOCK inside a container (usually Loader_Main_Body)
-                return self._render_inline_block(
-                    page, shape_info, process, process_map, variable_name_mapping
-                )
-
-            elif shape == "fold":
-                # Render stages directly into container with no wrapper
-                return self._render_fold(
-                    page, shape_info, process, process_map, variable_name_mapping
+            elif shape in ("inline_block", "fold"):
+                # Unreachable in practice: the only caller (generate_process's
+                # per-role loop, ~L436-444) already ``continue``s past every
+                # inline_block/fold page before calling this method — those pages
+                # are only ever rendered on demand, from _render_call_or_inline's
+                # own inline_block/fold branches (item 8, option A's per-copy
+                # init/suppression logic). Task 7b0 fix pass 5 gap 6
+                # (docs/reviews/7b0-2026-09-24-fixpass4.md (e)): raise instead of
+                # rendering, so a future caller can never bypass option A's
+                # per-inlined-copy data-init handling by reaching this path.
+                raise GenerationError(
+                    f"Page '{page.name}' has shape '{shape}' and must be rendered "
+                    "only via _render_call_or_inline's inline_block/fold branches "
+                    "(Task 7b0 item 8, option A) — _render_page_in_consolidated_flow "
+                    "has no per-copy data-init handling for it"
                 )
 
             elif shape == "split":
@@ -804,7 +825,11 @@ class PADGenerator:
                 target_page, process, process_map, inline_mapping
             )
             previous_suppress = self._current_suppress_init_names
+            previous_host_page = self._current_host_page
             self._current_suppress_init_names = copy_suppress
+            # Fix pass 5 gap 1: a further inline_block/fold nested inside this copy
+            # treats this copy's own page as its host, not the outer host.
+            self._current_host_page = target_page
             try:
                 # Render the target page's stages
                 action_lines: list[str] = []
@@ -816,6 +841,7 @@ class PADGenerator:
                 actions_content = "\n".join(action_lines)
             finally:
                 self._current_suppress_init_names = previous_suppress
+                self._current_host_page = previous_host_page
 
             if local_inits:
                 actions_content = (
@@ -862,7 +888,11 @@ class PADGenerator:
                 target_page, process, process_map, fold_mapping
             )
             previous_suppress = self._current_suppress_init_names
+            previous_host_page = self._current_host_page
             self._current_suppress_init_names = copy_suppress
+            # Fix pass 5 gap 1: a further inline_block/fold nested inside this copy
+            # treats this copy's own page as its host, not the outer host.
+            self._current_host_page = target_page
             try:
                 # Render the target page's stages
                 action_lines: list[str] = []
@@ -874,6 +904,7 @@ class PADGenerator:
                 actions_content = "\n".join(action_lines)
             finally:
                 self._current_suppress_init_names = previous_suppress
+                self._current_host_page = previous_host_page
 
             if local_inits:
                 actions_content = (
@@ -1179,6 +1210,30 @@ class PADGenerator:
             return stage.name
         return None
 
+    def _get_page_declared_names(self, page: Any) -> set[str]:
+        """Return the lowercase names of every DATA/COLLECTION stage a BP page declares.
+
+        Task 7b0 fix pass 5 gap 1(a): the "declared by both the host page and the
+        inlined page" check (item 8 clarification, ``docs/reviews/
+        7b0-2026-09-24-fixpass4.md`` gap 1) must consult **every** data item the host
+        BP page declares, not only the subset the current role/slice happens to
+        render — a name on the other role's side of the Main-page split (e.g. Loader's
+        ``dtb_MailItems``, whose Main-page ``Mail Items`` DATA stage sits in the
+        Performer-role stage range) still counts.
+
+        Args:
+            page: The host BPPage (its full ``page.stages``, unfiltered by role/slice).
+
+        Returns:
+            A set of lowercase DATA/COLLECTION target names declared anywhere on
+            ``page``.
+        """
+        return {
+            name.lower()
+            for stage in page.stages
+            if (name := self._data_collection_target_name(stage)) is not None
+        }
+
     def _collect_hoistable_stage_sources(
         self,
         stages: list[BPStage],
@@ -1234,10 +1289,33 @@ class PADGenerator:
         Task 7b0 Do item 8, option A: each inlined copy of an inline_block/fold target
         gets its own data initialisations at the start of that copy — a page inlined
         twice initialises twice (e.g. 'Sample Manager - Explorer', inlined twice into
-        'Enter Results in App', re-inits its retry counter each time) — *except* a name
-        already hoisted by an ancestor host body (present in
-        ``self._current_suppress_init_names`` on entry, e.g. the shared ``dtb_MailItems``
-        case): that name inits once at the host's top and must not repeat here.
+        'Enter Results in App', re-inits its retry counter each time) — *except*, in
+        priority order:
+
+        1. (fix pass 5 gap 1(b)) a name that is this inlined page's own Start-stage
+           input: BP applies the caller's input value over the initial value, so the
+           inlined page's own declaration is never re-run — no TODO, this is the
+           intended input hand-off, not a collision (e.g. Loader's 'Populate Queue'
+           receiving 'Mail Items' from the preceding 'Fetch Emails from Mailbox'
+           CALL's captured output).
+        2. (fix pass 5 gap 1(a), ``docs/reviews/7b0-2026-09-24-fixpass4.md``) a name
+           declared anywhere on ``self._current_host_page`` — the host BP page's
+           *full* declarations, not just this body's rendered role/slice subset —
+           even when the host's own declaration isn't rendered in this body at all
+           (e.g. it sits on the other role's side of the Main-page split). This is a
+           genuine cross-page name collision (same PAD variable, two independent BP
+           declarations, neither one a caller-to-callee hand-off), so it gets a
+           ``# TODO`` naming the suppressed per-run reset (fix pass 5 gap 2, Task
+           7b1) — e.g. Result Entry / Sample Manager - Explorer's shared 'Retry
+           Count'. Checked before the plain ancestor-suppress case below so a host
+           that *does* render its own copy of the name in this same body (already in
+           ``self._current_suppress_init_names``) still gets flagged, not silently
+           skipped.
+        3. a name already hoisted/suppressed by an ancestor host body this run for an
+           unrelated reason (present in ``self._current_suppress_init_names`` on
+           entry, e.g. it coincides with an ambient FUNCTION parameter name) — inits
+           once elsewhere and must not repeat here; no TODO, since it is not
+           necessarily a second BP page declaration.
 
         Args:
             target_page: The inline_block/fold target BPPage being inlined.
@@ -1250,23 +1328,52 @@ class PADGenerator:
             A 2-tuple: (hoisted_inits_text, copy_suppress_names) where
             ``copy_suppress_names`` is the suppress set to use while rendering this
             inlined copy's remaining stages — the inherited ancestor suppress set plus
-            this copy's own newly hoisted names.
+            this copy's own newly hoisted/suppressed names.
         """
         ancestor_suppress = self._current_suppress_init_names
+        host_page = self._current_host_page
+        host_declared = self._get_page_declared_names(host_page) if host_page is not None else set()
+        own_input_bound = self._get_input_bound_names(target_page)
+
         own_sources: list[tuple[BPStage, dict[str, str] | None]] = []
+        collision_todos: list[str] = []
+        collision_suppress: set[str] = set()
         for stage in target_page.stages:
             name = self._data_collection_target_name(stage)
             if name is None:
                 continue
-            if name.lower() in ancestor_suppress:
-                # Declared by both the host and this inlined page — already hoisted
-                # and rendered once at the host's top; never repeat it here.
+            name_lower = name.lower()
+            if name_lower in own_input_bound:
+                # This inlined page's own Start-stage input — the caller's argument
+                # applies over the initial value; never re-init it here (gap 1(b)).
+                continue
+            if host_page is not None and name_lower in host_declared:
+                # Declared by both the host BP page and this inlined page (gap 1(a)):
+                # a cross-page name collision, not a caller-supplied input. Suppress
+                # the per-copy reset the inlined page relied on and flag it (gap 2).
+                # Checked ahead of the plain ancestor-suppress case so a host that
+                # renders its own copy in this very body is still flagged.
+                collision_suppress.add(name_lower)
+                collision_todos.append(
+                    f"# TODO: '{name}' per-run reset suppressed — declared on both "
+                    f"'{host_page.name}' and '{target_page.name}'; the two BP data "
+                    "items collapse into one PAD variable under Task 7b0's all-GLOBAL "
+                    "output (Task 7b1 name-collision disambiguation)"
+                )
+                continue
+            if name_lower in ancestor_suppress:
+                # Already hoisted/suppressed once elsewhere, for an unrelated reason.
                 continue
             own_sources.append((stage, mapping))
 
-        return self._hoist_data_inits_from_sources(
+        hoisted_text, suppress_from_sources = self._hoist_data_inits_from_sources(
             own_sources, process, process_map, ancestor_suppress
         )
+        all_suppress = suppress_from_sources | set(own_input_bound.keys()) | collision_suppress
+        if collision_todos:
+            todo_text = "\n".join(collision_todos)
+            hoisted_text = f"{todo_text}\n{hoisted_text}" if hoisted_text else todo_text
+        return hoisted_text, all_suppress
 
     def _hoist_data_inits_from_sources(
         self,
@@ -1369,25 +1476,45 @@ class PADGenerator:
         Scans every expression-bearing field the parser captures on a stage — action/
         CALL input expressions and CALCULATION assignments (``params_map`` values,
         ``parser/process.py`` L274/L298/L369-391), DECISION/CHOICE conditions
-        (``decision_expression``), and ``stage=``-bound call input/output data-item
-        names (``inputs_stage_map``/``outputs_stage_map`` values) — for a case-
-        insensitive occurrence of ``name_lower``. BP references a data item either
-        bracketed (``[FinalProduct_Collection]``) or dotted (``FinalProduct_Collection.
-        SomeColumn``); a substring match catches both without needing to parse BP
-        expression syntax.
+        (``decision_expression``), ``stage=``-bound call input/output data-item names
+        (``inputs_stage_map``/``outputs_stage_map`` values) and CALCULATION
+        assignment *targets* (``params_map`` keys, e.g. ``FinalProduct_Collection.
+        Column8`` — a stage that only writes a data item still needs it passed
+        through) — for a case-insensitive, whole-token occurrence of ``name_lower``.
+        BP references a data item either bracketed (``[FinalProduct_Collection]``),
+        dotted (``FinalProduct_Collection.SomeColumn``) or bare; a ``\\b``-bounded
+        regex match catches all three while a raw substring match would not (Task
+        7b0 fix pass 5 gap 4, ``docs/reviews/7b0-2026-09-24-fixpass4.md`` gap (d)):
+        ``_`` is a regex word character, so ``\\bsampleid\\b`` does not match inside
+        ``old_sampleid``, and ``[``/``]``/``.`` are all non-word characters, so the
+        same pattern already matches both the bracketed and dotted forms without a
+        separate pattern for each.
+
+        ``params_map`` keys/values starting with ``_`` are parser metadata (e.g.
+        ``_vbo_object``/``_vbo_action``, ``parser/process.py`` L401/L403) whose
+        *values* are VBO/action names, not data-item references — excluded, else a
+        stage whose action name happens to contain the data-item name as a word
+        (P960: ``Close SampleID & Analysis Window`` via ``_vbo_action``) is a false
+        positive.
 
         Args:
             stage: Any BPStage.
             name_lower: The lowercase BP data-item name to look for.
 
         Returns:
-            True if any expression field on the stage contains ``name_lower``.
+            True if any expression field on the stage references ``name_lower`` as
+            a whole token.
         """
+        pattern = re.compile(rf"\b{re.escape(name_lower)}\b", re.IGNORECASE)
+
         candidates: list[str | None] = [stage.decision_expression]
-        candidates.extend(stage.params_map.values())
+        candidates.extend(
+            value for key, value in stage.params_map.items() if not key.startswith("_")
+        )
+        candidates.extend(key for key in stage.params_map if not key.startswith("_"))
         candidates.extend(stage.inputs_stage_map.values())
         candidates.extend(stage.outputs_stage_map.values())
-        return any(text and name_lower in text.lower() for text in candidates)
+        return any(text and pattern.search(text) for text in candidates)
 
     def _unassigned_output_todos(
         self, actions_content: str, output_param_names: list[str]
@@ -1553,7 +1680,11 @@ class PADGenerator:
             )
 
             previous_suppress = self._current_suppress_init_names
+            previous_host_page = self._current_host_page
             self._current_suppress_init_names = suppress_names
+            # Fix pass 5 gap 1: this page is the host for any inline_block/fold call
+            # rendered inside its body — see _hoist_data_inits_for_inline_copy.
+            self._current_host_page = page
             try:
                 # Render all stages in the page, applying coarse BLOCK pattern (§A5, §B15)
                 # where the page has Block stages with a persisted recover_stage_id (Task 4b).
@@ -1575,6 +1706,7 @@ class PADGenerator:
                     )
             finally:
                 self._current_suppress_init_names = previous_suppress
+                self._current_host_page = previous_host_page
 
             if hoisted_inits:
                 actions_content = (
@@ -1605,103 +1737,6 @@ class PADGenerator:
 
         except Exception as e:
             raise GenerationError(f"Failed to render page '{page.name}' as function: {e}") from e
-
-    def _render_inline_block(
-        self,
-        page: Any,
-        shape_info: dict[str, Any],
-        process: BPProcess | None = None,
-        process_map: dict[str, Any] | None = None,
-        variable_name_mapping: dict[str, str] | None = None,
-    ) -> str:
-        """Render a page as an inline BLOCK (not a separate FUNCTION).
-
-        Args:
-            page: The BPPage.
-            shape_info: The shape mapping entry for this page.
-            process: Optional BPProcess (used for SubSheet call resolution).
-            process_map: Optional process entry from page_target_map.yaml.
-            variable_name_mapping: Optional dict mapping lowercase BP names to PAD names (Task 5b).
-
-        Returns:
-            Rendered BLOCK content.
-        """
-        block_name = shape_info.get("block_name", page.name)
-        container = shape_info.get("container", "")
-        citation = shape_info.get("citation", "§B14")
-        notes = shape_info.get("notes", "")
-
-        # Render all stages
-        action_lines: list[str] = []
-        for stage in page.stages:
-            rendered = self._render_stage(stage, process, process_map, variable_name_mapping)
-            if rendered:
-                action_lines.append(rendered)
-
-        actions_content = "\n".join(action_lines)
-        epilogue = self._render_goto_epilogue(actions_content)
-        if epilogue:
-            actions_content = f"{actions_content}\n{epilogue}"
-
-        # Render the BLOCK wrapper
-        block_template = self.env.get_template("subflow.robin.j2")
-        block = block_template.render(
-            subflow_name=block_name,
-            actions=actions_content,
-            construct_type="block",
-        )
-
-        # Add citation comment
-        result = f"# {citation} — inline_block: '{page.name}' → BLOCK '{block_name}'"
-        if container:
-            result += f"\n# NOTE: intended to inline into '{container}' (container not synthesized yet — Task 5c)"
-        if notes:
-            result += f"\n# {notes}"
-        result += f"\n{block}"
-        return result
-
-    def _render_fold(
-        self,
-        page: Any,
-        shape_info: dict[str, Any],
-        process: BPProcess | None = None,
-        process_map: dict[str, Any] | None = None,
-        variable_name_mapping: dict[str, str] | None = None,
-    ) -> str:
-        """Render a page's stages directly into container with no wrapper (fold).
-
-        Args:
-            page: The BPPage.
-            shape_info: The shape mapping entry for this page.
-            process: Optional BPProcess (used for SubSheet call resolution).
-            process_map: Optional process entry from page_target_map.yaml.
-            variable_name_mapping: Optional dict mapping lowercase BP names to PAD names (Task 5b).
-
-        Returns:
-            Rendered content with fold markers.
-        """
-        container = shape_info.get("container", "")
-        citation = shape_info.get("citation", "§B14")
-        notes = shape_info.get("notes", "")
-
-        # Render all stages
-        action_lines: list[str] = []
-        for stage in page.stages:
-            rendered = self._render_stage(stage, process, process_map, variable_name_mapping)
-            if rendered:
-                action_lines.append(rendered)
-
-        actions_content = "\n".join(action_lines)
-
-        # Emit fold markers (no FUNCTION/BLOCK wrapper)
-        result = f"# BEGIN fold: '{page.name}' ({citation})"
-        if container:
-            result += f"\n# NOTE: mapped container '{container}' — content inlined at call site"
-        if notes:
-            result += f"\n# {notes}"
-        result += f"\n{actions_content}\n"
-        result += f"# END fold: '{page.name}'"
-        return result
 
     def _split_page_into_functions(
         self,
@@ -1832,7 +1867,13 @@ class PADGenerator:
             )
 
             previous_suppress = self._current_suppress_init_names
+            previous_host_page = self._current_host_page
             self._current_suppress_init_names = suppress_names
+            # Fix pass 5 gap 1: the host for any inline_block/fold call rendered
+            # inside a sub-FUNCTION is the whole split page (its full declarations,
+            # not just this sub-FUNCTION's stage slice) — Result Entry's sub-
+            # FUNCTIONs inlining Sample Manager - Explorer (gap 2, num_RetryCount).
+            self._current_host_page = page
             try:
                 # Render stages for this target
                 action_lines: list[str] = []
@@ -1856,6 +1897,7 @@ class PADGenerator:
                     actions_content = f"{actions_content}\n{todo}" if actions_content else todo
             finally:
                 self._current_suppress_init_names = previous_suppress
+                self._current_host_page = previous_host_page
 
             if hoisted_inits:
                 actions_content = (

@@ -3747,7 +3747,21 @@ def test_7b0_shared_name_host_and_inline_inits_once_at_host_top() -> None:
     page and the inlined page initialises once, at the host body's top — and is not
     repeated inside the inlined copy (Loader 'Main Page' + inline_block target
     'Populate Queue' both declare a 'Mail Items' data item, review 2026-09-24-
-    fixpass3 gap 3 / pid-171-us-process-lims-prelude.md L370, L1302)."""
+    fixpass3 gap 3 / pid-171-us-process-lims-prelude.md L370, L1302).
+
+    Fix pass 5 gap 3 (``docs/reviews/7b0-2026-09-24-fixpass4.md`` §(c)): the original
+    version of this test asserted on the ``# VERIFY:``-band-only marker, which breaks
+    for reasons unrelated to the behaviour under test if the confidence band ever
+    changes, and it declared the host's own DATA stage *before* the CALL in flow
+    order, so it could not tell "hoisted to the host's top" apart from "rendered at
+    its own flow position" (both would land before the CALL either way). This version
+    asserts on the actual rendered PAD variable name (both sides given the same
+    explicit ``variable_name_mapping``, so there is exactly one true target name to
+    check) and declares the host's own DATA stage *after* the CALL, so only a real
+    top-of-body hoist — not flow position — puts the ``SET`` before the ``CALL``.
+    Since the shared name here is not one of the fold target's own Start-stage
+    inputs, it is a genuine cross-page collision (fix pass 5 gap 2) and gets the
+    Task 7b1 TODO too."""
     gen = PADGenerator()
     fold_page = BPPage(
         page_id="P_FOLD",
@@ -3761,30 +3775,37 @@ def test_7b0_shared_name_host_and_inline_inits_once_at_host_top() -> None:
         role="performer",
         stages=[
             _annotated_start("s0", []),
-            _data_stage("s1", "shared_var"),
-            _call_stage("s2", "Call Fold", processid="P_FOLD", params_map={}),
+            _call_stage("s1", "Call Fold", processid="P_FOLD", params_map={}),
+            # Declared AFTER the call in flow order: only a real top-of-body hoist
+            # (not the stage's own flow position) can put its SET before the CALL.
+            _data_stage("s2", "shared_var"),
             _annotated_end("s3", []),
         ],
     )
     process = make_process(pages=[host_page, fold_page], name="WidgetFlow")
     process_map = {"Fold Target": {"shape": "fold", "container": "Host Page"}}
+    variable_name_mapping = gen._build_variable_name_mapping(process)
 
     rendered = gen._render_page_as_function(
-        host_page, process, {"shape": "function"}, process_map=process_map
+        host_page,
+        process,
+        {"shape": "function"},
+        process_map=process_map,
+        variable_name_mapping=variable_name_mapping,
     )
 
-    # Host-side and fold-side rendering use different name-mapping contexts (host's own
-    # DATA stage renders under whatever mapping the caller passed in — here none, so the
-    # raw name; the fold's own copy always applies the full process-wide naming
-    # convention, "txt_SharedVar"), so match on the stable per-stage VERIFY marker
-    # instead of the rendered SET target name.
     lines = rendered.splitlines()
-    set_indices = [i for i, ln in enumerate(lines) if "VERIFY: shared_var" in ln]
+    set_indices = [i for i, ln in enumerate(lines) if ln.strip().startswith("SET txt_SharedVar TO")]
     assert len(set_indices) == 1, "A name declared by both host and inline target inits once"
     begin_idx = next(i for i, ln in enumerate(lines) if "# BEGIN fold: 'Fold Target'" in ln)
     assert set_indices[0] < begin_idx, (
-        "The single shared init must be hoisted to the host's top, before the fold's own copy"
+        "The single shared init must be hoisted to the host's top, before the fold's "
+        "own inlined content — not left at its own (later) flow position"
     )
+    assert (
+        "# TODO: 'shared_var' per-run reset suppressed — declared on both "
+        "'Host Page' and 'Fold Target'" in rendered
+    ), "A non-input-bound shared name is a genuine collision and must be flagged (Task 7b1)"
 
 
 def test_7b0_main_hoisting_respects_loader_performer_role_filter() -> None:
@@ -3944,3 +3965,337 @@ def test_7b0_hoisted_inits_deduplicated() -> None:
     assert rendered.count("SET dup_var TO %SomeInitialVar%") == 1, (
         "Two DATA stages declaring the same name/value must hoist a single init line"
     )
+
+
+def test_7b0_inline_block_own_init_renders_at_inline_copy_start_not_host_top() -> None:
+    """Task 7b0 fix pass 5 gap 3 (item 11): the inline_block branch's own per-copy
+    init placement (pad.py ~L822) had no direct test — the reviewer's mutant M4
+    (docs/reviews/7b0-2026-09-24-fixpass4.md) moved it to the END of the copy instead
+    of the start and passed the full suite undetected, because only the fold branch
+    (test_7b0_fold_own_init_renders_at_inline_copy_start_not_host_top) was covered.
+    This mirrors that test for inline_block."""
+    gen = PADGenerator()
+    inline_page = BPPage(
+        page_id="P_INLINE",
+        name="Inline Target",
+        role="performer",
+        stages=[
+            # BP declares the Calculation BEFORE the Data stage - the init must
+            # still move to the inlined copy's own start, ahead of this line.
+            _calc_stage("f0", "Compute Flag", "inline_flag", "1"),
+            _data_stage("f1", "only_in_inline_var"),
+        ],
+    )
+    host_page = BPPage(
+        page_id="P_HOST",
+        name="Host Page",
+        role="performer",
+        stages=[
+            _annotated_start("s0", []),
+            _call_stage("s1", "Call Inline", processid="P_INLINE", params_map={}),
+            _annotated_end("s2", []),
+        ],
+    )
+    process = make_process(pages=[host_page, inline_page], name="WidgetFlow")
+    process_map = {
+        "Inline Target": {
+            "shape": "inline_block",
+            "block_name": "Inline Block",
+            "container": "Host Page",
+        }
+    }
+
+    rendered = gen._render_page_as_function(
+        host_page, process, {"shape": "function"}, process_map=process_map
+    )
+
+    lines = rendered.splitlines()
+    begin_idx = next(i for i, ln in enumerate(lines) if "inline_block: 'Inline Target'" in ln)
+    set_idx = next(
+        i for i, ln in enumerate(lines) if ln.strip().startswith("SET txt_OnlyInInlineVar TO")
+    )
+    calc_idx = next(i for i, ln in enumerate(lines) if "SET inline_flag TO 1" in ln)
+    end_idx = next(i for i, ln in enumerate(lines) if ln.strip() == "END")
+    assert begin_idx < set_idx < calc_idx < end_idx, (
+        "The inline_block target's own init must be hoisted to the start of its own "
+        "inlined copy (ahead of the copy's other stages), and never to the host's top "
+        "or the end of the copy"
+    )
+    assert sum(1 for ln in lines if ln.strip().startswith("SET txt_OnlyInInlineVar TO")) == 1
+
+
+def test_7b0_host_declared_name_outside_rendered_role_subset_still_suppresses_copy() -> None:
+    """Task 7b0 fix pass 5 gap 1(a): the "declared by both" check must consult the
+    host BP page's FULL declarations, not just the current role/slice's rendered
+    subset (docs/reviews/7b0-2026-09-24-fixpass4.md gap 1(a) - Main Page's own
+    'Mail Items' DATA stage sits on the Performer side of the role split, but the
+    Loader-role inline copy of 'Populate Queue' must still not re-init it). Modelled
+    here with Main Page's shared DATA stage placed strictly on the Performer
+    (post-split) side, and the fold target inlined on the Loader (pre-split) side."""
+    gen = PADGenerator()
+    fold_page = BPPage(
+        page_id="P_FOLD",
+        name="Fold Target",
+        role="loader",
+        stages=[_data_stage("f0", "shared_var")],
+    )
+    main_page = BPPage(
+        page_id="P_MAIN",
+        name="Main Page",
+        is_main=True,
+        stages=[
+            _annotated_start("s0", []),
+            _call_stage("s1", "Call Fold", processid="P_FOLD", params_map={}),
+            make_annotated_stage(
+                stage_id=GET_NEXT_ITEM_STAGE_ID,
+                name="Get Next Item",
+                stage_type=StageType.ACTION,
+                target_type="GetNextItem",
+                target_module="WorkQueue",
+            ),
+            # Host's own declaration of the SAME name, but on the Performer
+            # (post-split) side - never rendered in the Loader-role body at all.
+            _data_stage("s2", "shared_var"),
+        ],
+    )
+    process = make_process(pages=[main_page, fold_page], name="WidgetFlow")
+    gen.page_target_map["WidgetFlow"] = {
+        "Fold Target": {"shape": "fold", "container": "Loader_Main_Body"}
+    }
+
+    loader_rendered = gen._render_main_page_for_role(main_page, process, "loader", {})
+
+    set_lines = [ln for ln in loader_rendered.splitlines() if ln.strip().startswith("SET ")]
+    assert not any("shared_var" in ln.lower() for ln in set_lines), (
+        "A name declared anywhere on the host page - even on the other role's side "
+        "of the split, never rendered in this body - must still suppress the "
+        "inlined copy's own re-init (only the naming TODO may mention it)"
+    )
+    assert (
+        "# TODO: 'shared_var' per-run reset suppressed — declared on both "
+        "'Main Page' and 'Fold Target'" in loader_rendered
+    ), "The suppressed reset must be flagged as a cross-page collision (Task 7b1)"
+
+
+def test_7b0_inlined_page_start_input_filled_by_preceding_call_not_reinitialised() -> None:
+    """Task 7b0 fix pass 5 gap 1(b): an inlined page's own Start-stage input data item
+    is never re-initialised in its inlined copy - BP applies the caller's supplied
+    value over the initial default. Models the real Loader case: 'Populate Queue'
+    receives 'Mail Items' as a Start input, filled by the preceding 'Fetch Emails
+    from Mailbox' CALL's captured output (review 2026-09-24-fixpass4.md defect (c)).
+    No collision TODO, since this is a designed hand-off, not an accidental
+    collision (gap 1(a)/(2))."""
+    gen = PADGenerator()
+    fetch_page = BPPage(
+        page_id="P_FETCH",
+        name="Fetch Emails",
+        role="loader",
+        stages=[
+            _annotated_start("f0", []),
+            _annotated_end("f1", [("Items", "collection", "fetched_items")]),
+        ],
+    )
+    inline_page = BPPage(
+        page_id="P_INLINE",
+        name="Populate Queue",
+        role="loader",
+        stages=[
+            _annotated_start("p0", [("MailItems", "collection", "fetched_items")]),
+            # Populate Queue's own default declaration of the same input's data
+            # item - must never re-run once the caller's CALL has already filled it.
+            _data_stage("p1", "fetched_items", "collection"),
+        ],
+    )
+    host_page = BPPage(
+        page_id="P_HOST",
+        name="Host Page",
+        role="loader",
+        stages=[
+            _annotated_start("s0", []),
+            _call_stage(
+                "s1",
+                "Call Fetch",
+                processid="P_FETCH",
+                params_map={},
+                outputs_stage_map={"Items": "fetched_items"},
+            ),
+            _call_stage("s2", "Call Inline", processid="P_INLINE", params_map={}),
+            _annotated_end("s3", []),
+        ],
+    )
+    process = make_process(pages=[host_page, fetch_page, inline_page], name="WidgetFlow")
+    process_map = {
+        "Fetch Emails": {"shape": "function"},
+        "Populate Queue": {"shape": "inline_block", "block_name": "Populate Queue Block"},
+    }
+
+    rendered = gen._render_page_as_function(
+        host_page, process, {"shape": "function"}, process_map=process_map
+    )
+
+    assert "fetched_items" in rendered, "sanity: the CALL's captured output must be present"
+    assert "%SomeInitialVar%" not in rendered, (
+        "Populate Queue's own default init for its Start input must never render - "
+        "neither hoisted at the copy's start nor at its own flow position"
+    )
+    todo_lines = [ln for ln in rendered.splitlines() if ln.strip().startswith("# TODO:")]
+    assert not any("fetched_items" in ln for ln in todo_lines), (
+        "A Start-input-bound name is a designed hand-off, not a collision - no TODO"
+    )
+
+
+def test_7b0_collision_between_host_and_inline_declared_name_emits_todo_and_suppresses_reset() -> (
+    None
+):
+    """Task 7b0 fix pass 5 gap 2: a name declared by both the host page and the
+    inlined page, where the inlined page's own declaration is NOT one of its
+    Start-stage inputs, is a genuine cross-page name collision (not a designed
+    hand-off) - Result Entry / Sample Manager - Explorer's shared 'Retry Count'
+    (review 2026-09-24-fixpass4.md defect (b), P856-857/P1044-1045/P1084-1085). The
+    per-copy reset is suppressed and flagged with a TODO naming the collision (Task
+    7b1). Unlike the gap-1(a) test above, the host's own declaration IS rendered in
+    this same body (ancestor_suppress already carries the name), which must not
+    silently swallow the TODO."""
+    gen = PADGenerator()
+    fold_page = BPPage(
+        page_id="P_FOLD",
+        name="Retry Sub Page",
+        role="performer",
+        stages=[_data_stage("f0", "retry_count", "number")],
+    )
+    host_page = BPPage(
+        page_id="P_HOST",
+        name="Host Page",
+        role="performer",
+        stages=[
+            _annotated_start("s0", []),
+            _data_stage("s1", "retry_count", "number"),
+            _call_stage("s2", "Call Retry Sub", processid="P_FOLD", params_map={}),
+            _annotated_end("s3", []),
+        ],
+    )
+    process = make_process(pages=[host_page, fold_page], name="WidgetFlow")
+    process_map = {"Retry Sub Page": {"shape": "fold", "container": "Host Page"}}
+    variable_name_mapping = gen._build_variable_name_mapping(process)
+
+    rendered = gen._render_page_as_function(
+        host_page,
+        process,
+        {"shape": "function"},
+        process_map=process_map,
+        variable_name_mapping=variable_name_mapping,
+    )
+
+    assert (
+        "# TODO: 'retry_count' per-run reset suppressed — declared on both "
+        "'Host Page' and 'Retry Sub Page'" in rendered
+    )
+    assert rendered.count("SET num_RetryCount TO") == 1, (
+        "Only the host's single hoisted init must survive - the fold copy's own "
+        "reset must be suppressed, not duplicated"
+    )
+    lines = rendered.splitlines()
+    begin_idx = next(i for i, ln in enumerate(lines) if "# BEGIN fold: 'Retry Sub Page'" in ln)
+    end_idx = next(i for i, ln in enumerate(lines) if "# END fold: 'Retry Sub Page'" in ln)
+    fold_body_lines = lines[begin_idx:end_idx]
+    assert not any("SET num_RetryCount TO" in ln for ln in fold_body_lines), (
+        "The collision suppression must remove the reset from inside the fold copy itself"
+    )
+
+
+def test_7b0_stage_references_data_item_ignores_vbo_metadata_false_positive() -> None:
+    """Task 7b0 fix pass 5 gap 4: _stage_references_data_item must not scan the
+    parser's _vbo_object/_vbo_action metadata values - those are VBO/action names,
+    not data-item references. Review P960 false positive: 'Enter Results in App'
+    was flagged as referencing 'SampleID' only because its VBO action name was
+    'Close SampleID & Analysis Window' (stages 138/146)."""
+    gen = PADGenerator()
+    stage = make_annotated_stage(
+        stage_id="s1",
+        name="Close SampleID Analysis Window",
+        stage_type=StageType.ACTION,
+        target_type="CloseWindow",
+        target_module="MSAA",
+        stage_params_map={
+            "_vbo_object": "clsSampleIDApp",
+            "_vbo_action": "Close SampleID & Analysis Window",
+        },
+    )
+
+    assert gen._stage_references_data_item(stage, "sampleid") is False
+
+
+def test_7b0_stage_references_data_item_whole_token_not_substring() -> None:
+    """Task 7b0 fix pass 5 gap 4: a raw substring match wrongly treats 'Old_SampleID'
+    as a reference to 'SampleID' - the fix must match whole BP data-item tokens
+    only (bracketed, dotted, or bare), never a substring inside a longer name."""
+    gen = PADGenerator()
+    stage = make_annotated_stage(
+        stage_id="s1",
+        name="Compare IDs",
+        stage_type=StageType.CALCULATION,
+        stage_params_map={"widget_flag": "[Old_SampleID]"},
+    )
+
+    assert gen._stage_references_data_item(stage, "sampleid") is False
+    assert gen._stage_references_data_item(stage, "old_sampleid") is True
+
+
+def test_7b0_stage_references_data_item_matches_bracketed_and_dotted_forms() -> None:
+    """Task 7b0 fix pass 5 gap 4: the whole-token match must still catch both the
+    bracketed ([SampleID]) and dotted (FinalProduct_Collection.Column8) BP
+    reference forms."""
+    gen = PADGenerator()
+    bracketed = make_annotated_stage(
+        stage_id="s1",
+        stage_type=StageType.DECISION,
+    )
+    bracketed.decision_expression = "[SampleID]=''"
+    dotted = make_annotated_stage(
+        stage_id="s2",
+        name="Filter Rows",
+        stage_type=StageType.ACTION,
+        target_type="FilterCollection",
+        target_module="Excel",
+        stage_params_map={"Data": "FinalProduct_Collection.Column8"},
+    )
+
+    assert gen._stage_references_data_item(bracketed, "sampleid") is True
+    assert gen._stage_references_data_item(dotted, "finalproduct_collection") is True
+
+
+def test_7b0_stage_references_data_item_includes_assignment_targets() -> None:
+    """Task 7b0 fix pass 5 gap 4: a CALCULATION stage that only WRITES a data item
+    (its params_map key, not value) is still a reference - a sub-FUNCTION that
+    writes 'FinalProduct_Collection.Column8' (Result Entry stages 43-46/58-61/97-100)
+    still needs the parameter passed through, even though it never reads it."""
+    gen = PADGenerator()
+    stage = make_annotated_stage(
+        stage_id="s1",
+        name="Set Column8",
+        stage_type=StageType.CALCULATION,
+        stage_params_map={"FinalProduct_Collection.Column8": "'done'"},
+    )
+
+    assert gen._stage_references_data_item(stage, "finalproduct_collection") is True
+
+
+def test_7b0_render_page_in_consolidated_flow_raises_for_inline_shapes() -> None:
+    """Task 7b0 fix pass 5 gap 6 (docs/reviews/7b0-2026-09-24-fixpass4.md (e)):
+    _render_page_in_consolidated_flow must never render an inline_block/fold page
+    directly - that path has no per-inlined-copy data-init handling (item 8, option
+    A) and would silently bypass it if ever reached. It must raise instead of
+    falling back to the old (pre-item-8) rendering the deleted
+    _render_inline_block/_render_fold helpers used to provide."""
+    gen = PADGenerator()
+    page = BPPage(
+        page_id="P_FOLD",
+        name="Fold Target",
+        role="performer",
+        stages=[_data_stage("f0", "some_var")],
+    )
+    process = make_process(pages=[page], name="WidgetFlow")
+    process_map = {"Fold Target": {"shape": "fold", "container": "Host Page"}}
+
+    with pytest.raises(GenerationError):
+        gen._render_page_in_consolidated_flow(page, process, process_map)
