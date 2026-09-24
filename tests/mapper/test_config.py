@@ -15,7 +15,7 @@ from flowsmith.mapper import (
     VBOEntry,
     load_rules,
 )
-from flowsmith.mapper.config import VBOFusionPattern
+from flowsmith.mapper.config import QueueBinding, VBOFusionPattern
 
 # ── Fixtures ───────────────────────────────────────────────────────────────
 
@@ -375,6 +375,51 @@ class TestVBOEntry:
         assert entry.fusion_patterns[0].sequence == ["Create Instance", "Open Workbook"]
         assert entry.fusion_patterns[1].fused_action == "Excel.CloseExcel.Close"
 
+    def test_queue_bindings_field_defaults_to_empty_list(self) -> None:
+        """queue_bindings field defaults to empty list when absent."""
+        minimal = {
+            "vbo_name": "Test VBO",
+            "runtime": "CLOUD",
+            "confidence_base": 0.75,
+        }
+        entry = VBOEntry(**minimal)
+        assert entry.queue_bindings == []
+        assert isinstance(entry.queue_bindings, list)
+
+    def test_queue_bindings_field_accepts_list(self) -> None:
+        """queue_bindings field accepts list of QueueBinding objects."""
+        binding = QueueBinding(
+            expression_pattern="ConfigFileData.Queue Name",
+            pad_variable="txt_WorkQueueId",
+            citation="DF_PID_171_US_LIMS_Prelude_Main.robin.txt L150, L1371",
+            notes="Config-driven queue ID from Load Config Data function.",
+        )
+        entry = VBOEntry(
+            vbo_name="Blueprism.Automate.clsWorkQueuesActions",
+            runtime="DESKTOP",
+            confidence_base=0.70,
+            queue_bindings=[binding],
+        )
+        assert len(entry.queue_bindings) == 1
+        assert entry.queue_bindings[0].expression_pattern == "ConfigFileData.Queue Name"
+        assert entry.queue_bindings[0].pad_variable == "txt_WorkQueueId"
+
+    def test_queue_bindings_field_validates_malformed_binding(self) -> None:
+        """queue_bindings field rejects malformed binding dicts."""
+        # Missing required expression_pattern field should fail validation
+        with pytest.raises(ValueError):
+            VBOEntry(
+                vbo_name="Test VBO",
+                runtime="DESKTOP",
+                confidence_base=0.70,
+                queue_bindings=[
+                    {
+                        "pad_variable": "txt_WorkQueueId",
+                        # Missing expression_pattern
+                    }
+                ],
+            )
+
 
 # ── VBOFusionPattern model tests ───────────────────────────────────────────
 
@@ -415,6 +460,46 @@ class TestVBOFusionPattern:
             fused_action="Template",
         )
         assert pattern.sequence != other.sequence
+
+
+# ── QueueBinding model tests ───────────────────────────────────────────────
+
+
+class TestQueueBinding:
+    """Test QueueBinding Pydantic model validation."""
+
+    def test_create_minimal(self) -> None:
+        """A QueueBinding can be created with expression_pattern and pad_variable."""
+        binding = QueueBinding(
+            expression_pattern="ConfigFileData.Queue Name",
+            pad_variable="txt_WorkQueueId",
+        )
+        assert binding.expression_pattern == "ConfigFileData.Queue Name"
+        assert binding.pad_variable == "txt_WorkQueueId"
+        assert binding.citation == ""
+        assert binding.notes == ""
+
+    def test_create_with_citation_and_notes(self) -> None:
+        """A QueueBinding can include citation and notes."""
+        binding = QueueBinding(
+            expression_pattern="ConfigFileData.Queue Name",
+            pad_variable="txt_WorkQueueId",
+            citation="DF_PID_171_US_LIMS_Prelude_Main.robin.txt L150, L1371",
+            notes="Config-driven queue ID from Load Config Data function.",
+        )
+        assert binding.expression_pattern == "ConfigFileData.Queue Name"
+        assert binding.pad_variable == "txt_WorkQueueId"
+        assert "L150" in binding.citation
+        assert "Config-driven" in binding.notes
+
+    def test_defaults(self) -> None:
+        """QueueBinding has sensible defaults for optional fields."""
+        binding = QueueBinding(
+            expression_pattern="Test",
+            pad_variable="test_var",
+        )
+        assert binding.citation == ""
+        assert binding.notes == ""
 
 
 # ── MappingConfig model tests ──────────────────────────────────────────────

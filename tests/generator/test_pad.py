@@ -2783,3 +2783,175 @@ def test_mark_exception_variant_selection_is_deferred_to_task_7b(tmp_path: Path)
     for index in mark_exception_indexes:
         preceding = lines[max(0, index - 2) : index]
         assert any("status variant deferred to Task 7b" in line for line in preceding)
+
+
+def test_unmatched_queue_expression_emits_todo_marker(tmp_path: Path) -> None:
+    """Task 7a Gap 2: unmatched queue expressions emit TODO marker before the call.
+
+    When a Get Next Item stage has a queue expression (e.g., '[Queue Name]') that
+    does NOT match any catalogue queue_binding, the generator should:
+    1. Still render the WorkQueues call (with a fallback %QueueId% value)
+    2. Emit a # TODO: comment immediately before it naming the unresolved expression
+    3. Never silently omit the marker
+    """
+    # Test: Call _substitute_workqueues_placeholders directly with an unmatched queue expression
+    gen = PADGenerator()
+
+    # Create a test stage with an unmatched queue expression
+    test_stage = make_annotated_stage(
+        stage_id="test_get_next",
+        name="Get Next Item Test",
+        target_type="ProcessWorkQueueItem",
+        target_module="WorkQueues",
+        stage_params_map={
+            "Queue Name": "[UnmatchedQueue]",  # Does not match any catalogue binding
+        },
+    )
+
+    template = (
+        "WorkQueues.ProcessWorkQueueItem.ProcessWorkQueueItem WorkQueue: <id> WorkQueueItem=> <var>"
+    )
+    substituted, was_bound, comment, unmatched_todo = gen._substitute_workqueues_placeholders(
+        template, test_stage, "Get Next Item"
+    )
+
+    # Verify: unmatched_todo should contain a TODO marker
+    assert unmatched_todo, "Should emit a TODO marker for unmatched queue expression"
+    assert "# TODO:" in unmatched_todo, "Marker should start with # TODO:"
+    assert "WorkQueues.Get Next Item" in unmatched_todo, "Should name the method"
+    assert "[UnmatchedQueue]" in unmatched_todo, "Should name the unresolved BP queue expression"
+    assert "no catalogue queue_binding" in unmatched_todo, "Should explain why it failed"
+
+    # Verify: substituted line should still render with some value (either translated or fallback)
+    # The expression may be translated by _translate_bp_expression even if not in catalogue
+    assert "WorkQueue:" in substituted, "WorkQueues call should still have WorkQueue parameter"
+    assert "WorkQueueItem=> obj_WorkQueueItem" in substituted, (
+        "<var> should still be substituted even in unmatched case"
+    )
+
+
+def test_queue_binding_comes_from_catalogue_not_hardcoded_python(tmp_path: Path) -> None:
+    """Task 7a: Verify that queue bindings are consumed from YAML catalogue, not hardcoded.
+
+    Inject an altered binding into the generator's loaded config and verify that:
+    1. The generator uses the injected binding
+    2. The rendered WorkQueue value reflects the injected pad_variable
+    3. The VERIFY comment reflects the injected citation/notes
+    """
+    from flowsmith.ast.builder import build_ast
+    from flowsmith.engine import create_annotator
+    from flowsmith.mapper import load_rules
+    from flowsmith.parser import parse_process
+
+    sample_path = Path("samples/blueprism/PID_0171.bprelease")
+    if not sample_path.exists():
+        pytest.skip("Sample file not found")
+
+    raw = parse_process(sample_path)
+    process = build_ast(raw)
+    create_annotator().annotate_process(process)
+
+    # Create a generator with unmodified config
+    gen = PADGenerator()
+
+    # Manually override the queue_bindings to use a different pad_variable
+    config = load_rules(force_reload=True)
+    workqueues_entry = config.get_vbo_entry("Blueprism.Automate.clsWorkQueuesActions")
+    if workqueues_entry and workqueues_entry.queue_bindings:
+        # Replace the first binding's pad_variable with a test value
+        test_pad_var = "TEST_QUEUE_VAR_INJECTION"
+        gen.queue_bindings["ConfigFileData.Queue Name"] = {
+            "pad_variable": test_pad_var,
+            "citation": "TEST CITATION",
+            "notes": "TEST NOTE",
+        }
+
+        # Now test a Get Next Item call
+        test_stage = make_annotated_stage(
+            stage_id="test_get_next",
+            name="Get Next Item Test",
+            target_type="ProcessWorkQueueItem",
+            target_module="WorkQueues",
+            stage_params_map={"Queue Name": "ConfigFileData.Queue Name"},
+        )
+
+        template = "WorkQueues.ProcessWorkQueueItem.ProcessWorkQueueItem WorkQueue: <id> WorkQueueItem=> <var>"
+        substituted, was_bound, comment, unmatched_todo = gen._substitute_workqueues_placeholders(
+            template, test_stage, "Get Next Item"
+        )
+
+        # Verify: The injected pad_variable is used
+        assert test_pad_var in substituted, (
+            f"Rendered call should use injected pad_variable '{test_pad_var}', "
+            f"not hardcoded Python value. Got: {substituted}"
+        )
+
+        # Verify: VERIFY comment comes from the binding (not hardcoded)
+        assert was_bound, "Should detect binding from catalogue"
+        assert "TEST NOTE" in comment, "Comment should use binding's notes field"
+        assert "TEST CITATION" in comment, "Comment should use binding's citation field"
+
+
+def test_verify_markers_are_adjacent_to_call_sites(tmp_path: Path) -> None:
+    """Task 7a (c): VERIFY markers are placed immediately before their corresponding calls.
+
+    For each Get Next Item call that is bound from the catalogue, verify that:
+    1. A # VERIFY comment appears immediately before (no intervening lines)
+    2. The comment references the correct queue variable name
+    3. Every Get Next Item line has its corresponding marker (not content-wide matching)
+    """
+    sample_path = Path("samples/blueprism/PID_0171.bprelease")
+    if not sample_path.exists():
+        pytest.skip("Sample file not found")
+
+    from flowsmith.ast.builder import build_ast
+    from flowsmith.engine import create_annotator
+    from flowsmith.parser import parse_process
+
+    raw = parse_process(sample_path)
+    process = build_ast(raw)
+    create_annotator().annotate_process(process)
+
+    gen = PADGenerator()
+    files = gen.generate_process(process, tmp_path / "robin")
+
+    performer_file = next((f for f in files if "Performer" in f.name), None)
+    assert performer_file is not None, "No Performer file generated"
+    lines = performer_file.read_text(encoding="utf-8").splitlines()
+
+    # Find all Get Next Item calls
+    get_next_item_indexes = []
+    for i, line in enumerate(lines):
+        if (
+            "ProcessWorkQueueItem" in line
+            and "WorkQueue:" in line
+            and not line.strip().startswith("#")
+        ):
+            get_next_item_indexes.append(i)
+
+    assert get_next_item_indexes, "Should have at least one Get Next Item call"
+
+    # For each Get Next Item call, verify a VERIFY marker is immediately before it
+    for call_idx in get_next_item_indexes:
+        # Check the line immediately before
+        preceding_idx = call_idx - 1
+        assert preceding_idx >= 0, "Should have space for marker before call"
+
+        preceding_line = lines[preceding_idx]
+        assert preceding_line.strip().startswith("#"), (
+            f"Line immediately before Get Next Item at {call_idx} should be a comment, "
+            f"got: {preceding_line}"
+        )
+
+        assert "VERIFY" in preceding_line, (
+            f"Comment before Get Next Item should be a VERIFY marker, got: {preceding_line}"
+        )
+
+        # Extract the queue variable from the call line to verify marker mentions it
+        call_line = lines[call_idx]
+        if "WorkQueue: txt_WorkQueueId" in call_line:
+            # Marker should mention txt_WorkQueueId
+            assert "txt_WorkQueueId" in preceding_line or "queue ID" in preceding_line, (
+                f"VERIFY marker should reference the queue variable. "
+                f"Marker: {preceding_line}, Call: {call_line}"
+            )

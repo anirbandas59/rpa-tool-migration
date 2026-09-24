@@ -54,6 +54,30 @@ class StageRule(BaseModel):
         return v
 
 
+class QueueBinding(BaseModel):
+    """A queue expression binding for WorkQueues actions.
+
+    Maps Blue Prism queue expressions (e.g., 'ConfigFileData.Queue Name')
+    to PAD variables (e.g., 'txt_WorkQueueId') with citation and notes.
+
+    Fields correspond directly to queue_bindings entries in vbo_catalogue.yaml.
+    """
+
+    expression_pattern: str = Field(
+        description="Blue Prism queue expression pattern to match (e.g., 'ConfigFileData.Queue Name')."
+    )
+    pad_variable: str = Field(
+        description="PAD variable name to substitute (e.g., 'txt_WorkQueueId')."
+    )
+    citation: str = Field(
+        default="", description="Reference to the PAD source (file, line number)."
+    )
+    notes: str = Field(
+        default="",
+        description="Human-readable explanation of the binding (why this PAD variable, when it's set, etc.).",
+    )
+
+
 class VBOFusionPattern(BaseModel):
     """A fusion pattern that collapses multiple adjacent BP stages into one PAD action.
 
@@ -81,6 +105,7 @@ class VBOEntry(BaseModel):
     review_severity, if present, must be "error" or "warn".
     method_actions maps exact BP method names to PAD action templates.
     fusion_patterns defines multi-stage sequences that collapse into one PAD action.
+    queue_bindings maps BP queue expressions to PAD queue variables (WorkQueues only).
     """
 
     vbo_name: str
@@ -92,6 +117,7 @@ class VBOEntry(BaseModel):
     review_severity: str | None = None
     method_actions: dict[str, str] = Field(default_factory=dict)
     fusion_patterns: list[VBOFusionPattern] = Field(default_factory=list)
+    queue_bindings: list[QueueBinding] = Field(default_factory=list)
 
     @field_validator("confidence_base")
     @classmethod

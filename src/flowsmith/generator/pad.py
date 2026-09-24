@@ -129,30 +129,20 @@ class PADGenerator:
         except Exception as e:
             raise GenerationError(f"Failed to load mapping config: {e}") from e
 
-        # Load queue_bindings from raw vbo_catalogue.yaml for WorkQueues queue parameter handling (Task 7a).
+        # Extract queue_bindings from the WorkQueues VBO entry (Task 7a).
         # Queue bindings map BP queue expressions to PAD variables with citations.
         self.queue_bindings: dict[str, dict[str, str]] = {}
-        try:
-            vbo_catalogue_path = Path.cwd() / "mapping" / "vbo_catalogue.yaml"
-            if vbo_catalogue_path.exists():
-                with open(vbo_catalogue_path, encoding="utf-8") as f:
-                    data = yaml.safe_load(f)
-                    if data and isinstance(data, list):
-                        for entry in data:
-                            if entry.get("vbo_name") == "Blueprism.Automate.clsWorkQueuesActions":
-                                bindings = entry.get("queue_bindings", [])
-                                if isinstance(bindings, list):
-                                    for binding in bindings:
-                                        expr_pattern = binding.get("expression_pattern", "")
-                                        if expr_pattern:
-                                            self.queue_bindings[expr_pattern] = {
-                                                "pad_variable": binding.get("pad_variable", ""),
-                                                "citation": binding.get("citation", ""),
-                                                "notes": binding.get("notes", ""),
-                                            }
-        except Exception:
-            # Non-fatal: queue_bindings is optional, generator can continue with fallback matching
-            pass
+        workqueues_entry = self.mapping_config.get_vbo_entry(
+            "Blueprism.Automate.clsWorkQueuesActions"
+        )
+        if workqueues_entry and workqueues_entry.queue_bindings:
+            for binding in workqueues_entry.queue_bindings:
+                if binding.expression_pattern:
+                    self.queue_bindings[binding.expression_pattern] = {
+                        "pad_variable": binding.pad_variable,
+                        "citation": binding.citation,
+                        "notes": binding.notes,
+                    }
 
         # Instance variable to hold the current page name resolution map (built during
         # role-based generation to handle collision disambiguation — Task 6b2).
@@ -1560,7 +1550,7 @@ class PADGenerator:
         stage: BPStage,
         method_name: str,
         variable_name_mapping: dict[str, str] | None = None,
-    ) -> tuple[str, bool, str]:
+    ) -> tuple[str, bool, str, str]:
         """Substitute placeholder tokens in a WorkQueues action template.
 
         Per Task 7a (§Gap 1), template tokens like <id>, <var>, <obj>, <msg>, <text>
@@ -1584,9 +1574,10 @@ class PADGenerator:
                                    used for consistent expression translation.
 
         Returns:
-            A tuple of (substituted_string, was_bound_from_catalogue, dependency_comment).
+            A tuple of (substituted_string, was_bound_from_catalogue, dependency_comment, unmatched_todo_marker).
             was_bound_from_catalogue: True if the queue binding came from queue_bindings catalogue.
             dependency_comment: Citation/notes about where the variable must be assigned.
+            unmatched_todo_marker: TODO comment if queue_name was unmatched, empty string otherwise.
 
         Raises:
             GenerationError: If substitution fails critically.
@@ -1594,6 +1585,7 @@ class PADGenerator:
         result = template
         was_bound_from_catalogue = False
         dependency_comment = ""
+        unmatched_todo_marker = ""
 
         # Queue Name parameter: <id>
         if "<id>" in result:
@@ -1601,6 +1593,7 @@ class PADGenerator:
             id_value = ""
 
             # Task 7a (b): Check queue_bindings catalogue for expression-to-variable mapping
+            matched_from_catalogue = False
             if queue_name:
                 for expr_pattern, binding_info in self.queue_bindings.items():
                     if expr_pattern in queue_name:
@@ -1608,14 +1601,31 @@ class PADGenerator:
                         citation = binding_info["citation"]
                         notes = binding_info["notes"]
                         was_bound_from_catalogue = True
-                        dependency_comment = f"Queue binding from catalogue: {notes} ({citation})"
+                        matched_from_catalogue = True
+                        # Task 7a: VERIFY text from binding's fields (not hardcoded in Python)
+                        dependency_comment = (
+                            f"Get Next Item queue ID '{id_value}' — {notes}. {citation}"
+                        )
                         break
 
             # Fallback: if not bound from catalogue, translate via expression machinery
-            if not id_value and queue_name:
-                id_value, _ = self._translate_bp_expression(queue_name, variable_name_mapping)
-                if not id_value:
+            if not matched_from_catalogue and queue_name:
+                # Task 7a Gap 2: if no catalogue binding matched, emit TODO before rendering
+                translated, _ = self._translate_bp_expression(queue_name, variable_name_mapping)
+                if translated:
+                    id_value = translated
+                    # Still emit TODO because we had to fall back to expression translation
+                    unmatched_todo_marker = (
+                        f"# TODO: WorkQueues.{method_name} queue expression '{queue_name}' "
+                        f"has no catalogue queue_binding — needs manual completion"
+                    )
+                else:
+                    # Expression translation also failed
                     id_value = "%QueueId%"
+                    unmatched_todo_marker = (
+                        f"# TODO: WorkQueues.{method_name} queue expression '{queue_name}' "
+                        f"has no catalogue queue_binding — needs manual completion"
+                    )
             elif not id_value:
                 id_value = "%QueueId%"
 
@@ -1657,7 +1667,7 @@ class PADGenerator:
                 text_value = "%Status%"
             result = result.replace("<text>", text_value)
 
-        return result, was_bound_from_catalogue, dependency_comment
+        return result, was_bound_from_catalogue, dependency_comment, unmatched_todo_marker
 
     def _render_stage(
         self,
@@ -1947,18 +1957,19 @@ class PADGenerator:
             if band != ConfidenceBand.MANUAL:
                 method_template = self._lookup_method_actions_template(stage)
                 if method_template:
-                    substituted, was_bound_from_catalogue, dependency_comment = (
+                    substituted, was_bound_from_catalogue, dependency_comment, unmatched_todo = (
                         self._substitute_workqueues_placeholders(
                             method_template, stage, method_name, variable_name_mapping
                         )
                     )
+                    # Task 7a Gap 2: emit TODO if queue expression is unmatched
+                    if unmatched_todo:
+                        lines.append(unmatched_todo)
+
                     # Task 7a (a): Add VERIFY comment before Get Next Item if binding came from catalogue
                     if method_name == "Get Next Item" and was_bound_from_catalogue:
-                        lines.append(
-                            f"# VERIFY: Get Next Item queue ID '{substituted.split('WorkQueue: ')[1].split()[0]}' "
-                            f"must be assigned from obj_Config['Ctrl_WorkQueueId'] in Load Config Data function "
-                            f"(DF_PID_171_US_LIMS_Prelude_Main.robin.txt L150)"
-                        )
+                        # Build VERIFY text from the binding's citation and notes
+                        lines.append(f"# VERIFY: {dependency_comment}")
                     if method_name == "Mark Exception":
                         lines.append("# VERIFY: Mark Exception status variant deferred to Task 7b")
                     lines.append(substituted)
