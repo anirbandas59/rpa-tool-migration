@@ -1268,9 +1268,22 @@ line range); do not assume it.
    main body for the Main page. It is never emitted at the stage's position in the flow. This
    stops a caller's own initialisation from wiping a collection a `CALL` just returned (review
    examples: P143→P286 `dtb_FinalProductCollection`, P291→P292 `dtb_SammaryCollection`, Loader
-   L109→L154 `dtb_MailItems`). Apply the same rule per sub-`FUNCTION` for `split` pages, and per
-   inlined content for `inline_block`/`fold` (emitted at the top of the inlined block's host body,
-   without duplicating the host's own initialisations).
+   L109→L154 `dtb_MailItems`). Apply the same rule per sub-`FUNCTION` for `split` pages.
+   **Inlined pages (`inline_block`/`fold`), option A (user decision, 2026-09-24, superseding the
+   earlier "top of host body" wording that fix pass 3 implemented):** BP resets a page's data items
+   every time that page runs, and an inlined page runs every time it's called. So each inlined copy
+   of a page gets its own data initialisations at the **start of that inlined copy** (e.g. right
+   after `# BEGIN fold` / at the top of the inlined `BLOCK` content), before any of its other
+   actions, and never at the stage's flow position. Consequences:
+   - a page inlined twice is initialised twice, once per copy;
+   - `Reset Global Data` keeps its per-run resets (`docs/reviews/7b0-2026-09-24-fixpass3.md` gap 3).
+   Only a data-item name declared by **both** the host page and the inlined page is initialised
+   once, at the host body's top, and not repeated in the inlined copy. Scope rules:
+   - hoisting only ever collects stages the current flow role actually renders (respect the
+     Loader/Performer role filter);
+   - never re-initialise a data item that is a flow `@INPUT` or one of the body's own
+     `In_`/`Out_` parameters;
+   - deduplicate identical initialisation lines within one body.
 9. **Split sub-`FUNCTION` input TODO** (user decision, 2026-09-24): where a non-entry split
    sub-`FUNCTION` would otherwise reference or re-initialise a data item that is one of the entry
    `FUNCTION`'s `In_` parameters, emit a `# TODO` naming the parameter(s) and that the split call
