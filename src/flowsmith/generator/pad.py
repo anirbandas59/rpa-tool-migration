@@ -558,15 +558,24 @@ class PADGenerator:
                     s, process, process_map, role, variable_name_mapping
                 )
 
-            # Task 7b0 Do item 8: hoist Main's own DATA/COLLECTION inits (the subset this
-            # role actually renders), plus any inline_block/fold target's inits reached
-            # from within it, to the top of the main body — Main has no In_/Out_
-            # parameters, so there is nothing bound to exclude.
+            # Task 7b0 Do item 8: hoist Main's own DATA/COLLECTION inits — only the
+            # subset this role actually renders (``stages_to_render`` is already
+            # role-filtered above, L523-547 — fix pass 4 gap 1: an inline_block/fold
+            # target's inits are no longer collected transitively here under option A,
+            # they render at their own inlined-copy start instead, so a Loader-only
+            # target's inits can no longer leak into the Performer Main) — to the top
+            # of the main body.
+            #
+            # Fix pass 4 gap 2: Main's Start-stage inputs become the flow's ``@INPUT``s
+            # (Task 7c) — a hoisted re-init must never clobber one (e.g.
+            # ``flg_SendDatatoDataGateways``). Exclude them the same way Do item 3
+            # excludes a FUNCTION's own In_/Out_ parameters.
+            main_input_bound = self._get_input_bound_names(main_page)
             hoistable_sources = self._collect_hoistable_stage_sources(
                 stages_to_render, process, process_map, variable_name_mapping
             )
             hoisted_inits, suppress_names = self._hoist_data_inits_from_sources(
-                hoistable_sources, process, process_map, set()
+                hoistable_sources, process, process_map, set(main_input_bound.keys())
             )
 
             previous_suppress = self._current_suppress_init_names
@@ -779,26 +788,39 @@ class PADGenerator:
             # the host's parameter would otherwise be silently renamed. Isolate by
             # recomputing the plain per-process mapping (never the host's overridden one)
             # for this target's own stages.
-            #
-            # Task 7b0 Do item 8: this target's own DATA/COLLECTION inits are NOT
-            # hoisted/rendered here — the host body (_render_page_as_function /
-            # _split_page_into_functions / _render_main_page_for_role) already collected
-            # them transitively via _collect_hoistable_stage_sources and rendered them at
-            # its own top, so self._current_suppress_init_names (inherited, not reset)
-            # already suppresses them at this position.
             inline_mapping = (
                 self._build_variable_name_mapping(process)
                 if process is not None
                 else variable_name_mapping
             )
-            # Render the target page's stages
-            action_lines: list[str] = []
-            for s in target_page.stages:
-                rendered = self._render_stage(s, process, process_map, inline_mapping)
-                if rendered:
-                    action_lines.append(rendered)
 
-            actions_content = "\n".join(action_lines)
+            # Task 7b0 Do item 8, option A (fix pass 4): this inline_block target's own
+            # DATA/COLLECTION inits render at the start of THIS inlined copy (BP resets
+            # a page's data items every time it runs, and an inlined page runs on every
+            # call) — except a name already hoisted by an ancestor host body (shared
+            # declaration, e.g. Loader's ``dtb_MailItems``), which is suppressed here
+            # instead of repeated. See ``_hoist_data_inits_for_inline_copy``.
+            local_inits, copy_suppress = self._hoist_data_inits_for_inline_copy(
+                target_page, process, process_map, inline_mapping
+            )
+            previous_suppress = self._current_suppress_init_names
+            self._current_suppress_init_names = copy_suppress
+            try:
+                # Render the target page's stages
+                action_lines: list[str] = []
+                for s in target_page.stages:
+                    rendered = self._render_stage(s, process, process_map, inline_mapping)
+                    if rendered:
+                        action_lines.append(rendered)
+
+                actions_content = "\n".join(action_lines)
+            finally:
+                self._current_suppress_init_names = previous_suppress
+
+            if local_inits:
+                actions_content = (
+                    f"{local_inits}\n{actions_content}" if actions_content else local_inits
+                )
             epilogue = self._render_goto_epilogue(actions_content)
             if epilogue:
                 actions_content = f"{actions_content}\n{epilogue}"
@@ -826,24 +848,37 @@ class PADGenerator:
 
             # Task 7b0 gap 6: same mapping isolation as the inline_block branch above —
             # fold content must not inherit the host FUNCTION's In_/Out_ override map.
-            #
-            # Task 7b0 Do item 8: this target's own DATA/COLLECTION inits are NOT
-            # hoisted/rendered here — the host body already collected them transitively
-            # via _collect_hoistable_stage_sources and rendered them at its own top; the
-            # inherited self._current_suppress_init_names already suppresses them here.
             fold_mapping = (
                 self._build_variable_name_mapping(process)
                 if process is not None
                 else variable_name_mapping
             )
-            # Render the target page's stages
-            action_lines: list[str] = []
-            for s in target_page.stages:
-                rendered = self._render_stage(s, process, process_map, fold_mapping)
-                if rendered:
-                    action_lines.append(rendered)
 
-            actions_content = "\n".join(action_lines)
+            # Task 7b0 Do item 8, option A (fix pass 4): this fold target's own
+            # DATA/COLLECTION inits render at the start of THIS inlined copy, except a
+            # name already hoisted by an ancestor host body (shared declaration) —
+            # see ``_hoist_data_inits_for_inline_copy`` and the inline_block branch above.
+            local_inits, copy_suppress = self._hoist_data_inits_for_inline_copy(
+                target_page, process, process_map, fold_mapping
+            )
+            previous_suppress = self._current_suppress_init_names
+            self._current_suppress_init_names = copy_suppress
+            try:
+                # Render the target page's stages
+                action_lines: list[str] = []
+                for s in target_page.stages:
+                    rendered = self._render_stage(s, process, process_map, fold_mapping)
+                    if rendered:
+                        action_lines.append(rendered)
+
+                actions_content = "\n".join(action_lines)
+            finally:
+                self._current_suppress_init_names = previous_suppress
+
+            if local_inits:
+                actions_content = (
+                    f"{local_inits}\n{actions_content}" if actions_content else local_inits
+                )
 
             # Emit fold markers
             result = f"# BEGIN fold: '{target_page.name}' ({citation})"
@@ -1150,64 +1185,88 @@ class PADGenerator:
         process: BPProcess | None,
         process_map: dict[str, Any] | None,
         host_mapping: dict[str, str] | None,
-        _seen_pages: set[str] | None = None,
     ) -> list[tuple[BPStage, dict[str, str] | None]]:
-        """Collect every DATA/COLLECTION stage whose init belongs at this host's top.
+        """Collect this host body's own DATA/COLLECTION stages, for top-of-body hoisting.
 
-        Task 7b0 Do item 8 requires that an inline_block/fold target's own inits land
-        "at the top of the inlined block's host body" — not at the top of the inlined
-        content itself, which is still positioned mid-flow (a caller-side wipe would
-        otherwise survive unchanged; this is Loader L109->L154 ``dtb_MailItems``:
-        'Populate Queue' is an inline_block target of the Loader Main body, so its own
-        ``dtb_MailItems`` init has to move to Main's top, not 'Add to Queue Block''s).
-
-        Recurses (one level per nested call, deduplicated by page id to avoid cycles)
-        into any inline_block/fold target reached via a subsheet call in ``stages``, so
-        their DATA/COLLECTION stages are collected too. A nested target's own stages are
-        paired with a freshly-built, un-overridden mapping (not ``host_mapping``) — Task
-        7b0 gap 6: an inlined page's data item must not inherit the host FUNCTION's
-        In_/Out_ parameter-name overrides.
+        Task 7b0 Do item 8, option A (user decision 2026-09-24, superseding fix pass 3's
+        "hoist inline_block/fold targets' inits too"): only a host body's *own* DATA/
+        COLLECTION stages are unconditionally hoisted to that body's top. An
+        inline_block/fold *target*'s own inits are never collected here — they render at
+        the start of each inlined copy instead (``_hoist_data_inits_for_inline_copy``,
+        called from ``_render_call_or_inline``'s inline_block/fold branches), because BP
+        resets a page's data items every time that page runs, and an inlined page "runs"
+        on every call, not once per host. The one exception (a name declared by *both*
+        the host and the inlined page, e.g. Loader's ``dtb_MailItems`` — 'Main Page' and
+        its inline_block target 'Populate Queue' both declare a "Mail Items" data item,
+        per ``outputs/report/PID_0171_html_report_20260904/data/
+        pid-171-us-process-lims-prelude.md`` L370 and L1302) is handled at the inline
+        call site: the target's copy of that name is suppressed there because it is
+        already in ``self._current_suppress_init_names`` once the host's own version
+        (collected here) has been hoisted.
 
         Args:
             stages: The stage list to scan (a page's full ``page.stages``, a split
                 target's stage slice, or a Main-page role's rendered stage subset).
-            process: The BPProcess (needed to resolve subsheet-call targets and shapes).
-            process_map: The process entry from page_target_map.yaml.
-            host_mapping: The host body's variable-name mapping, paired with the host's
-                own DATA/COLLECTION stages.
-            _seen_pages: Internal recursion guard (page ids already expanded).
+            process: Unused (kept for call-site symmetry with other hoisting helpers).
+            process_map: Unused (kept for call-site symmetry with other hoisting helpers).
+            host_mapping: The host body's variable-name mapping, paired with each stage.
 
         Returns:
-            A list of (stage, mapping) pairs, in first-encountered order, ready to be
-            rendered by ``_hoist_data_inits_from_sources``.
+            A list of (stage, mapping) pairs, in stage order, ready to be rendered by
+            ``_hoist_data_inits_from_sources``.
         """
-        if _seen_pages is None:
-            _seen_pages = set()
-        result: list[tuple[BPStage, dict[str, str] | None]] = []
-        for stage in stages:
-            if self._data_collection_target_name(stage) is not None:
-                result.append((stage, host_mapping))
-            elif stage.is_subsheet_call and process is not None and stage.processid:
-                if stage.processid in _seen_pages:
-                    continue
-                target_page = next((p for p in process.pages if p.page_id == stage.processid), None)
-                if not target_page:
-                    continue
-                shape_info = self._get_page_shape(target_page.name, process_map or {})
-                shape = shape_info.get("shape", "function")
-                if shape in ("inline_block", "fold"):
-                    _seen_pages.add(stage.processid)
-                    nested_mapping = (
-                        self._build_variable_name_mapping(process)
-                        if process is not None
-                        else host_mapping
-                    )
-                    result.extend(
-                        self._collect_hoistable_stage_sources(
-                            target_page.stages, process, process_map, nested_mapping, _seen_pages
-                        )
-                    )
-        return result
+        del process, process_map  # unused: no recursion under option A — see docstring
+        return [
+            (stage, host_mapping)
+            for stage in stages
+            if self._data_collection_target_name(stage) is not None
+        ]
+
+    def _hoist_data_inits_for_inline_copy(
+        self,
+        target_page: Any,
+        process: BPProcess | None,
+        process_map: dict[str, Any] | None,
+        mapping: dict[str, str] | None,
+    ) -> tuple[str, set[str]]:
+        """Render an inlined page's own DATA/COLLECTION inits at its own copy's top.
+
+        Task 7b0 Do item 8, option A: each inlined copy of an inline_block/fold target
+        gets its own data initialisations at the start of that copy — a page inlined
+        twice initialises twice (e.g. 'Sample Manager - Explorer', inlined twice into
+        'Enter Results in App', re-inits its retry counter each time) — *except* a name
+        already hoisted by an ancestor host body (present in
+        ``self._current_suppress_init_names`` on entry, e.g. the shared ``dtb_MailItems``
+        case): that name inits once at the host's top and must not repeat here.
+
+        Args:
+            target_page: The inline_block/fold target BPPage being inlined.
+            process: The BPProcess (forwarded so init expressions needing CALL
+                resolution render correctly).
+            process_map: The process entry from page_target_map.yaml.
+            mapping: The target's own (un-overridden — gap 6) variable-name mapping.
+
+        Returns:
+            A 2-tuple: (hoisted_inits_text, copy_suppress_names) where
+            ``copy_suppress_names`` is the suppress set to use while rendering this
+            inlined copy's remaining stages — the inherited ancestor suppress set plus
+            this copy's own newly hoisted names.
+        """
+        ancestor_suppress = self._current_suppress_init_names
+        own_sources: list[tuple[BPStage, dict[str, str] | None]] = []
+        for stage in target_page.stages:
+            name = self._data_collection_target_name(stage)
+            if name is None:
+                continue
+            if name.lower() in ancestor_suppress:
+                # Declared by both the host and this inlined page — already hoisted
+                # and rendered once at the host's top; never repeat it here.
+                continue
+            own_sources.append((stage, mapping))
+
+        return self._hoist_data_inits_from_sources(
+            own_sources, process, process_map, ancestor_suppress
+        )
 
     def _hoist_data_inits_from_sources(
         self,
@@ -1225,9 +1284,15 @@ class PADGenerator:
         caller's own re-initialisation from wiping a value/collection a ``CALL`` already
         populated — the review's three wipe cases: Performer P143->P286
         ``dtb_FinalProductCollection``, P291->P292 ``dtb_SammaryCollection``, and Loader
-        L109->L154 ``dtb_MailItems`` (the last one only fixed once inline_block content
-        is included via ``_collect_hoistable_stage_sources``, since 'Populate Queue' is
-        inlined into the Loader Main body).
+        L109->L154 ``dtb_MailItems`` (host-side, via this host body's own DATA stage;
+        the inline_block target 'Populate Queue''s own copy of the same name is
+        suppressed instead of re-hoisted — see ``_hoist_data_inits_for_inline_copy``).
+
+        Task 7b0 fix pass 4 gap 7: identical rendered init lines are deduplicated
+        (first occurrence kept, order preserved) — a body can otherwise carry the same
+        ``SET``/``DataTable.Create()`` line twice when two DATA/COLLECTION stages
+        declare the same target name with the same value (review P143/P162, P173/P183,
+        Loader L117/L127).
 
         Args:
             stage_sources: (stage, mapping) pairs from ``_collect_hoistable_stage_sources``
@@ -1257,31 +1322,37 @@ class PADGenerator:
         self._current_suppress_init_names = set(param_suppress_names)
         try:
             hoisted_lines: list[str] = []
+            seen_lines: set[str] = set()
             for stage, mapping in stage_sources:
                 rendered = self._render_stage(stage, process, process_map, mapping)
-                if rendered:
+                if rendered and rendered not in seen_lines:
                     hoisted_lines.append(rendered)
+                    seen_lines.add(rendered)
         finally:
             self._current_suppress_init_names = previous
 
         all_suppress = set(param_suppress_names) | hoist_targets
         return "\n".join(hoisted_lines), all_suppress
 
-    def _get_input_bound_names(self, page: Any) -> set[str]:
-        """Return the lowercase BP data-item names bound to this page's In_ parameters.
+    def _get_input_bound_names(self, page: Any) -> dict[str, str]:
+        """Return this page's In_-bound BP data-item names, lowercase -> original case.
 
-        Used by Do item 9 (split sub-FUNCTION input TODO) to detect when a non-entry
-        split sub-FUNCTION would silently re-initialise a data item that only the
-        entry FUNCTION receives as an In_ parameter — the split call chain (Task 5a
-        follow-up) does not yet propagate it there.
+        Used by Do item 9 (split sub-FUNCTION input TODO, for both re-init and
+        reference detection) to identify when a non-entry split sub-FUNCTION would
+        silently re-initialise or read a data item that only the entry FUNCTION
+        receives as an In_ parameter — the split call chain (Task 5a follow-up) does
+        not yet propagate it there. Also used by Do item 8's gap 2 fix (Main-page
+        hoisting must never re-initialise a flow ``@INPUT``) with the Main page's own
+        START stage.
 
         Args:
             page: The BPPage whose START stage carries the ``stage=`` input bindings.
 
         Returns:
-            The set of lowercase data-item names bound to an In_ parameter.
+            A dict mapping each lowercase data-item name bound to an In_ parameter to
+            its original-cased name (for building human-readable TODO text).
         """
-        names: set[str] = set()
+        names: dict[str, str] = {}
         start_stage = next((s for s in page.stages if s.stage_type == StageType.START), None)
         if start_stage and start_stage.data_items:
             for data_item in start_stage.data_items:
@@ -1289,8 +1360,34 @@ class PADGenerator:
                     data_item_name = start_stage.inputs_stage_map.get(
                         data_item.name, data_item.name
                     )
-                    names.add(data_item_name.lower())
+                    names[data_item_name.lower()] = data_item_name
         return names
+
+    def _stage_references_data_item(self, stage: BPStage, name_lower: str) -> bool:
+        """Return True if a stage's BP expressions reference the named data item.
+
+        Scans every expression-bearing field the parser captures on a stage — action/
+        CALL input expressions and CALCULATION assignments (``params_map`` values,
+        ``parser/process.py`` L274/L298/L369-391), DECISION/CHOICE conditions
+        (``decision_expression``), and ``stage=``-bound call input/output data-item
+        names (``inputs_stage_map``/``outputs_stage_map`` values) — for a case-
+        insensitive occurrence of ``name_lower``. BP references a data item either
+        bracketed (``[FinalProduct_Collection]``) or dotted (``FinalProduct_Collection.
+        SomeColumn``); a substring match catches both without needing to parse BP
+        expression syntax.
+
+        Args:
+            stage: Any BPStage.
+            name_lower: The lowercase BP data-item name to look for.
+
+        Returns:
+            True if any expression field on the stage contains ``name_lower``.
+        """
+        candidates: list[str | None] = [stage.decision_expression]
+        candidates.extend(stage.params_map.values())
+        candidates.extend(stage.inputs_stage_map.values())
+        candidates.extend(stage.outputs_stage_map.values())
+        return any(text and name_lower in text.lower() for text in candidates)
 
     def _unassigned_output_todos(
         self, actions_content: str, output_param_names: list[str]
@@ -1299,10 +1396,18 @@ class PADGenerator:
 
         A body assigns an Out_ parameter one of two ways: ``SET Out_x TO ...`` (the
         both-input-and-output copy-before-exit form, reference L944:
-        ``SET out_dtb_filteredTable TO In_dtb_FinalProduct``) or a nested CALL capturing
-        straight into it, ``Out_x=> ...`` (reference L438, L1483's ``Out_c=> <var>`` call
-        form). If neither appears anywhere in the rendered body, the parameter is
-        declared but silently unassigned.
+        ``SET out_dtb_filteredTable TO In_dtb_FinalProduct``) or an action/nested CALL
+        writing straight into it, ``... => Out_x`` (reference L438, L1483's ``Out_c=>
+        <var>`` call form — here ``Out_x`` is the receiving *caller* variable on the
+        right of ``=>``, not a callee parameter name on the left). If neither appears
+        anywhere in the rendered body, the parameter is declared but silently
+        unassigned.
+
+        Task 7b0 fix pass 4 gap 6: the prior pattern, ``\\b{name}\\s*=>``, matched
+        ``Out_x`` on the *left* of ``=>`` — that is a *callee's* declared parameter in
+        ``CALL ... Out_x=> some_var`` (the callee's Out_x flows into ``some_var``, which
+        is what gets assigned, not Out_x), not a write to this body's own Out_x. The
+        fixed pattern looks to the right of ``=>`` instead.
 
         Args:
             actions_content: The FUNCTION body's rendered text so far.
@@ -1313,7 +1418,7 @@ class PADGenerator:
         """
         todos: list[str] = []
         for name in output_param_names:
-            pattern = rf"\bSET\s+{re.escape(name)}\s+TO\b|\b{re.escape(name)}\s*=>"
+            pattern = rf"\bSET\s+{re.escape(name)}\s+TO\b|=>\s*{re.escape(name)}\b"
             if not re.search(pattern, actions_content):
                 todos.append(f"# TODO: {name} is declared but not assigned in this body")
         return todos
@@ -1435,10 +1540,11 @@ class PADGenerator:
             body_variable_name_mapping = dict(variable_name_mapping or {})
             body_variable_name_mapping.update(overrides)
 
-            # Task 7b0 Do item 8: hoist every non-parameter-bound DATA/COLLECTION init
-            # (this page's own, plus any inline_block/fold target's, reached transitively)
-            # to the top of the body (before rendering the flow) so a caller's own
-            # re-initialisation can never wipe a value a CALL already returned.
+            # Task 7b0 Do item 8, option A: hoist this page's own non-parameter-bound
+            # DATA/COLLECTION inits to the top of the body (before rendering the flow)
+            # so a caller's own re-initialisation can never wipe a value a CALL already
+            # returned. An inline_block/fold target's own inits are handled separately,
+            # at the start of each inlined copy — see _hoist_data_inits_for_inline_copy.
             hoistable_sources = self._collect_hoistable_stage_sources(
                 page.stages, process, process_map, body_variable_name_mapping
             )
@@ -1676,6 +1782,24 @@ class PADGenerator:
                     if tname and tname.lower() in entry_input_names:
                         leaked[tname.lower()] = tname
                 param_suppress = set(leaked.keys())
+
+                # Fix pass 4 gap 4: item 9 says "reference or re-initialise" — a
+                # non-entry sub-FUNCTION stage that only *reads* an entry In_-bound data
+                # item (no re-init) still needs the parameter, and the split call chain
+                # doesn't pass it either. Detect via expression scanning
+                # (`_stage_references_data_item`) since these stages are not
+                # DATA/COLLECTION targets and the re-init check above never sees them
+                # (review 2026-09-24-fixpass3 gap 4: 13 BP stages across all 5 non-entry
+                # Result Entry sub-FUNCTIONs). Read-only references are not suppressed
+                # (there is nothing to wipe) — only flagged.
+                referenced: dict[str, str] = {}
+                for stage in stages_for_target:
+                    for lower_name, orig_name in entry_input_names.items():
+                        if lower_name in leaked:
+                            continue
+                        if self._stage_references_data_item(stage, lower_name):
+                            referenced.setdefault(lower_name, orig_name)
+
                 for lower_name, orig_name in leaked.items():
                     in_param = entry_overrides.get(lower_name, f"In_{orig_name}")
                     leak_todos.append(
@@ -1684,11 +1808,19 @@ class PADGenerator:
                         f"{in_param}; the split call chain (Task 5a follow-up) does not "
                         "yet pass it to this sub-function"
                     )
+                for lower_name, orig_name in referenced.items():
+                    in_param = entry_overrides.get(lower_name, f"In_{orig_name}")
+                    leak_todos.append(
+                        f"# TODO: split page — sub-function target '{target_name}' "
+                        f"references '{orig_name}', bound to entry FUNCTION parameter "
+                        f"{in_param}; the split call chain (Task 5a follow-up) does not "
+                        "yet pass it to this sub-function"
+                    )
 
-            # Task 7b0 Do item 8: hoist this sub-FUNCTION's own non-parameter-bound
-            # DATA/COLLECTION inits (plus any inline_block/fold target's, reached
-            # transitively) to the top of its body (per-sub-FUNCTION, as for a regular
-            # FUNCTION body).
+            # Task 7b0 Do item 8, option A: hoist this sub-FUNCTION's own
+            # non-parameter-bound DATA/COLLECTION inits to the top of its body
+            # (per-sub-FUNCTION, as for a regular FUNCTION body). An inline_block/fold
+            # target's own inits render at its inlined copy's own start instead.
             hoistable_sources = self._collect_hoistable_stage_sources(
                 stages_for_target, process, process_map, body_variable_name_mapping
             )
