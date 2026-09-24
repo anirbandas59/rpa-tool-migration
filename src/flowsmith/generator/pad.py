@@ -168,6 +168,17 @@ class PADGenerator:
         # subset — docs/reviews/7b0-2026-09-24-fixpass4.md gap 1(a)/(b).
         self._current_host_page: Any | None = None
 
+        # Task 7b: the exception-type branch ("system" | "business" | None) currently
+        # being rendered, set by _render_decision_branch while walking a Decision's
+        # true/false branches, consulted by _render_stage's WorkQueues branch to pick
+        # the "Mark Exception" status variant generically from *where in the BP
+        # decision structure* the stage sits — never from the stage's own name or a
+        # Tag value (task hard constraint; rejected heuristic per
+        # docs/reviews/7a-2026-09-04-thirdpass.md). None means "not determinable from
+        # a recognised branch", which keeps the pre-existing
+        # "# VERIFY: Mark Exception status variant deferred to Task 7b" marker.
+        self._current_exception_branch_context: str | None = None
+
     def generate_process(
         self,
         process: BPProcess,
@@ -2339,9 +2350,21 @@ class PADGenerator:
 
         # Extract and replace Trim(...) and Lower(...) calls
         # These must become separate action lines, not be inlined
+        # Task 7b: dedupe repeated identical Trim(...)/Lower(...) calls within the
+        # same expression (e.g. the Mark Item As Exception page's "Retry Exception?"
+        # `Lower([Exception Type])="system exception" OR Lower([Exception Type])=
+        # "internal"` — the same Lower(...) call appears twice) so they reuse one
+        # temp var/action instead of emitting a second, unused SET — str.replace on
+        # the whole literal substring already collapses both occurrences to the same
+        # temp var name at the call site, so a second pass previously only added
+        # dead output, never a second usable reference.
         trim_pattern = r"Trim\s*\(\s*([^)]+)\s*\)"
+        seen_trim: dict[str, str] = {}
         for match in re.finditer(trim_pattern, result):
             inner_expr = match.group(1).strip()
+            if inner_expr in seen_trim:
+                result = result.replace(match.group(0), seen_trim[inner_expr])
+                continue
             # Recursively translate the inner expression
             translated_inner, inner_actions = self._translate_bp_expression(
                 inner_expr, variable_name_mapping
@@ -2353,11 +2376,16 @@ class PADGenerator:
             separate_actions.append(action)
             # Replace the Trim call with the temp var
             result = result.replace(match.group(0), temp_var)
+            seen_trim[inner_expr] = temp_var
             temp_var_counter += 1
 
         lower_pattern = r"Lower\s*\(\s*([^)]+)\s*\)"
+        seen_lower: dict[str, str] = {}
         for match in re.finditer(lower_pattern, result):
             inner_expr = match.group(1).strip()
+            if inner_expr in seen_lower:
+                result = result.replace(match.group(0), seen_lower[inner_expr])
+                continue
             translated_inner, inner_actions = self._translate_bp_expression(
                 inner_expr, variable_name_mapping
             )
@@ -2367,6 +2395,7 @@ class PADGenerator:
             action = f"Text.ChangeCase '{translated_inner}' 'To lowercase' => {temp_var}"
             separate_actions.append(action)
             result = result.replace(match.group(0), temp_var)
+            seen_lower[inner_expr] = temp_var
             temp_var_counter += 1
 
         # Translate [Data Item] references
@@ -2406,7 +2435,9 @@ class PADGenerator:
 
         return result, separate_actions
 
-    def _lookup_method_actions_template(self, stage: BPStage) -> str | None:
+    def _lookup_method_actions_template(
+        self, stage: BPStage, method_name_override: str | None = None
+    ) -> str | None:
         """Look up a method_actions template for a VBO call stage.
 
         Used by Task 7a to wire WorkQueues and other VBO method_actions into generation.
@@ -2414,12 +2445,18 @@ class PADGenerator:
 
         Args:
             stage: A BPStage with _vbo_object and _vbo_action in params_map.
+            method_name_override: Task 7b — look up this catalogue key instead of the
+                stage's own _vbo_action (used to select a "Mark Exception :: <Variant>"
+                row per mapping/vbo_catalogue.yaml L452-454 from real BP branch
+                context, since the stage's own _vbo_action is always the bare
+                "Mark Exception" regardless of which exception-type branch it sits
+                in). Falls back to the stage's own _vbo_action when not given.
 
         Returns:
             The PAD action template string if found in method_actions, None otherwise.
         """
         vbo_name = stage.params_map.get("_vbo_object")
-        method_name = stage.params_map.get("_vbo_action")
+        method_name = method_name_override or stage.params_map.get("_vbo_action")
 
         if not vbo_name or not method_name:
             return None
@@ -2627,17 +2664,38 @@ class PADGenerator:
 
         if target_type in ("ThrowError", "ThrowCustomError"):
             throw_template = self.env.get_template("actions/throw_error.robin.j2")
+            # Task 7b: use the stage's real BP message expression (annotator.py's
+            # _annotate_exception carries it as params_map["detail_expr"], e.g. the
+            # Mark Item As Exception page's TERMINATE stages: "[Consecutive Exception
+            # Limit] & \" consecutive incidents of \" & [Exception Type] & \": \" &
+            # [Exception Detail]") instead of the bare hardcoded "txt_ExceptionMessage"
+            # placeholder — §A5 raise template: "CustomErrorMessage: <message expr>".
+            detail_expr = annotation.params_map.get("detail_expr", "")
+            translated_detail, detail_actions = self._translate_bp_expression(
+                detail_expr, variable_name_mapping
+            )
+            for action in detail_actions:
+                lines.append(action)
+            message_expr = translated_detail if translated_detail else "txt_ExceptionMessage"
             rendered = throw_template.render(
                 custom=target_type == "ThrowCustomError",
                 error_code=annotation.params_map.get("exception_type", "%txt_ExceptionType%"),
-                message_var="txt_ExceptionMessage",
+                message_var=message_expr,
             )
             lines.append(rendered)
 
-        elif target_type == "SetVariable":
+        elif target_type in ("SetVariable", "SET <var> TO <expr>"):
             # SetVariable handling differs by stage type:
             # - DATA: variable declaration (target_type="SetVariable" from _annotate_data)
             # - CALCULATION: assignment stage (stage_type=CALCULATION, params_map={target: expr})
+            #   Task 7b: CALCULATION/MultipleCalculation stages are annotated via
+            #   _annotate_from_rules, which sets target_type to the literal
+            #   mapping/stage_rules.yaml pa_target_action string "SET <var> TO <expr>"
+            #   (L77, L243 — §B12 CALCULATION row), not the DATA-only "SetVariable"
+            #   sentinel — this branch previously never matched real CALCULATION
+            #   stages (e.g. the Mark Item As Exception page's "Count" and "Reset
+            #   Consecutive Exception Indicators"), which fell through to the generic
+            #   comment branch below instead of emitting a SET line.
             set_template = self.env.get_template("actions/set_variable.robin.j2")
             verify_comment = (
                 f"{stage.name} (confidence {annotation.confidence:.2f})"
@@ -2756,12 +2814,23 @@ class PADGenerator:
             )
             lines.append(rendered)
 
-        elif target_type == "Condition":
+        elif target_type in ("Condition", "IF <expr> THEN <true-branch> ELSE <false-branch> END"):
             # DECISION stage: translate the BP condition expression to PAD syntax.
+            # Only reached here for a DECISION with no real branch targets to nest
+            # (rendered as an empty IF/ELSE stub) — a DECISION with both
+            # ontrue_target/onfalse_target populated is handled by
+            # _render_decision_branch instead (real nested branch bodies, Task 7b).
             cond_template = self.env.get_template("actions/condition.robin.j2")
 
-            # Get the BP condition expression
-            bp_condition = annotation.params_map.get("condition", "[SomeCondition]")
+            # Get the BP condition expression. Task 7b: DECISION stages are annotated
+            # via _annotate_from_rules with target_type set to the literal
+            # mapping/stage_rules.yaml pa_target_action string "IF <expr> THEN
+            # <true-branch> ELSE <false-branch> END" (L66, §B12 DECISION row) and an
+            # always-empty annotation.params_map — the real condition text lives on
+            # stage.decision_expression (ast/models.py BPStage field), which this
+            # branch never read before, so bp_condition always fell back to the
+            # literal placeholder "[SomeCondition]".
+            bp_condition = annotation.params_map.get("condition") or stage.decision_expression or ""
 
             # Translate the BP expression
             translated_cond, separate_actions = self._translate_bp_expression(
@@ -2860,12 +2929,34 @@ class PADGenerator:
             lines.append(rendered)
 
         elif target_module == "WorkQueues":
-            # Task 7a: consume the cited method_actions template. Exception-type selection
-            # requires calling Block/control-flow context and is deferred to Task 7b.
+            # Task 7a: consume the cited method_actions template. Task 7b: "Mark
+            # Exception" status-variant selection is resolved here from
+            # self._current_exception_branch_context — set by _render_decision_branch
+            # while walking a Decision's true/false branches (§A7; the Task 7a
+            # hand-off note this replaces used to say "deferred to Task 7b").
             method_name = stage.params_map.get("_vbo_action")
 
             if band != ConfidenceBand.MANUAL:
-                method_template = self._lookup_method_actions_template(stage)
+                # Task 7b hard constraint: select the catalogue variant from real BP
+                # branch context (mapping/vbo_catalogue.yaml L452-454), never from the
+                # stage's own name or a Tag value. "system" -> GenericException row
+                # (BP's plain-System-Exception branch, §A7); "business"/undetermined
+                # -> the default "Mark Exception" row (BusinessException, the BP
+                # default per the task's binding decision). "Mark Exception ::
+                # ITException" is left unused — no BP branch in this page maps to it.
+                lookup_method_name = method_name
+                variant_selected_from_context = False
+                if method_name == "Mark Exception":
+                    if self._current_exception_branch_context == "system":
+                        lookup_method_name = "Mark Exception :: GenericException"
+                        variant_selected_from_context = True
+                    elif self._current_exception_branch_context == "business":
+                        lookup_method_name = "Mark Exception"
+                        variant_selected_from_context = True
+
+                method_template = self._lookup_method_actions_template(
+                    stage, method_name_override=lookup_method_name
+                )
                 if method_template:
                     substituted, was_bound_from_catalogue, dependency_comment, unmatched_todo = (
                         self._substitute_workqueues_placeholders(
@@ -2880,7 +2971,10 @@ class PADGenerator:
                     if method_name == "Get Next Item" and was_bound_from_catalogue:
                         # Build VERIFY text from the binding's citation and notes
                         lines.append(f"# VERIFY: {dependency_comment}")
-                    if method_name == "Mark Exception":
+                    if method_name == "Mark Exception" and not variant_selected_from_context:
+                        # Context not determinable (stage reached outside a
+                        # recognised Decision branch) — keep the VERIFY marker per
+                        # Task 7b's "keep it wherever context isn't determinable".
                         lines.append("# VERIFY: Mark Exception status variant deferred to Task 7b")
                     lines.append(substituted)
                 else:
@@ -3006,6 +3100,22 @@ class PADGenerator:
             consumed_indices.add(recover_idx)  # the RECOVER stage
             if resume_idx is not None:
                 consumed_indices.add(resume_idx)  # the RESUME stage
+
+        # Task 7b: a stage list with no coarse-BLOCK groups but with a real
+        # branching DECISION (both ontrue_target/onfalse_target populated) is
+        # rendered via a control-flow graph walk instead of the positional loop
+        # below — see _render_decision_graph's docstring for why raw BPPage.stages
+        # declaration order cannot be trusted as execution order for such pages.
+        # Scoped to "no coarse-BLOCK groups" so Task 5c's already-reviewed
+        # BLOCK/RECOVER handling (the positional loop below) is never touched by
+        # this generic addition.
+        if not coarse_block_map and any(
+            s.stage_type == StageType.DECISION and s.ontrue_target and s.onfalse_target
+            for s in stages
+        ):
+            return self._render_decision_graph(
+                stages, process, process_map, variable_name_mapping, render_stage_fn
+            )
 
         output_lines: list[str] = []
         idx = 0
@@ -3167,6 +3277,275 @@ class PADGenerator:
             idx += 1
 
         return "\n".join(output_lines)
+
+    def _render_decision_graph(
+        self,
+        stages: list[BPStage],
+        process: BPProcess | None,
+        process_map: dict[str, Any] | None,
+        variable_name_mapping: dict[str, str] | None,
+        render_stage_fn: Any,
+    ) -> str:
+        """Render a stage list by walking its control-flow graph, not declaration order.
+
+        ``BPPage.stages`` preserves raw BP XML declaration order — ``ast/builder.py``'s
+        ``_build_page`` applies no reordering. For a page with real branching this is
+        frequently *not* execution order: on the "Mark Item As Exception" page (Task
+        7b, architecture doc §A7), the Start stage's actual successor ("System
+        Unavailable?") is declared near the end of the page's stage list, while an
+        unrelated downstream decision ("Retry Exception?") is declared 2nd — confirmed
+        directly via ``outputs/generated/PID_0171/ast.json``. Rendering positionally
+        (the loop above, still used unchanged for every stage list without this
+        problem) would emit "Retry Exception?"'s `IF` before the `IF` that actually
+        gates whether that code path is ever reached.
+
+        This walks forward from the page's ``START`` stage via
+        ``onsuccess_target``/``ontrue_target``/``onfalse_target`` edges, so the emitted
+        statement order always matches BP's real control flow, for any page (not
+        specific to Mark Item As Exception) with a genuine branching DECISION.
+
+        Args:
+            stages: The stage list to render (the full page — this is only invoked
+                when the whole list has no coarse-BLOCK groups, see the call site).
+            process: The BPProcess (forwarded to per-stage renderers).
+            process_map: Process map from page_target_map.yaml.
+            variable_name_mapping: Optional BP-name→PAD-name dict from Task 5b.
+            render_stage_fn: Callable(stage, process, process_map, variable_name_mapping) → str.
+
+        Returns:
+            All rendered lines joined by newlines.
+        """
+        stages_by_id = {s.stage_id: s for s in stages}
+        start = next(
+            (s for s in stages if s.stage_type == StageType.START),
+            stages[0] if stages else None,
+        )
+
+        visited: set[str] = set()
+        lines: list[str] = []
+        if start is not None:
+            lines.extend(
+                self._render_chain(
+                    start.stage_id,
+                    stages_by_id,
+                    visited,
+                    process,
+                    process_map,
+                    variable_name_mapping,
+                    render_stage_fn,
+                )
+            )
+
+        # Never silently drop a stage (CLAUDE.md): anything the graph walk didn't
+        # reach (orphaned stages, or a shape this generic walk doesn't resolve) is
+        # still rendered, appended in original declaration order.
+        for stage in stages:
+            if stage.stage_id not in visited:
+                visited.add(stage.stage_id)
+                rendered = render_stage_fn(stage, process, process_map, variable_name_mapping)
+                if rendered:
+                    lines.append(rendered)
+
+        return "\n".join(line for line in lines if line)
+
+    def _render_chain(
+        self,
+        stage_id: str | None,
+        stages_by_id: dict[str, BPStage],
+        visited: set[str],
+        process: BPProcess | None,
+        process_map: dict[str, Any] | None,
+        variable_name_mapping: dict[str, str] | None,
+        render_stage_fn: Any,
+    ) -> list[str]:
+        """Render a straight-line control-flow chain starting at ``stage_id``.
+
+        Follows ``onsuccess_target`` stage-to-stage. A ``DECISION`` stage with both
+        branch targets populated is rendered as a real nested ``IF``/``ELSE``/``END``
+        via ``_render_decision_branch`` (§B12 DECISION row: "IF <translated expr> THEN
+        <true-branch> ELSE <false-branch> END"; nesting syntax confirmed at
+        ``docs/pad-reference/DF_PID_171_US_LIMS_Prelude_Main.robin.txt`` L1271-1310).
+        A ``MultipleCalculation`` fan-out group (``ast/builder.py``'s
+        ``_normalise_stages``: one BP stage becomes N ``CALCULATION`` sub-stages with
+        ids ``<base>__calc_1..N``, each carrying an *identical* ``onsuccess_target`` —
+        confirmed via ``outputs/generated/PID_0171/ast.json`` — since they are not
+        chained to each other) is rendered as one contiguous group, in id order,
+        before following their shared successor.
+
+        The walk stops at a stage with no further target (an ``EXCEPTION`` throw or an
+        ``END`` stage, both terminal per §B12), or at a stage already in ``visited``
+        (a join point already rendered by a sibling branch — see
+        ``_render_decision_branch``).
+
+        Args:
+            stage_id: The stage to start at (``None`` renders nothing).
+            stages_by_id: id → BPStage map for the whole stage list being rendered.
+            visited: Mutable set of already-rendered stage ids, shared across the
+                whole page render so a join point is emitted exactly once.
+            process: The BPProcess (forwarded to per-stage renderers).
+            process_map: Process map from page_target_map.yaml.
+            variable_name_mapping: Optional BP-name→PAD-name dict from Task 5b.
+            render_stage_fn: Callable(stage, process, process_map, variable_name_mapping) → str.
+
+        Returns:
+            Rendered lines for this chain, in order.
+        """
+        lines: list[str] = []
+
+        while stage_id is not None and stage_id in stages_by_id and stage_id not in visited:
+            stage = stages_by_id[stage_id]
+
+            base, sep, _suffix = stage.stage_id.partition("__calc_")
+            if sep:
+                group_prefix = f"{base}__calc_"
+                group_ids = sorted(sid for sid in stages_by_id if sid.startswith(group_prefix))
+                next_id: str | None = None
+                for gid in group_ids:
+                    if gid in visited:
+                        continue
+                    visited.add(gid)
+                    gstage = stages_by_id[gid]
+                    rendered = render_stage_fn(gstage, process, process_map, variable_name_mapping)
+                    if rendered:
+                        lines.append(rendered)
+                    next_id = gstage.onsuccess_target
+                stage_id = next_id
+                continue
+
+            visited.add(stage.stage_id)
+
+            if (
+                stage.stage_type == StageType.DECISION
+                and stage.ontrue_target
+                and stage.onfalse_target
+            ):
+                rendered = self._render_decision_branch(
+                    stage,
+                    stages_by_id,
+                    visited,
+                    process,
+                    process_map,
+                    variable_name_mapping,
+                    render_stage_fn,
+                )
+                if rendered:
+                    lines.append(rendered)
+                # DECISION stages have no onsuccess_target in practice (both arms
+                # already fully render their own continuation via the recursive
+                # branch walk) — following it defensively costs nothing if a future
+                # AST does set one.
+                stage_id = stage.onsuccess_target
+                continue
+
+            rendered = render_stage_fn(stage, process, process_map, variable_name_mapping)
+            if rendered:
+                lines.append(rendered)
+            stage_id = stage.onsuccess_target
+
+        return lines
+
+    def _render_decision_branch(
+        self,
+        stage: BPStage,
+        stages_by_id: dict[str, BPStage],
+        visited: set[str],
+        process: BPProcess | None,
+        process_map: dict[str, Any] | None,
+        variable_name_mapping: dict[str, str] | None,
+        render_stage_fn: Any,
+    ) -> str:
+        """Render one DECISION stage as a real nested ``IF``/``ELSE``/``END``.
+
+        Built directly from already-rendered fragments (each produced by its own
+        template via ``render_stage_fn``/``_render_chain``), joined with literal
+        ``IF``/``ELSE``/``END`` marker lines — the same style Task 5c's coarse-BLOCK
+        post-block gating IF already uses in this file (e.g. the
+        ``f"IF {COARSE_BLOCK_ERROR_FLAG} = True THEN"`` lines above), not raw
+        string-built PAD *action* syntax. condition.robin.j2 is not used here because
+        it has no way to receive nested branch content (out of this task's file scope
+        — ``templates/`` is not in Task 7b's Files in scope).
+
+        The true branch is walked first; the false branch's walk then stops as soon
+        as it reaches any stage the true branch already rendered — i.e. their first
+        common (join) stage — so a join point (e.g. the Mark Item As Exception page's
+        shared ``End2``) is emitted exactly once, nested wherever it was first
+        reached, never duplicated.
+
+        Task 7b status-variant selection: while walking each branch, if this
+        DECISION's own ``decision_expression`` recognisably tests the BP
+        exception-type vocabulary (CLAUDE.md's canonical exception-type strings) for
+        "system exception" — the Mark Item As Exception page's "Retry Exception?"
+        stage (`Lower([Exception Type])="system exception" OR
+        Lower([Exception Type])="internal"`) — the true branch is tagged
+        ``self._current_exception_branch_context = "system"`` and the false branch
+        (the binary complement in this page's 3-way BE/SUE/SE dispatch, §A7) is
+        tagged ``"business"``, consulted by ``_render_stage``'s WorkQueues branch to
+        pick the "Mark Exception" catalogue variant. This is derived purely from the
+        governing Decision's own condition text and branch position — never from a
+        stage's own name or a Tag value (task hard constraint). A DECISION whose
+        expression doesn't recognisably match either keyword inherits the enclosing
+        context unchanged (usually ``None``, keeping the VERIFY marker).
+
+        Args:
+            stage: The DECISION stage (``ontrue_target``/``onfalse_target`` both set).
+            stages_by_id: id → BPStage map for the whole stage list being rendered.
+            visited: Mutable set of already-rendered stage ids (shared, see
+                ``_render_chain``).
+            process: The BPProcess (forwarded to per-stage renderers).
+            process_map: Process map from page_target_map.yaml.
+            variable_name_mapping: Optional BP-name→PAD-name dict from Task 5b.
+            render_stage_fn: Callable(stage, process, process_map, variable_name_mapping) → str.
+
+        Returns:
+            The rendered ``IF``/``ELSE``/``END`` block as one string.
+        """
+        bp_condition = stage.decision_expression or ""
+        translated_cond, cond_actions = self._translate_bp_expression(
+            bp_condition, variable_name_mapping
+        )
+        condition_text = translated_cond if translated_cond else "%SomeVar% = True"
+
+        expr_lower = bp_condition.lower()
+        true_context = self._current_exception_branch_context
+        false_context = self._current_exception_branch_context
+        if "system exception" in expr_lower:
+            true_context = "system"
+            false_context = "business"
+
+        previous_context = self._current_exception_branch_context
+        try:
+            self._current_exception_branch_context = true_context
+            true_lines = self._render_chain(
+                stage.ontrue_target,
+                stages_by_id,
+                visited,
+                process,
+                process_map,
+                variable_name_mapping,
+                render_stage_fn,
+            )
+            self._current_exception_branch_context = false_context
+            false_lines = self._render_chain(
+                stage.onfalse_target,
+                stages_by_id,
+                visited,
+                process,
+                process_map,
+                variable_name_mapping,
+                render_stage_fn,
+            )
+        finally:
+            self._current_exception_branch_context = previous_context
+
+        out: list[str] = list(cond_actions)
+        out.append(f"IF {condition_text} THEN")
+        for block in true_lines:
+            out.extend(f"    {ln}" for ln in block.split("\n"))
+        out.append("ELSE")
+        for block in false_lines:
+            out.extend(f"    {ln}" for ln in block.split("\n"))
+        out.append("END")
+        return "\n".join(out)
 
     def _render_structural_stage(self, stage: BPStage) -> str:
         """Render a BLOCK/RECOVER/RESUME stage to its Robin scope construct.

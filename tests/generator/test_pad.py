@@ -2758,8 +2758,122 @@ def test_queue_bindings_are_in_catalogue_yaml() -> None:
     )
 
 
-def test_mark_exception_variant_selection_is_deferred_to_task_7b(tmp_path: Path) -> None:
-    """Task 7a must not infer Mark Exception status from Tag or stage names."""
+class _Thrown(Exception):  # noqa: N818 - test helper, not a generator exception
+    """Raised by ``_MiniPadInterpreter`` when it hits a ``FlowControl.ThrowCustomError``."""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
+
+
+class _MiniPadInterpreter:
+    """Interprets the small subset of generated PAD syntax used by Task 7b's tests.
+
+    Executes the *actual generated* ``FUNCTION`` body text (``SET``, ``IF``/``ELSE``/
+    ``END``, ``Text.ChangeCase``, ``FlowControl.ThrowCustomError``) against a mutable
+    state dict, so the sequence tests below exercise PADGenerator's real output rather
+    than re-implementing BP's §A7 semantics independently in the test (which would not
+    catch a real generator regression). WorkQueues.* calls and comment/TODO lines are
+    no-ops here — the tests only assert on counter state and thrown error codes.
+    """
+
+    def __init__(self, lines: list[str]) -> None:
+        self.lines = [line for line in lines if line.strip() != ""]
+
+    def run(self, state: dict[str, object]) -> str | None:
+        """Execute the body against ``state`` (mutated in place).
+
+        Returns:
+            The thrown ``CustomErrorCode`` if a throw was hit, else None.
+        """
+        try:
+            self._exec_block(self.lines, 0, len(self.lines), state)
+        except _Thrown as exc:
+            return exc.code
+        return None
+
+    def _exec_block(self, lines: list[str], start: int, end: int, state: dict[str, object]) -> None:
+        i = start
+        while i < end:
+            line = lines[i]
+            if line.startswith("IF ") and line.endswith(" THEN"):
+                cond_text = line[len("IF ") : -len(" THEN")]
+                then_start = i + 1
+                else_idx, end_idx = self._find_else_end(lines, then_start, end)
+                if self._eval_cond(cond_text, state):
+                    self._exec_block(lines, then_start, else_idx, state)
+                elif else_idx < end_idx:
+                    self._exec_block(lines, else_idx + 1, end_idx, state)
+                i = end_idx + 1
+                continue
+            if line.startswith("SET "):
+                match = re.match(r"SET (\S+) TO (.+)", line)
+                assert match is not None, f"Unparseable SET line: {line!r}"
+                var_name, expr = match.group(1), match.group(2)
+                expr = re.split(r"\s+#\s", expr)[0].strip()
+                state[var_name] = self._eval_expr(expr, state)
+                i += 1
+                continue
+            if line.startswith("Text.ChangeCase"):
+                match = re.match(r"Text\.ChangeCase '([^']+)' 'To lowercase' => (\S+)", line)
+                assert match is not None, f"Unparseable Text.ChangeCase line: {line!r}"
+                src, dst = match.group(1), match.group(2)
+                state[dst] = str(state.get(src, src)).lower()
+                i += 1
+                continue
+            if line.startswith("FlowControl.ThrowCustomError"):
+                match = re.search(r"CustomErrorCode: \$'''([^']*)'''", line)
+                raise _Thrown(match.group(1) if match else "")
+            # Comments, TODO/STOP markers, WorkQueues.* calls: no-op for this interpreter.
+            i += 1
+
+    @staticmethod
+    def _find_else_end(lines: list[str], start: int, end: int) -> tuple[int, int]:
+        """Find this IF's own ELSE/END indices, skipping nested IF/END pairs."""
+        depth = 0
+        else_idx: int | None = None
+        i = start
+        while i < end:
+            line = lines[i]
+            if line.startswith("IF ") and line.endswith(" THEN"):
+                depth += 1
+            elif line == "ELSE" and depth == 0 and else_idx is None:
+                else_idx = i
+            elif line == "END":
+                if depth == 0:
+                    return (else_idx if else_idx is not None else i), i
+                depth -= 1
+            i += 1
+        raise AssertionError("Unbalanced IF/END in generated FUNCTION body")
+
+    @staticmethod
+    def _eval_cond(text: str, state: dict[str, object]) -> bool:
+        py_expr = text.replace(" AND ", " and ").replace(" OR ", " or ")
+        py_expr = re.sub(r"(?<![=<>!])=(?!=)", "==", py_expr)
+        return bool(eval(py_expr, {"__builtins__": {}}, state))  # noqa: S307
+
+    @staticmethod
+    def _eval_expr(text: str, state: dict[str, object]) -> object:
+        if text in state:
+            return state[text]
+        try:
+            return eval(text, {"__builtins__": {}}, state)  # noqa: S307
+        except Exception:
+            return text
+
+
+def _extract_function_body(robin_text: str, function_name: str) -> list[str]:
+    """Extract one ``FUNCTION '<name>' ...`` block's body lines (stripped)."""
+    lines = robin_text.splitlines()
+    start = next(
+        i for i, line in enumerate(lines) if line.strip().startswith(f"FUNCTION '{function_name}'")
+    )
+    end = next(i for i in range(start, len(lines)) if lines[i].strip() == "END FUNCTION")
+    return [line.strip() for line in lines[start + 1 : end]]
+
+
+def _generate_pid171_performer_mark_exception_body(tmp_path: Path) -> list[str]:
+    """Generate real PID_0171 output and return the Mark Exception FUNCTION body lines."""
     sample_path = Path("samples/blueprism/PID_0171.bprelease")
     if not sample_path.exists():
         pytest.skip("Sample file not found")
@@ -2776,15 +2890,222 @@ def test_mark_exception_variant_selection_is_deferred_to_task_7b(tmp_path: Path)
     files = gen.generate_process(process, tmp_path / "robin")
     performer_file = next((f for f in files if "Performer" in f.name), None)
     assert performer_file is not None, "No Performer file generated"
-    lines = performer_file.read_text(encoding="utf-8").splitlines()
+    text = performer_file.read_text(encoding="utf-8")
+    return _extract_function_body(text, "Mark Exception")
 
-    mark_exception_indexes = [
-        index for index, line in enumerate(lines) if "WorkQueueItemStatus.BusinessException" in line
-    ]
-    assert mark_exception_indexes, "PID_0171 should render its documented default exception action"
-    for index in mark_exception_indexes:
-        preceding = lines[max(0, index - 2) : index]
-        assert any("status variant deferred to Task 7b" in line for line in preceding)
+
+def _logic_only(body: list[str]) -> list[str]:
+    """Drop the FUNCTION's leading DATA-declaration SET lines before the real logic.
+
+    Task 7b Do item 2 explicitly defers the counter/limit's persistent
+    initialisation to Task 7d ("Load Config Data... not yet generated") and only
+    requires the placeholder to stay flagged (the existing "# VERIFY: Previous
+    Exception Detail"/"Consecutive Exception Count"/"Consecutive Exception Limit"
+    comments on those SET lines already satisfy that). Because those lines are
+    still emitted inside this FUNCTION's own body (BP DATA stage inits, §B12),
+    replaying the *whole* function body across multiple simulated calls would
+    re-run them every call and clobber the cross-call state Task 7b's counter
+    logic depends on — a Task 7d concern, not this test's. This drops every
+    leading line up to the first real control-flow statement (the first `IF`),
+    so the sequence tests exercise §A7's state machine (Task 7b's actual scope)
+    against state the caller controls, as it will behave once Task 7d wires real
+    persistent initialisation.
+    """
+    for index, line in enumerate(body):
+        if not line.startswith("SET "):
+            return body[index:]
+    return body
+
+
+def test_mark_exception_sequence_resets_on_message_change(tmp_path: Path) -> None:
+    """Task 7b Do item 4: same/same/different/same/same/same sequence per BP §A7.
+
+    A message change is terminal for that item (reset to 0, no fall-through to
+    Limit?) — only two consecutive identical messages ever accumulate here, so the
+    count trajectory is [0, 1, 0, 0, 1, 2] and no breach occurs.
+    """
+    body = _logic_only(_generate_pid171_performer_mark_exception_body(tmp_path))
+    messages = ["same", "same", "different", "same", "same", "same"]
+    expected_counts = [0, 1, 0, 0, 1, 2]
+
+    state: dict[str, object] = {
+        "txt_PreviousExceptionDetail": "",
+        "num_ConsecutiveExceptionCount": 0,
+        "num_ConsecutiveExceptionLimit": 3,
+        "obj_WorkQueueItem": None,
+    }
+    observed_counts = []
+    for msg in messages:
+        state["txt_ExceptionType"] = "System Exception"
+        state["txt_ExceptionDetail"] = msg
+        thrown = _MiniPadInterpreter(body).run(state)
+        assert thrown is None, f"Unexpected breach on message {msg!r}: {thrown}"
+        observed_counts.append(state["num_ConsecutiveExceptionCount"])
+
+    assert observed_counts == expected_counts
+
+
+def test_mark_exception_breach_on_fourth_identical_message(tmp_path: Path) -> None:
+    """Task 7b Do item 4: limit 3 breaches on the 4th identical message, per §A7.
+
+    Also asserts the breach throws System Unavailable Exception via the existing
+    ThrowCustomError rendering, and that no dedicated-mail CALL exists anywhere in
+    the body (user decision 2026-09-24: option A, no Send Consecutive/System
+    Exception Mail FUNCTIONs).
+    """
+    full_body = _generate_pid171_performer_mark_exception_body(tmp_path)
+    assert not any("CALL 'Send Consecutive Exception Mail'" in line for line in full_body)
+    assert not any("CALL 'Send System Exception Mail'" in line for line in full_body)
+    assert not any("flg_HaltRun" in line for line in full_body)
+    body = _logic_only(full_body)
+
+    state: dict[str, object] = {
+        "txt_PreviousExceptionDetail": "",
+        "num_ConsecutiveExceptionCount": 0,
+        "num_ConsecutiveExceptionLimit": 3,
+        "obj_WorkQueueItem": None,
+    }
+    thrown_codes: list[str | None] = []
+    for _ in range(4):
+        state["txt_ExceptionType"] = "System Exception"
+        state["txt_ExceptionDetail"] = "identical failure"
+        thrown_codes.append(_MiniPadInterpreter(body).run(state))
+
+    assert thrown_codes == [None, None, None, "System Unavailable Exception"]
+    assert state["num_ConsecutiveExceptionCount"] == 3
+
+
+def test_mark_exception_variant_selected_from_decision_branch_context(tmp_path: Path) -> None:
+    """Task 7b: status variant comes from real BP branch context, not name/Tag.
+
+    Replaces test_mark_exception_variant_selection_is_deferred_to_task_7b — the
+    VERIFY-deferred marker must now be gone from PID_0171's real output because the
+    variant is genuinely selected (mapping/vbo_catalogue.yaml L452/L454), not merely
+    because the Mark Exception page no longer reaches that code path.
+    """
+    body = _generate_pid171_performer_mark_exception_body(tmp_path)
+    assert any("WorkQueueItemStatus.BusinessException" in line for line in body)
+    assert any("WorkQueueItemStatus.GenericException" in line for line in body)
+    assert not any("status variant deferred to Task 7b" in line for line in body)
+
+
+def test_status_variant_selected_from_synthetic_decision_branch_context() -> None:
+    """Task 7b: variant selection is generic — proven with non-PID_171 names.
+
+    A synthetic 2-branch page (arbitrary stage/page names, nothing named "Mark
+    Item As Exception", "Tag Item" or carrying a BP "Tag" value) whose governing
+    Decision's own expression tests for "system exception" must still select the
+    GenericException row on the true arm and the default (BusinessException) row on
+    the false arm — proving the selection reads decision_expression/branch position,
+    not any name or Tag heuristic.
+    """
+    gen = PADGenerator()
+
+    def wq_action_stage(stage_id: str, onsuccess: str | None) -> BPStage:
+        return BPStage(
+            stage_id=stage_id,
+            stage_type=StageType.ACTION,
+            name="Update Widget Status",  # deliberately not "Mark Exception"
+            params_map={
+                "Item ID": "[Widget ID]",
+                "Exception Reason": "[Widget Detail]",
+                "_vbo_object": "Blueprism.Automate.clsWorkQueuesActions",
+                "_vbo_action": "Mark Exception",
+            },
+            onsuccess_target=onsuccess,
+            pa_annotation=PAAnnotation(
+                target_type="Mark Exception",
+                target_module="WorkQueues",
+                runtime=Runtime.DESKTOP,
+                confidence=0.70,
+                band=ConfidenceBand.SPOT_CHECK,
+                params_map={
+                    "Item ID": "[Widget ID]",
+                    "Exception Reason": "[Widget Detail]",
+                    "_vbo_object": "Blueprism.Automate.clsWorkQueuesActions",
+                    "_vbo_action": "Mark Exception",
+                },
+                flags=[],
+            ),
+        )
+
+    start = BPStage(
+        stage_id="S",
+        stage_type=StageType.START,
+        name="Start",
+        onsuccess_target="D",
+        pa_annotation=PAAnnotation(
+            target_type="",
+            target_module="System",
+            runtime=Runtime.DESKTOP,
+            confidence=0.95,
+            band=ConfidenceBand.AUTO,
+            params_map={},
+            flags=[],
+        ),
+    )
+    decision = BPStage(
+        stage_id="D",
+        stage_type=StageType.DECISION,
+        name="Widget Kind?",  # deliberately not "Retry Exception?"
+        decision_expression='Lower([Widget Kind])="system exception"',
+        ontrue_target="A_TRUE",
+        onfalse_target="A_FALSE",
+        pa_annotation=PAAnnotation(
+            target_type="IF <expr> THEN <true-branch> ELSE <false-branch> END",
+            target_module="System",
+            runtime=Runtime.DESKTOP,
+            confidence=0.85,
+            band=ConfidenceBand.SPOT_CHECK,
+            params_map={},
+            flags=[],
+        ),
+    )
+    end_true = BPStage(
+        stage_id="E_TRUE",
+        stage_type=StageType.END,
+        name="End True",
+        pa_annotation=PAAnnotation(
+            target_type="",
+            target_module="System",
+            runtime=Runtime.DESKTOP,
+            confidence=0.95,
+            band=ConfidenceBand.AUTO,
+            params_map={},
+            flags=[],
+        ),
+    )
+    end_false = BPStage(
+        stage_id="E_FALSE",
+        stage_type=StageType.END,
+        name="End False",
+        pa_annotation=PAAnnotation(
+            target_type="",
+            target_module="System",
+            runtime=Runtime.DESKTOP,
+            confidence=0.95,
+            band=ConfidenceBand.AUTO,
+            params_map={},
+            flags=[],
+        ),
+    )
+    stage_true = wq_action_stage("A_TRUE", "E_TRUE")
+    stage_false = wq_action_stage("A_FALSE", "E_FALSE")
+
+    stages = [start, decision, stage_true, end_true, stage_false, end_false]
+    rendered = gen._render_stage_list_with_coarse_blocks(stages)
+
+    lines = rendered.splitlines()
+    if_idx = next(i for i, line in enumerate(lines) if line.strip().startswith("IF "))
+    else_idx = next(i for i in range(if_idx, len(lines)) if lines[i].strip() == "ELSE")
+    end_idx = next(i for i in range(else_idx, len(lines)) if lines[i].strip() == "END")
+
+    true_branch = "\n".join(lines[if_idx + 1 : else_idx])
+    false_branch = "\n".join(lines[else_idx + 1 : end_idx])
+
+    assert "WorkQueueItemStatus.GenericException" in true_branch
+    assert "WorkQueueItemStatus.BusinessException" in false_branch
+    assert "status variant deferred to Task 7b" not in rendered
 
 
 def test_unmatched_queue_expression_emits_todo_marker(tmp_path: Path) -> None:
