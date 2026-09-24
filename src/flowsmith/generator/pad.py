@@ -79,6 +79,32 @@ _COARSE_CATCHALL_ACTIONS: list[str] = [
 # Main Page split point (Get Next Item stage ID, per architecture doc §B11)
 GET_NEXT_ITEM_STAGE_ID = "85fbb578-f410-4f72-8ca9-58513939bc51"
 
+# Task 7b fix pass (gap 5): the exact literal values the Mark Item As Exception
+# page's "Retry Exception?" Decision compares [Exception Type] against —
+# `Lower([Exception Type])="system exception" OR Lower([Exception Type])=
+# "internal"` (outputs/report/PID_0171_html_report_20260904/data/
+# pid-171-us-process-lims-prelude.md, "## Page: Mark Item As Exception"). Used by
+# `_detect_exception_branch_contexts` for an exact-literal match (never a raw
+# substring test — that previously misfired on the unrelated literal
+# "login system exception", which merely *contains* the substring "system
+# exception" without being it; see docs/reviews/7b-2026-09-24-v2.md gap 5).
+_SYSTEM_EXCEPTION_BRANCH_LITERALS: frozenset[str] = frozenset({"system exception", "internal"})
+
+# Matches a quoted string literal on either side of an `=`/`<>` comparison, e.g.
+# `Lower([Exception Type])="system exception"` or `[Exception Type]<>"System
+# Exception"`. Deliberately *not* anchored to any particular BP data-item name
+# (e.g. `[Exception Type]`) — the governing Decision may compare a differently
+# named item that still carries the same exception-type literal (Task 7b fix pass
+# gap 5's hard constraint: derive from the comparison's literal/polarity, never a
+# stage/field name; proven generic by
+# test_status_variant_selected_from_synthetic_decision_branch_context, which uses
+# `[Widget Kind]`, not `[Exception Type]`). Two alternatives cover the literal
+# appearing after the operator (the common case) or before it.
+_EXCEPTION_TYPE_COMPARISON_RE = re.compile(
+    r"(=|<>)\s*[\"']([^\"']*)[\"']|[\"']([^\"']*)[\"']\s*(=|<>)",
+    re.IGNORECASE,
+)
+
 
 class PADGenerator:
     """Generate .robin files for annotated BP processes."""
@@ -2579,7 +2605,17 @@ class PADGenerator:
         # the whole literal substring already collapses both occurrences to the same
         # temp var name at the call site, so a second pass previously only added
         # dead output, never a second usable reference.
-        trim_pattern = r"Trim\s*\(\s*([^)]+)\s*\)"
+        # Task 7b fix pass (gap 4): `[^)]+` stops at the *first* `)`, so a nested
+        # call like `Lower(ExceptionType())` only captured `ExceptionType(` (missing
+        # its own closing paren), leaving a stray `)` behind and corrupting the
+        # rendered line (confirmed at the pre-fix regenerated output, e.g.
+        # `Text.ChangeCase 'ExceptionType(' ...` and a malformed
+        # `IF ... (txt_lowered_0)="system exception" OR txt_lowered_0)="internal")
+        # THEN`). This pattern instead allows the inner content to itself contain
+        # one level of balanced parens (`(?:[^()]|\([^()]*\))*`), so
+        # `ExceptionType()`'s own empty parens are consumed as part of the Lower/
+        # Trim call's argument instead of terminating it early.
+        trim_pattern = r"Trim\s*\(((?:[^()]|\([^()]*\))*)\)"
         seen_trim: dict[str, str] = {}
         for match in re.finditer(trim_pattern, result):
             inner_expr = match.group(1).strip()
@@ -2600,7 +2636,8 @@ class PADGenerator:
             seen_trim[inner_expr] = temp_var
             temp_var_counter += 1
 
-        lower_pattern = r"Lower\s*\(\s*([^)]+)\s*\)"
+        # Same nested-paren fix as trim_pattern above (gap 4).
+        lower_pattern = r"Lower\s*\(((?:[^()]|\([^()]*\))*)\)"
         seen_lower: dict[str, str] = {}
         for match in re.finditer(lower_pattern, result):
             inner_expr = match.group(1).strip()
@@ -2898,6 +2935,22 @@ class PADGenerator:
             for action in detail_actions:
                 lines.append(action)
             message_expr = translated_detail if translated_detail else "txt_ExceptionMessage"
+            # Task 7b fix pass (gap 8): `_translate_bp_expression` leaves BP's
+            # double-quoted string literals as double-quoted (`"..."`), but the
+            # reference's own throw-message *concatenations* use single-quoted PAD
+            # literals joined with `+`, e.g.
+            # `docs/pad-reference/DF_PID_171_US_LIMS_Prelude_Main.robin.txt` L1290
+            # (`GLOBAL.num_ConsecutiveExcLimit + ' consecutive incidents of ' + ...`)
+            # and L1272/L1297/L1316 (`'Unable to update work queue item status
+            # after ' + GLOBAL.num_MaxRetryLimit + ' attempts.'`). Scoped to
+            # concatenation expressions (``+`` present) — the reference uses a
+            # different convention, ``$'''...'''``, for a throw message that is a
+            # single bare literal with no concatenation (e.g. L1004, L1183), which
+            # is a separate, uncited-for-this-gap fix and stays untouched here to
+            # keep this change scoped to what gap 8 names (the two TERMINATE
+            # concatenated messages), not a general re-quoting pass.
+            if translated_detail and "+" in message_expr:
+                message_expr = re.sub(r'"([^"]*)"', r"'\1'", message_expr)
             rendered = throw_template.render(
                 custom=target_type == "ThrowCustomError",
                 error_code=annotation.params_map.get("exception_type", "%txt_ExceptionType%"),
@@ -3061,6 +3114,22 @@ class PADGenerator:
             # Add any separate Trim/Lower action lines
             for action in separate_actions:
                 lines.append(action)
+
+            # Task 7b fix pass (gap 3): this DECISION-stub path (empty IF/ELSE/END,
+            # no real nested branch content) lost its VERIFY marker when Task 7b's
+            # target_type dispatch fix started routing DECISION's real
+            # "IF <expr> THEN <true-branch> ELSE <false-branch> END" annotation
+            # here (previously it fell through, unmatched, to the generic
+            # target_module fallback below, which *does* append a VERIFY suffix for
+            # SPOT_CHECK band — see the `comment += f" # VERIFY: ..."` line further
+            # down). condition.robin.j2 itself is out of this task's file scope
+            # (Files in scope: pad.py/test_pad.py only — see this branch's own
+            # docstring comment above), so the marker is emitted as its own
+            # preceding line instead of inside the template, matching the existing
+            # convention used just above for the WorkQueues Get Next Item/Mark
+            # Exception VERIFY lines.
+            if band == ConfidenceBand.SPOT_CHECK:
+                lines.append(f"# VERIFY: {stage.name} (confidence {annotation.confidence:.2f})")
 
             rendered = cond_template.render(
                 condition=translated_cond if translated_cond else "%SomeVar% = True",
@@ -3550,6 +3619,7 @@ class PADGenerator:
                     start.stage_id,
                     stages_by_id,
                     visited,
+                    set(),
                     process,
                     process_map,
                     variable_name_mapping,
@@ -3569,15 +3639,80 @@ class PADGenerator:
 
         return "\n".join(line for line in lines if line)
 
+    def _reachable_stage_ids(
+        self,
+        start_id: str | None,
+        stages_by_id: dict[str, BPStage],
+        stop_ids: set[str],
+    ) -> list[str]:
+        """Breadth-first list of stage ids forward-reachable from ``start_id``.
+
+        Follows ``onsuccess_target``, and — for a nested branching ``DECISION``
+        (both ``ontrue_target``/``onfalse_target`` set) — both branch targets, so a
+        join point past a nested decision is still found. Traversal stops at (does
+        not expand past) any id already in ``stop_ids`` (stages already rendered
+        elsewhere, or stages on the current DFS path — passed in by the caller so a
+        cycle can't be walked forever) or already collected in this call (guards
+        against a cycle purely internal to the reachable set itself).
+
+        Used by ``_render_decision_branch`` (Task 7b fix pass, gap 2) to find the
+        nearest join stage between a DECISION's two branches *before* rendering
+        either one, so the shared continuation past the join can be emitted once,
+        after the ``IF``/``ELSE``/``END`` block, instead of only inside whichever
+        branch happens to reach it first (the bug documented in
+        ``docs/reviews/7b-2026-09-24-v2.md`` gap 2).
+
+        Args:
+            start_id: The stage to start from (``None`` returns an empty list).
+            stages_by_id: id → BPStage map for the whole stage list being rendered.
+            stop_ids: Ids to treat as boundaries — collected only if already inside,
+                never expanded past.
+
+        Returns:
+            Stage ids in BFS (closest-first) order, ``start_id`` included if valid.
+        """
+        if start_id is None or start_id not in stages_by_id:
+            return []
+
+        order: list[str] = []
+        seen: set[str] = set()
+        queue: list[str] = [start_id]
+        while queue:
+            sid = queue.pop(0)
+            if sid in seen or sid not in stages_by_id:
+                continue
+            seen.add(sid)
+            order.append(sid)
+            if sid in stop_ids:
+                continue
+            stage = stages_by_id[sid]
+            next_ids: list[str]
+            if (
+                stage.stage_type == StageType.DECISION
+                and stage.ontrue_target
+                and stage.onfalse_target
+            ):
+                next_ids = [t for t in (stage.ontrue_target, stage.onfalse_target) if t]
+            elif stage.onsuccess_target:
+                next_ids = [stage.onsuccess_target]
+            else:
+                next_ids = []
+            for nid in next_ids:
+                if nid not in seen:
+                    queue.append(nid)
+        return order
+
     def _render_chain(
         self,
         stage_id: str | None,
         stages_by_id: dict[str, BPStage],
         visited: set[str],
+        ancestors: set[str],
         process: BPProcess | None,
         process_map: dict[str, Any] | None,
         variable_name_mapping: dict[str, str] | None,
         render_stage_fn: Any,
+        stop_id: str | None = None,
     ) -> list[str]:
         """Render a straight-line control-flow chain starting at ``stage_id``.
 
@@ -3593,27 +3728,61 @@ class PADGenerator:
         chained to each other) is rendered as one contiguous group, in id order,
         before following their shared successor.
 
-        The walk stops at a stage with no further target (an ``EXCEPTION`` throw or an
-        ``END`` stage, both terminal per §B12), or at a stage already in ``visited``
-        (a join point already rendered by a sibling branch — see
-        ``_render_decision_branch``).
+        The walk stops, without rendering it, at ``stop_id`` (the join stage a
+        sibling branch or the caller will render — see ``_render_decision_branch``),
+        or at a stage with no further target (an ``EXCEPTION`` throw or an ``END``
+        stage, both terminal per §B12).
+
+        A back-edge — the next stage id already being on this same forward path
+        (``ancestors``) rather than merely already rendered elsewhere — is a genuine
+        BP loop this linear walk cannot unroll (Task 7b fix pass gap 2: previously
+        silently dropped with no marker). It is flagged with a ``# TODO`` naming the
+        looping stage and left unrendered rather than followed (which would recurse
+        forever) or silently skipped.
 
         Args:
             stage_id: The stage to start at (``None`` renders nothing).
             stages_by_id: id → BPStage map for the whole stage list being rendered.
             visited: Mutable set of already-rendered stage ids, shared across the
                 whole page render so a join point is emitted exactly once.
+            ancestors: Stage ids on the current forward path from the page START to
+                here (not shared between sibling branches — each branch walk gets
+                its own copy) — used only to detect back-edges/loops.
             process: The BPProcess (forwarded to per-stage renderers).
             process_map: Process map from page_target_map.yaml.
             variable_name_mapping: Optional BP-name→PAD-name dict from Task 5b.
             render_stage_fn: Callable(stage, process, process_map, variable_name_mapping) → str.
+            stop_id: If set, the walk halts (without rendering) as soon as it would
+                reach this stage id — used to hold back a shared join's rendering so
+                the caller can emit it once, after the branch structure.
 
         Returns:
             Rendered lines for this chain, in order.
         """
         lines: list[str] = []
+        local_ancestors = set(ancestors)
 
-        while stage_id is not None and stage_id in stages_by_id and stage_id not in visited:
+        while stage_id is not None and stage_id in stages_by_id and stage_id != stop_id:
+            if stage_id in local_ancestors:
+                # Genuine loop back-edge within this same forward path — never
+                # silently drop (CLAUDE.md); this generic walk cannot unroll BP
+                # loops, so name it and stop instead of recursing forever.
+                looping_stage = stages_by_id[stage_id]
+                lines.append(
+                    f"# TODO: loop back-edge to stage '{looping_stage.name}' "
+                    f"(id={stage_id}) — this control-flow walk renders "
+                    "straight-line/branching graphs only and cannot unroll BP "
+                    "loops here; needs manual translation"
+                )
+                return lines
+
+            if stage_id in visited:
+                # Already rendered by a sibling branch elsewhere in the walk (not
+                # on this path) — stop here without re-rendering; the caller is
+                # responsible for having pre-computed this as a join (stop_id)
+                # when it matters, this is just a defensive fallback.
+                return lines
+
             stage = stages_by_id[stage_id]
 
             base, sep, _suffix = stage.stage_id.partition("__calc_")
@@ -3625,6 +3794,7 @@ class PADGenerator:
                     if gid in visited:
                         continue
                     visited.add(gid)
+                    local_ancestors.add(gid)
                     gstage = stages_by_id[gid]
                     rendered = render_stage_fn(gstage, process, process_map, variable_name_mapping)
                     if rendered:
@@ -3634,6 +3804,7 @@ class PADGenerator:
                 continue
 
             visited.add(stage.stage_id)
+            local_ancestors.add(stage.stage_id)
 
             if (
                 stage.stage_type == StageType.DECISION
@@ -3644,6 +3815,7 @@ class PADGenerator:
                     stage,
                     stages_by_id,
                     visited,
+                    local_ancestors,
                     process,
                     process_map,
                     variable_name_mapping,
@@ -3665,11 +3837,53 @@ class PADGenerator:
 
         return lines
 
+    def _detect_exception_branch_contexts(self, bp_condition: str) -> tuple[str | None, str | None]:
+        """Derive the Mark Exception system/business branch tags from a real comparison.
+
+        Task 7b fix pass (gap 5): replaces a raw ``"system exception" in
+        expr_lower`` substring test, which misfired two ways — (a) it matched the
+        unrelated literal ``"login system exception"`` (the "System Unavailable?"
+        Decision, same page) purely because it *contains* the substring, wrongly
+        tagging that branch; (b) it ignored comparison polarity, so a negated test
+        like ``[Exception Type]<>"System Exception"`` still tagged the true arm
+        "system" when it actually means the opposite.
+
+        This instead looks for an *exact*-literal equality/inequality comparison
+        against one of ``_SYSTEM_EXCEPTION_BRANCH_LITERALS`` (the literals the real
+        "Retry Exception?" Decision compares against — see that constant's
+        citation) via ``_EXCEPTION_TYPE_COMPARISON_RE`` (deliberately not anchored
+        to the ``[Exception Type]`` field name — see that pattern's own comment),
+        and reads the operator to get the polarity right: ``=`` means the true arm
+        is the "system" branch; ``<>`` means the true arm is the "business"
+        (not-system) branch and the false arm is "system".
+
+        Args:
+            bp_condition: The DECISION stage's raw BP ``decision_expression``.
+
+        Returns:
+            ``(true_context, false_context)`` — each ``"system"``, ``"business"``,
+            or (if no recognised comparison is found) ``(None, None)``, meaning the
+            caller should inherit whatever context already applies.
+        """
+        if not bp_condition:
+            return None, None
+        for match in _EXCEPTION_TYPE_COMPARISON_RE.finditer(bp_condition):
+            if match.group(1) is not None:
+                operator, literal = match.group(1), match.group(2)
+            else:
+                literal, operator = match.group(3), match.group(4)
+            if literal.strip().lower() in _SYSTEM_EXCEPTION_BRANCH_LITERALS:
+                if operator == "<>":
+                    return "business", "system"
+                return "system", "business"
+        return None, None
+
     def _render_decision_branch(
         self,
         stage: BPStage,
         stages_by_id: dict[str, BPStage],
         visited: set[str],
+        ancestors: set[str],
         process: BPProcess | None,
         process_map: dict[str, Any] | None,
         variable_name_mapping: dict[str, str] | None,
@@ -3686,39 +3900,55 @@ class PADGenerator:
         it has no way to receive nested branch content (out of this task's file scope
         — ``templates/`` is not in Task 7b's Files in scope).
 
-        The true branch is walked first; the false branch's walk then stops as soon
-        as it reaches any stage the true branch already rendered — i.e. their first
-        common (join) stage — so a join point (e.g. the Mark Item As Exception page's
-        shared ``End2``) is emitted exactly once, nested wherever it was first
-        reached, never duplicated.
+        Task 7b fix pass (gap 2): the nearest join stage reachable from *both*
+        ``ontrue_target`` and ``onfalse_target`` is found first, via
+        ``_reachable_stage_ids``, before either branch is rendered. Each branch is
+        then rendered only up to (excluding) that join — never past it — and the
+        join's own chain is rendered exactly once, *after* the ``END`` line, not
+        nested inside either branch. This is what makes the shared continuation
+        past a merge point (e.g. the Mark Item As Exception page's shared ``End2``)
+        reachable from both branches: it runs unconditionally after the ``IF``/
+        ``ELSE``/``END`` regardless of which arm was taken, which is exactly BP's
+        real semantics for a rejoining branch — the previous version nested it only
+        inside whichever branch's walk reached it first, silently losing it from
+        the other arm (the bug this fix pass corrects).
 
-        Task 7b status-variant selection: while walking each branch, if this
-        DECISION's own ``decision_expression`` recognisably tests the BP
-        exception-type vocabulary (CLAUDE.md's canonical exception-type strings) for
-        "system exception" — the Mark Item As Exception page's "Retry Exception?"
-        stage (`Lower([Exception Type])="system exception" OR
-        Lower([Exception Type])="internal"`) — the true branch is tagged
-        ``self._current_exception_branch_context = "system"`` and the false branch
-        (the binary complement in this page's 3-way BE/SUE/SE dispatch, §A7) is
-        tagged ``"business"``, consulted by ``_render_stage``'s WorkQueues branch to
-        pick the "Mark Exception" catalogue variant. This is derived purely from the
-        governing Decision's own condition text and branch position — never from a
-        stage's own name or a Tag value (task hard constraint). A DECISION whose
-        expression doesn't recognisably match either keyword inherits the enclosing
-        context unchanged (usually ``None``, keeping the VERIFY marker).
+        Task 7b status-variant selection: while walking each branch, this
+        DECISION's own ``decision_expression`` is checked for an equality/inequality
+        comparison of ``[Exception Type]`` (optionally ``Lower(...)``-wrapped)
+        against the literal ``"system exception"`` or ``"internal"`` — the exact
+        literals the Mark Item As Exception page's "Retry Exception?" stage compares
+        (`Lower([Exception Type])="system exception" OR Lower([Exception Type])=
+        "internal"`). This is an exact-literal, polarity-aware match (Task 7b fix
+        pass gap 5: not a raw substring test, which previously misfired on
+        "login system exception" — a *different* literal that merely contains the
+        substring — and ignored inequality tests entirely). On a match, the branch
+        that is taken when the comparison is true is tagged
+        ``self._current_exception_branch_context = "system"`` and the other arm
+        ``"business"`` (§A7's binary complement in this page's 3-way BE/SUE/SE
+        dispatch); on ``<>`` the polarity is inverted. Consulted by
+        ``_render_stage``'s WorkQueues branch to pick the "Mark Exception" catalogue
+        variant. This is derived purely from the governing Decision's own condition
+        text and branch position — never from a stage's own name or a Tag value
+        (task hard constraint). A DECISION whose expression doesn't recognisably
+        match inherits the enclosing context unchanged (usually ``None``, keeping
+        the VERIFY marker).
 
         Args:
             stage: The DECISION stage (``ontrue_target``/``onfalse_target`` both set).
             stages_by_id: id → BPStage map for the whole stage list being rendered.
             visited: Mutable set of already-rendered stage ids (shared, see
                 ``_render_chain``).
+            ancestors: Stage ids on the current forward path up to and including
+                this DECISION (see ``_render_chain``'s back-edge detection).
             process: The BPProcess (forwarded to per-stage renderers).
             process_map: Process map from page_target_map.yaml.
             variable_name_mapping: Optional BP-name→PAD-name dict from Task 5b.
             render_stage_fn: Callable(stage, process, process_map, variable_name_mapping) → str.
 
         Returns:
-            The rendered ``IF``/``ELSE``/``END`` block as one string.
+            The rendered ``IF``/``ELSE``/``END`` block (plus any shared continuation
+            past a join, appended after ``END``) as one string.
         """
         bp_condition = stage.decision_expression or ""
         translated_cond, cond_actions = self._translate_bp_expression(
@@ -3726,12 +3956,27 @@ class PADGenerator:
         )
         condition_text = translated_cond if translated_cond else "%SomeVar% = True"
 
-        expr_lower = bp_condition.lower()
-        true_context = self._current_exception_branch_context
-        false_context = self._current_exception_branch_context
-        if "system exception" in expr_lower:
-            true_context = "system"
-            false_context = "business"
+        true_context, false_context = self._detect_exception_branch_contexts(bp_condition)
+        if true_context is None and false_context is None:
+            true_context = self._current_exception_branch_context
+            false_context = self._current_exception_branch_context
+
+        # Find the nearest stage reachable from both arms (a real merge point) so
+        # neither branch's walk consumes it — it is rendered once, after END.
+        stop_ids = visited | ancestors
+        true_reachable = self._reachable_stage_ids(stage.ontrue_target, stages_by_id, stop_ids)
+        false_reachable_set = set(
+            self._reachable_stage_ids(stage.onfalse_target, stages_by_id, stop_ids)
+        )
+        # A genuine join must be a *new* node, not one already inside stop_ids
+        # (visited elsewhere, or an ancestor on this same forward path) — a
+        # stop_ids member reachable from both arms is either a loop back-edge
+        # (ancestors) or already independently rendered (visited), neither of
+        # which should be hoisted as a fresh shared continuation.
+        join_id = next(
+            (sid for sid in true_reachable if sid in false_reachable_set and sid not in stop_ids),
+            None,
+        )
 
         previous_context = self._current_exception_branch_context
         try:
@@ -3740,20 +3985,24 @@ class PADGenerator:
                 stage.ontrue_target,
                 stages_by_id,
                 visited,
+                ancestors,
                 process,
                 process_map,
                 variable_name_mapping,
                 render_stage_fn,
+                stop_id=join_id,
             )
             self._current_exception_branch_context = false_context
             false_lines = self._render_chain(
                 stage.onfalse_target,
                 stages_by_id,
                 visited,
+                ancestors,
                 process,
                 process_map,
                 variable_name_mapping,
                 render_stage_fn,
+                stop_id=join_id,
             )
         finally:
             self._current_exception_branch_context = previous_context
@@ -3766,6 +4015,20 @@ class PADGenerator:
         for block in false_lines:
             out.extend(f"    {ln}" for ln in block.split("\n"))
         out.append("END")
+
+        if join_id is not None and join_id not in visited:
+            continuation_lines = self._render_chain(
+                join_id,
+                stages_by_id,
+                visited,
+                ancestors,
+                process,
+                process_map,
+                variable_name_mapping,
+                render_stage_fn,
+            )
+            out.extend(continuation_lines)
+
         return "\n".join(out)
 
     def _render_structural_stage(self, stage: BPStage) -> str:

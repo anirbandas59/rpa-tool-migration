@@ -684,6 +684,88 @@ def test_exception_custom_error_uses_annotated_exception_type() -> None:
     assert "CustomErrorCode: $'''System Exception'''" in result
 
 
+def test_throw_custom_error_concatenated_message_uses_single_quoted_literals() -> None:
+    """Task 7b fix pass (gap 8): concatenated throw messages use PAD single-quote
+
+    literals (``'...'``), not BP's double-quoted literals left untranslated.
+
+    Per ``docs/pad-reference/DF_PID_171_US_LIMS_Prelude_Main.robin.txt`` L1290
+    (``GLOBAL.num_ConsecutiveExcLimit + ' consecutive incidents of ' + ... `` ) and
+    L1272/L1297/L1316 (``'Unable to update work queue item status after ' + ...``),
+    the reference's throw-message *concatenations* join single-quoted PAD string
+    literals with ``+``. ``_translate_bp_expression`` leaves BP's double-quoted
+    literals double-quoted, which is not valid PAD syntax in this position — this
+    is normalised only for concatenation expressions (``+`` present), scoped to
+    the two TERMINATE messages this gap names, not every double-quoted literal in
+    the generator's output.
+
+    Mutation check: removing the quote-substitution call in the
+    ``target_type in ("ThrowError", "ThrowCustomError")`` branch of
+    ``_render_stage`` makes this test fail (the message stays double-quoted).
+    """
+    gen = PADGenerator()
+    stage = make_annotated_stage(
+        stage_id="E4",
+        name="TERMINATE",
+        stage_type=StageType.EXCEPTION,
+        target_type="ThrowCustomError",
+        target_module="FlowControl",
+        confidence=0.80,
+        params_map={
+            "exception_type": "System Unavailable Exception",
+            "detail_expr": '[Consecutive Exception Limit] & " consecutive incidents of " & [Exception Type]',
+        },
+    )
+    result = gen._render_stage(stage)
+
+    assert "CustomErrorMessage:" in result
+    message_part = result.split("CustomErrorMessage:", 1)[1]
+    assert "'" in message_part
+    assert '"' not in message_part
+    assert "' consecutive incidents of '" in message_part
+
+
+def test_decision_stub_spot_check_band_carries_verify_marker() -> None:
+    """Task 7b fix pass (gap 3): an empty IF/ELSE/END decision stub at SPOT_CHECK
+
+    band keeps a VERIFY marker naming the stage and confidence.
+
+    Before this fix, Task 7b's target_type dispatch change started routing
+    DECISION's real "IF <expr> THEN <true-branch> ELSE <false-branch> END"
+    annotation into this stub path (previously it fell through, unmatched, to the
+    generic fallback comment branch, which *did* append a VERIFY suffix for
+    SPOT_CHECK band) — losing the marker for every DECISION with no real branch
+    targets to nest (51 flagged stubs became 47 unflagged ones,
+    docs/reviews/7b-2026-09-24-v2.md gap 3). ``condition.robin.j2`` itself is out
+    of this task's file scope, so the marker is emitted as a preceding comment
+    line (matching the convention used elsewhere in ``pad.py``), not inside the
+    template.
+
+    Mutation check: removing the ``if band == ConfidenceBand.SPOT_CHECK: lines
+    .append(...)`` block in the ``Condition``/``"IF <expr> THEN ..."`` branch of
+    ``_render_stage`` makes this test fail (no VERIFY line at all).
+    """
+    gen = PADGenerator()
+    stage = make_annotated_stage(
+        stage_id="D1",
+        name="Stub Decision?",
+        stage_type=StageType.DECISION,
+        target_type="IF <expr> THEN <true-branch> ELSE <false-branch> END",
+        target_module="System",
+        confidence=0.85,
+        # No ontrue_target/onfalse_target set — renders via the empty-stub path,
+        # not _render_decision_branch.
+    )
+    result = gen._render_stage(stage)
+
+    lines = result.splitlines()
+    if_idx = next(i for i, ln in enumerate(lines) if ln.strip().startswith("IF "))
+    assert if_idx > 0, f"Expected a VERIFY line before the IF, got: {result!r}"
+    assert lines[if_idx - 1].strip().startswith("# VERIFY:")
+    assert "Stub Decision?" in lines[if_idx - 1]
+    assert "0.85" in lines[if_idx - 1]
+
+
 def test_sensitive_vars_detected_from_password_data_type() -> None:
     """Test that a password-typed data item produces an @SENSITIVE entry."""
     gen = PADGenerator()
@@ -874,6 +956,41 @@ def test_translate_bp_expression_handles_trim_as_separate_action() -> None:
     # At least one action should mention Text.Trim
     trim_actions = [a for a in actions if "Text.Trim" in a]
     assert len(trim_actions) >= 1
+
+
+def test_translate_bp_expression_handles_lower_of_nested_function_call() -> None:
+    """Task 7b fix pass (gap 4): ``Lower(ExceptionType())`` — a nested call inside
+
+    the Lower(...) argument — must not corrupt the Lower(...) extraction.
+
+    ``ExceptionType()`` is a real BP built-in function (no-arg; architecture doc
+    §A5's `Block`/`Recover` note: "the exception type classified via
+    ExceptionType()/ExceptionDetail() BP functions"). Before this fix, the
+    ``[^)]+`` regex inside ``lower_pattern``/``trim_pattern`` stopped at the
+    *first* ``)`` — i.e. ``ExceptionType(``'s own closing paren — leaving a stray
+    trailing ``)`` in the result and truncating the captured inner expression
+    (confirmed at the pre-fix regenerated PID_0171 output:
+    ``Text.ChangeCase 'ExceptionType(' 'To lowercase' => txt_lowered_0`` and a
+    malformed ``IF ... (txt_lowered_0)="system exception" OR
+    txt_lowered_0)="internal") THEN``). The fixed pattern allows the Lower/Trim
+    argument to itself contain one level of balanced parens.
+
+    Mutation check: reverting ``lower_pattern``/``trim_pattern`` to the old
+    ``r"Lower\\s*\\(\\s*([^)]+)\\s*\\)"`` shape makes this test fail (it would
+    instead produce ``Text.ChangeCase 'ExceptionType(' ...`` and a mismatched
+    trailing ``)`` in ``result``).
+    """
+    gen = PADGenerator()
+
+    expr = 'Lower(ExceptionType())="system exception"'
+    result, actions = gen._translate_bp_expression(expr, None)
+
+    assert len(actions) == 1
+    assert "Text.ChangeCase 'ExceptionType()' 'To lowercase'" in actions[0]
+    # The temp var replaces the whole Lower(...) call cleanly — no stray parens.
+    assert result.count("(") == result.count(")")
+    assert result.endswith('="system exception"')
+    assert "ExceptionType(" not in result
 
 
 def test_translate_bp_expression_handles_dotted_collection_references() -> None:
@@ -2872,8 +2989,8 @@ def _extract_function_body(robin_text: str, function_name: str) -> list[str]:
     return [line.strip() for line in lines[start + 1 : end]]
 
 
-def _generate_pid171_performer_mark_exception_body(tmp_path: Path) -> list[str]:
-    """Generate real PID_0171 output and return the Mark Exception FUNCTION body lines."""
+def _generate_pid171_performer_mark_exception_text(tmp_path: Path) -> str:
+    """Generate real PID_0171 output and return the Performer .robin file's full text."""
     sample_path = Path("samples/blueprism/PID_0171.bprelease")
     if not sample_path.exists():
         pytest.skip("Sample file not found")
@@ -2890,7 +3007,12 @@ def _generate_pid171_performer_mark_exception_body(tmp_path: Path) -> list[str]:
     files = gen.generate_process(process, tmp_path / "robin")
     performer_file = next((f for f in files if "Performer" in f.name), None)
     assert performer_file is not None, "No Performer file generated"
-    text = performer_file.read_text(encoding="utf-8")
+    return performer_file.read_text(encoding="utf-8")
+
+
+def _generate_pid171_performer_mark_exception_body(tmp_path: Path) -> list[str]:
+    """Generate real PID_0171 output and return the Mark Exception FUNCTION body lines."""
+    text = _generate_pid171_performer_mark_exception_text(tmp_path)
     return _extract_function_body(text, "Mark Exception")
 
 
@@ -2989,6 +3111,122 @@ def test_mark_exception_variant_selected_from_decision_branch_context(tmp_path: 
     assert any("WorkQueueItemStatus.BusinessException" in line for line in body)
     assert any("WorkQueueItemStatus.GenericException" in line for line in body)
     assert not any("status variant deferred to Task 7b" in line for line in body)
+
+
+@pytest.mark.parametrize(
+    ("bp_condition", "expected_true_context", "expected_false_context"),
+    [
+        # The real "Retry Exception?" stage (equality, literal in the set).
+        (
+            'Lower([Exception Type])="system exception" OR Lower([Exception Type])="internal"',
+            "system",
+            "business",
+        ),
+        # Task 7b fix pass gap 5 (a): "login system exception" merely *contains* the
+        # substring "system exception" but is a different literal — must NOT match
+        # (this is the real "System Unavailable?" stage's own condition on the same
+        # BP page; a raw substring test wrongly tagged this branch "system").
+        (
+            'Lower([Exception Type])="system unavailable exception" OR '
+            'Lower([Exception Type])="login system exception"',
+            None,
+            None,
+        ),
+        # Task 7b fix pass gap 5 (b): a negated (`<>`) comparison inverts which arm
+        # is "system" — the true arm here means NOT a system exception.
+        ('[Exception Type]<>"System Exception"', "business", "system"),
+        # No exception-type comparison at all: inherits unchanged (None, None).
+        ("[SomeOtherFlag]=True", None, None),
+    ],
+)
+def test_detect_exception_branch_contexts(
+    bp_condition: str,
+    expected_true_context: str | None,
+    expected_false_context: str | None,
+) -> None:
+    """Task 7b fix pass (gap 5): exact-literal, polarity-aware branch detection.
+
+    Direct unit coverage of ``_detect_exception_branch_contexts`` for the two
+    misfires the raw ``"system exception" in expr_lower`` substring test produced
+    (docs/reviews/7b-2026-09-24-v2.md gap 5): a same-substring-different-literal
+    false positive, and an inequality comparison whose polarity was previously
+    ignored.
+    """
+    gen = PADGenerator()
+    true_context, false_context = gen._detect_exception_branch_contexts(bp_condition)
+    assert true_context == expected_true_context
+    assert false_context == expected_false_context
+
+
+def test_mark_exception_variant_lands_in_the_correct_branch(tmp_path: Path) -> None:
+    """Task 7b fix pass (gap 6): the PID_171 variant test checks *branch position*.
+
+    The previous version only asserted both statuses appear somewhere in the body
+    (``any(...) for line in body``), which stays green even if the two branches'
+    bodies were swapped — it never actually proved GenericException was selected
+    on the BP page's "system"-branch side (`Lower([Exception Type])="system
+    exception" OR Lower([Exception Type])="internal"`, the real "Retry Exception?"
+    stage — see outputs/report/PID_0171_html_report_20260904/data/
+    pid-171-us-process-lims-prelude.md, "## Page: Mark Item As Exception") and
+    BusinessException on the false/business side.
+
+    This locates the real "Retry Exception?"-equivalent ``IF``'s true/false arms in
+    the *unstripped* Performer output (indentation-based bracket matching, mirroring
+    the synthetic test's IF/ELSE/END index-finding approach) and asserts each status
+    is in its correct arm, not merely present somewhere in the function.
+
+    Mutation check: swapping the two ``WorkQueueItemStatus`` values between the
+    branches in the real generated body (done below) makes this test fail, unlike
+    the old ``any(...)`` version.
+    """
+    text = _generate_pid171_performer_mark_exception_text(tmp_path)
+    func_lines = _extract_function_body(text, "Mark Exception")
+    # Re-derive with indentation preserved (the FUNCTION line itself, found once
+    # more, to slice the same range without re-stripping).
+    raw_lines = text.splitlines()
+    start = next(
+        i
+        for i, line in enumerate(raw_lines)
+        if line.strip().startswith("FUNCTION 'Mark Exception'")
+    )
+    end = next(i for i in range(start, len(raw_lines)) if raw_lines[i].strip() == "END FUNCTION")
+    body_raw = raw_lines[start + 1 : end]
+    assert [ln.strip() for ln in body_raw] == func_lines  # sanity: same slice
+
+    # Match the exact quoted literal `="system exception"`, not a substring match —
+    # the *other* Decision on this page ("System Unavailable?") also contains the
+    # text "system exception" inside the different, longer literal
+    # "login system exception", which a plain `in` check would wrongly match first.
+    if_idx = next(
+        i
+        for i, ln in enumerate(body_raw)
+        if ln.strip().startswith("IF ") and '="system exception"' in ln.lower()
+    )
+    if_indent = len(body_raw[if_idx]) - len(body_raw[if_idx].lstrip())
+    else_idx = next(
+        i
+        for i in range(if_idx + 1, len(body_raw))
+        if body_raw[i].strip() == "ELSE"
+        and len(body_raw[i]) - len(body_raw[i].lstrip()) == if_indent
+    )
+    end_idx = next(
+        i
+        for i in range(else_idx + 1, len(body_raw))
+        if body_raw[i].strip() == "END"
+        and len(body_raw[i]) - len(body_raw[i].lstrip()) == if_indent
+    )
+
+    true_branch = "\n".join(body_raw[if_idx + 1 : else_idx])
+    false_branch = "\n".join(body_raw[else_idx + 1 : end_idx])
+
+    assert "WorkQueueItemStatus.GenericException" in true_branch, (
+        f"Expected GenericException in the system-exception branch, got: {true_branch!r}"
+    )
+    assert "WorkQueueItemStatus.BusinessException" in false_branch, (
+        f"Expected BusinessException in the business-exception branch, got: {false_branch!r}"
+    )
+    assert "WorkQueueItemStatus.BusinessException" not in true_branch
+    assert "WorkQueueItemStatus.GenericException" not in false_branch
 
 
 def test_status_variant_selected_from_synthetic_decision_branch_context() -> None:
@@ -3108,6 +3346,196 @@ def test_status_variant_selected_from_synthetic_decision_branch_context() -> Non
     assert "WorkQueueItemStatus.GenericException" in true_branch
     assert "WorkQueueItemStatus.BusinessException" in false_branch
     assert "status variant deferred to Task 7b" not in rendered
+
+
+def _set_var_stage(stage_id: str, var_name: str, value: str, onsuccess: str | None) -> BPStage:
+    """A minimal CALCULATION-shaped stage rendering as ``SET <var_name> TO <value>``."""
+    return BPStage(
+        stage_id=stage_id,
+        stage_type=StageType.CALCULATION,
+        name=var_name,
+        params_map={var_name: value},
+        onsuccess_target=onsuccess,
+        pa_annotation=PAAnnotation(
+            target_type="SET <var> TO <expr>",
+            target_module="System",
+            runtime=Runtime.DESKTOP,
+            confidence=0.95,
+            band=ConfidenceBand.AUTO,
+            params_map={},
+            flags=[],
+        ),
+    )
+
+
+def _end_stub_stage(stage_id: str, name: str) -> BPStage:
+    """A minimal terminal END stage (renders to the harmless '# System.' comment)."""
+    return BPStage(
+        stage_id=stage_id,
+        stage_type=StageType.END,
+        name=name,
+        pa_annotation=PAAnnotation(
+            target_type="",
+            target_module="System",
+            runtime=Runtime.DESKTOP,
+            confidence=0.95,
+            band=ConfidenceBand.AUTO,
+            params_map={},
+            flags=[],
+        ),
+    )
+
+
+def test_decision_branch_join_continuation_reaches_both_arms() -> None:
+    """Task 7b fix pass (gap 2): a diamond (both branches reconverge) keeps the
+
+    shared continuation reachable regardless of which arm is taken.
+
+    Synthetic graph: ``Start -> D``, ``D`` true -> ``A -> C``, false -> ``B -> C``
+    (``C`` is the join both arms reach). Before this fix, ``_render_decision_branch``
+    rendered the true branch's full walk first (which happened to reach ``C`` and
+    consume it into ``visited``), so the false branch's walk stopped one stage short
+    of ``C`` and its content (here, "VarC") was silently missing whenever the false
+    arm was taken (docs/reviews/7b-2026-09-24-v2.md gap 2, bug (i)). The fix hoists
+    ``C``'s rendering to run once, after ``END`` — reachable unconditionally, i.e.
+    from both arms — instead of nesting it only inside whichever branch's walk got
+    there first.
+
+    Mutation check: reverting ``_render_decision_branch``'s join-hoisting (so the
+    join is only appended inside the true branch, as before the fix) makes this
+    test fail — "SET VarC" would then appear only inside the true branch, not after
+    END.
+    """
+    gen = PADGenerator()
+
+    start = BPStage(
+        stage_id="S",
+        stage_type=StageType.START,
+        name="Start",
+        onsuccess_target="D",
+        pa_annotation=PAAnnotation(
+            target_type="",
+            target_module="System",
+            runtime=Runtime.DESKTOP,
+            confidence=0.95,
+            band=ConfidenceBand.AUTO,
+            params_map={},
+            flags=[],
+        ),
+    )
+    decision = BPStage(
+        stage_id="D",
+        stage_type=StageType.DECISION,
+        name="Diamond?",
+        decision_expression="[SomeFlag]=True",
+        ontrue_target="A",
+        onfalse_target="B",
+        pa_annotation=PAAnnotation(
+            target_type="IF <expr> THEN <true-branch> ELSE <false-branch> END",
+            target_module="System",
+            runtime=Runtime.DESKTOP,
+            confidence=0.85,
+            band=ConfidenceBand.SPOT_CHECK,
+            params_map={},
+            flags=[],
+        ),
+    )
+    stage_a = _set_var_stage("A", "VarA", "1", "C")
+    stage_b = _set_var_stage("B", "VarB", "2", "C")
+    stage_c = _set_var_stage("C", "VarC", "3", None)
+
+    stages = [start, decision, stage_a, stage_b, stage_c]
+    rendered = gen._render_stage_list_with_coarse_blocks(stages)
+
+    lines = rendered.splitlines()
+    if_idx = next(i for i, line in enumerate(lines) if line.strip().startswith("IF "))
+    else_idx = next(i for i in range(if_idx, len(lines)) if lines[i].strip() == "ELSE")
+    end_idx = next(i for i in range(else_idx, len(lines)) if lines[i].strip() == "END")
+
+    true_branch = "\n".join(lines[if_idx + 1 : else_idx])
+    false_branch = "\n".join(lines[else_idx + 1 : end_idx])
+    after_end = "\n".join(lines[end_idx + 1 :])
+
+    assert "SET VarA TO 1" in true_branch
+    assert "SET VarB TO 2" in false_branch
+    assert "SET VarC TO 3" not in true_branch
+    assert "SET VarC TO 3" not in false_branch
+    assert "SET VarC TO 3" in after_end
+    # Rendered exactly once overall, never duplicated into a branch.
+    assert rendered.count("SET VarC TO 3") == 1
+
+
+def test_decision_branch_loop_back_edge_emits_todo_not_silently_dropped() -> None:
+    """Task 7b fix pass (gap 2): a loop back-edge is flagged, never silently dropped.
+
+    Synthetic graph: ``Start -> C1 -> D``, ``D`` true -> ``C1`` (back-edge to an
+    already-rendered ancestor on the same path), false -> ``Z``. Before this fix,
+    the true branch's walk simply stopped as soon as it saw ``C1`` already in
+    ``visited`` (with no distinction from a legitimate sibling-branch join), so the
+    true arm rendered empty with no explanation (docs/reviews/7b-2026-09-24-v2.md
+    gap 2, bug (ii) — CLAUDE.md's "never silently drop a BP construct" rule).
+
+    Mutation check: reverting the back-edge/ancestors distinction in
+    ``_render_chain`` (so a back-edge is treated the same as an ordinary already-
+    visited join) makes this test fail — the true branch becomes empty with no
+    ``# TODO`` at all.
+    """
+    gen = PADGenerator()
+
+    start = BPStage(
+        stage_id="S",
+        stage_type=StageType.START,
+        name="Start",
+        onsuccess_target="C1",
+        pa_annotation=PAAnnotation(
+            target_type="",
+            target_module="System",
+            runtime=Runtime.DESKTOP,
+            confidence=0.95,
+            band=ConfidenceBand.AUTO,
+            params_map={},
+            flags=[],
+        ),
+    )
+    stage_c1 = _set_var_stage("C1", "VarC1", "1", "D")
+    decision = BPStage(
+        stage_id="D",
+        stage_type=StageType.DECISION,
+        name="Loop?",
+        decision_expression="[KeepGoing]=True",
+        ontrue_target="C1",
+        onfalse_target="Z",
+        pa_annotation=PAAnnotation(
+            target_type="IF <expr> THEN <true-branch> ELSE <false-branch> END",
+            target_module="System",
+            runtime=Runtime.DESKTOP,
+            confidence=0.85,
+            band=ConfidenceBand.SPOT_CHECK,
+            params_map={},
+            flags=[],
+        ),
+    )
+    stage_z = _end_stub_stage("Z", "End Z")
+
+    stages = [start, stage_c1, decision, stage_z]
+    rendered = gen._render_stage_list_with_coarse_blocks(stages)
+
+    lines = rendered.splitlines()
+    if_idx = next(i for i, line in enumerate(lines) if line.strip().startswith("IF "))
+    else_idx = next(i for i in range(if_idx, len(lines)) if lines[i].strip() == "ELSE")
+    end_idx = next(i for i in range(else_idx, len(lines)) if lines[i].strip() == "END")
+
+    true_branch = "\n".join(lines[if_idx + 1 : else_idx])
+    false_branch = "\n".join(lines[else_idx + 1 : end_idx])
+
+    assert "# TODO" in true_branch, f"Expected a loop back-edge TODO, got: {true_branch!r}"
+    assert "C1" in true_branch
+    assert "loop" in true_branch.lower()
+    # The false arm (onfalse_target=Z, a plain terminal) renders normally,
+    # unaffected by the true arm's back-edge.
+    assert "# System." in false_branch
+    # Never re-render the ancestor's own content a second time inside the branch.
+    assert "SET VarC1 TO 1" not in true_branch
 
 
 def test_unmatched_queue_expression_emits_todo_marker(tmp_path: Path) -> None:
