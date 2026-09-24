@@ -1166,53 +1166,70 @@ generated calls' output variables will need (Task 7b).
 
 ---
 
-## Task 7b0 — parser/AST/generator: derive `GLOBAL.` qualification from BP data-item visibility
+## Task 7b0 — `generator/pad.py`: PAD-scope `GLOBAL.` qualification for local `FUNCTION`s
 
 **Depends on:** Task 6b
-**Files in scope:** `src/flowsmith/parser/process.py`, `src/flowsmith/ast/models.py`,
-`src/flowsmith/ast/builder.py`, `src/flowsmith/generator/pad.py` (variable-reference rendering /
-expression translation only), `tests/parser/test_process.py`, `tests/ast/test_models.py`,
-`tests/ast/test_builder.py`, `tests/generator/test_pad.py`
+**Files in scope:** `src/flowsmith/generator/pad.py` (variable-reference rendering / `FUNCTION`
+body emission only), `mapping/page_target_map.yaml` (`global:` flags only, if one is wrong vs the
+reference), `tests/generator/test_pad.py`
 **Required reading:** `docs/bp-to-pad-architecture-PID171.md` §A4 (the `GLOBAL.` qualification
-rule: a non-`GLOBAL` `FUNCTION` must prefix `GLOBAL.` to read *or write* a variable owned by the
-main body or a `GLOBAL FUNCTION`; omitting it silently creates a local shadow), §A3 (which
-reference `FUNCTION`s are `GLOBAL`); `docs/reviews/7b-2026-09-24.md` (why the first 7b attempt was
-reverted: hardcoded PID_171 variable list, read-only qualification, `GLOBAL.GLOBAL.x`).
+rule) and §A3 (which reference `FUNCTION`s are `GLOBAL`); the reference
+`docs/pad-reference/DF_PID_171_US_LIMS_Prelude_Main.robin.txt`; `docs/reviews/7b-2026-09-24.md`
+(why the first 7b attempt was reverted: hardcoded PID_171 variable list, read-only qualification,
+`GLOBAL.GLOBAL.x`).
 
-**Why split out of 7b:** per `docs/reviews/7b-2026-09-24.md`, a correct `GLOBAL.` rule can't be
-derived inside `pad.py` alone. BP's data-item visibility flag (`<private/>` on Data/Collection
-stages; 373 occurrences in `PID_0171.bprelease`) is never parsed, so the first attempt fell back to
-a hardcoded `MAIN_BODY_VARIABLES` list of PID_171 names. That doesn't generalise to the other ~199
-automations and breaks the "mappings are data, not Python" rule. This task builds the
-data-driven derivation; Task 7b then consumes it.
+**The rule is a PAD scoping rule, not a Blue Prism concept** (user correction, 2026-09-24). BP
+data-item visibility (`<private/>`) is irrelevant here. In PAD, **global scope** = the flow's main
+body plus every `FUNCTION` declared with the `GLOBAL` keyword (reference: `Load Config Data` L118,
+`Get Error` L219, `Launch Application` L402, `Capture Error Screenshot` L1356,
+`Process Work Queue Items` L1368). A variable assigned in global scope, when read or written from a
+**local** (non-`GLOBAL`) `FUNCTION`, must be referenced as `GLOBAL.<name>` (PAD also accepts
+`global.`; the reference uses `GLOBAL.`). Worked example: `txt_ExceptionMessage` is `SET` inside
+`FUNCTION 'Get Error' GLOBAL` (L224) and read as `GLOBAL.txt_ExceptionMessage` inside the local
+`FUNCTION 'Get Results by Analysis and SampleId'` (L447, L461). Omitting the prefix silently
+creates a local shadow (§A4).
+
+**Why split out of 7b:** the first 7b attempt hardcoded a `MAIN_BODY_VARIABLES` list of PID_171
+names in Python, qualified reads only, and double-prefixed. The rule has to be derived from the
+generated PAD structure itself so it works unchanged for the other ~199 automations. Task 7b then
+consumes it for the consecutive-exception counter.
 
 **Do:**
-1. Parse the `<private/>` flag on Data/Collection stages (`parser/process.py`) and carry it through
-   the AST (`BPDataItem`, e.g. `is_private: bool = False`) via `ast/builder.py`. Cite the XML shape
-   from the real sample (quote one stage's XML line range); do not assume it.
-2. Derive the set of "main-body-owned" variables from the AST, not from a name list: data items
-   declared on the process's Main page (and on pages mapped to a `GLOBAL FUNCTION`) that are not
-   `<private/>`. Empirically verify the derivation against the reference Performer/Loader
-   (`docs/pad-reference/*.robin.txt`): report which reference `GLOBAL.`-qualified names the
-   derived set matches, misses and over-includes. Any mismatch gets explained or flagged, never
-   silently patched with a hardcoded exception.
-3. In `generator/pad.py`, qualify references to that set with `GLOBAL.` inside non-`GLOBAL`
-   `FUNCTION`s only: **both reads and `SET` left-hand sides**; never inside the main body or a
-   `GLOBAL FUNCTION`; never double-prefix an already-qualified name; never qualify a name the
-   current function declares locally or as an `In_`/`Out_` parameter.
-4. Tests: parser test for the flag; builder test that it reaches `BPDataItem`; generator tests for
-   read + write qualification, no `GLOBAL.GLOBAL.`, no qualification in main body / `GLOBAL`
-   functions, local-shadow case left unqualified; and at least one test built from a synthetic
-   process (not PID_171 names) proving the set is derived, not hardcoded.
+1. Derive the global-scope variable set from the generated flow, not from a name list: every
+   variable assigned in the main body or in a `FUNCTION` whose `page_target_map.yaml` entry has
+   `global: true`. "Assigned" means `SET x TO`, action outputs (`=> x`), `ERROR => x`, loop
+   variables, and so on: whatever the generator already emits as an assignment target. This needs
+   the set known before local `FUNCTION` bodies are finalised (e.g. a collect pass, then a
+   qualification pass).
+2. In every local `FUNCTION`, prefix `GLOBAL.` on each reference to a name in that set: **reads
+   and `SET`/output left-hand sides**, including inside `%...%` string interpolation and
+   `obj['key']` indexing (reference L820, L1255). Never qualify inside the main body or a `GLOBAL`
+   `FUNCTION`. Never double-prefix a name already written as `GLOBAL.`/`global.`
+   (case-insensitive). Never qualify a name that is one of the local `FUNCTION`'s own
+   `In_`/`Out_`/`OUTPUT` parameters.
+3. Check the `global:` flags in `mapping/page_target_map.yaml` against the reference's `GLOBAL`
+   keywords (both reference files). Correct a flag only with a citation; report any generated
+   `FUNCTION` whose scope has no reference evidence.
+4. Verify against the reference: for the local `FUNCTION`s that exist in both generated output
+   and reference, report which reference `GLOBAL.` names the generator reproduces, misses, and
+   over-qualifies. Explain or flag each mismatch; never patch one with a hardcoded name.
+5. Tests: read and write qualification in a local `FUNCTION`; no qualification in main body or a
+   `GLOBAL` `FUNCTION`; no `GLOBAL.GLOBAL.`/`GLOBAL.global.`; a parameter with the same name as a
+   global stays unqualified; interpolation/indexing cases; and at least one synthetic flow (non
+   PID_171 names, a global function setting a variable, a local function using it) proving the
+   set is derived, not hardcoded.
 
-**Done when:** regenerating `PID_0171.bprelease` shows `GLOBAL.`-qualified main-body references in
-non-`GLOBAL` Performer/Loader `FUNCTION`s (reads and writes), with no hardcoded variable-name list
-anywhere in `src/`; the reference comparison from item 2 is in the implementer's report; no
-`GLOBAL.GLOBAL.` anywhere in output; `uv run pytest tests/parser tests/ast tests/generator -q`
-green apart from known PID_0127 failures.
+**Done when:** regenerating `PID_0171.bprelease` shows `GLOBAL.`-qualified references to
+global-scope variables in local Performer/Loader `FUNCTION`s (reads and writes), none in global
+scope, no `GLOBAL.GLOBAL.`, and no hardcoded variable-name list anywhere in `src/`; the reference
+comparison from item 4 is in the implementer's report; `uv run pytest tests/generator -q` green and
+the full suite shows no new failures beyond the known PID_0127 ones.
 
-**Out of scope:** `Mark Exception`'s consecutive-exception logic and the send-mail `FUNCTION`s
-(Task 7b); declaring/initialising the global variables (Task 7b consumes this for the counter).
+**Out of scope:** BP data-item visibility / parser / AST changes; `Mark Exception`'s
+consecutive-exception logic and the send-mail `FUNCTION`s (Task 7b); declaring or initialising
+global variables that the generator doesn't yet emit (e.g. those set in `Load Config Data`,
+Task 7d item 3). A referenced global with no generated assignment anywhere gets a `# TODO` naming
+it, not a guessed declaration.
 
 ---
 
