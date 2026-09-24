@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -3044,6 +3045,31 @@ def _data_stage(stage_id: str, name: str, data_type: str = "text") -> BPStage:
     )
 
 
+def _collection_stage(stage_id: str, name: str) -> BPStage:
+    """Build a COLLECTION stage that declares/initialises `name` as a DataTable.
+
+    Mirrors the real annotation shape from ``engine/annotator.py::_annotate_collection``
+    (``target_type="CreateNewDataTable"``, ``params_map={"table_name": ..., "variable_type":
+    "DataTable"}``) so tests exercise the code path COLLECTION stages actually take in
+    ``_render_stage`` (the ``CreateNewDataTable`` branch, not the ``SetVariable`` branch's
+    dead COLLECTION sub-case).
+    """
+    return BPStage(
+        stage_id=stage_id,
+        stage_type=StageType.COLLECTION,
+        name=name,
+        data_items=[],
+        pa_annotation=PAAnnotation(
+            target_type="CreateNewDataTable",
+            target_module="Variables",
+            runtime=Runtime.DESKTOP,
+            params_map={"table_name": name, "variable_type": "DataTable"},
+            confidence=0.75,
+            band=ConfidenceBand.SPOT_CHECK,
+        ),
+    )
+
+
 def _calc_stage(stage_id: str, name: str, target: str, expr: str) -> BPStage:
     """Build a CALCULATION stage assigning `expr` to `target`."""
     return BPStage(
@@ -3176,8 +3202,14 @@ def test_7b0_body_uses_in_name_and_suppresses_reinit(tmp_path: Path) -> None:
     )
 
     assert "In_txt_WidgetSourcePath" in rendered
-    assert "SET txt_WidgetSourcePath TO" not in rendered, (
-        "The bound input's own initialising SET must be suppressed"
+    # Task 7b0 gap 1 (review 2026-09-24-fixpass2): the old assertion
+    # (`"SET txt_WidgetSourcePath TO" not in rendered`) can never fail once the
+    # override is wired in, because an unsuppressed init renders under its In_ name
+    # (`SET In_txt_WidgetSourcePath TO ...`), not its bare txt_ name — that string was
+    # never present either way. Assert against BOTH forms so a regression that
+    # re-emits the bound item's init (suppressed or not) is caught.
+    assert not re.search(r"^SET (In_)?txt_WidgetSourcePath TO", rendered, re.MULTILINE), (
+        "The bound input's own initialising SET must be suppressed under either name"
     )
     assert "SET widget_status TO In_txt_WidgetSourcePath" in rendered, (
         "A body reference to the bound data item must use its In_ parameter name"
@@ -3393,3 +3425,225 @@ def test_7b0_split_page_call_site_binds_to_entry_function() -> None:
     assert "CALL 'Multi Step Page Part A'" in rendered
     assert "In_txt_WidgetSourcePath: txt_RawPath" in rendered
     assert "Out_txt_WidgetResultPath=> final_result_var" in rendered
+
+
+def test_7b0_output_only_data_item_renders_as_out_name_in_body() -> None:
+    """A data item that is only an output renders as its Out_ name in the body
+    (Task 7b0 Do item 3, output-only case) — every stage that writes it uses the
+    Out_ name, not the item's regular txt_/dtb_ name (review 2026-09-24-fixpass2
+    gap 1's missing output-only-naming test)."""
+    gen = PADGenerator()
+    page = BPPage(
+        page_id="P_OUT_ONLY",
+        name="Output Only Page",
+        role="performer",
+        stages=[
+            _annotated_start("s0", []),
+            _calc_stage("s1", "Compute Result", "widget_result", "'done'"),
+            _annotated_end("s2", [("ResultOut", "text", "widget_result")]),
+        ],
+    )
+    process = make_process(pages=[page], name="WidgetFlow")
+
+    rendered = gen._render_page_as_function(page, process, {"shape": "function"})
+
+    assert "OUTPUT Out_txt_WidgetResult" in rendered
+    assert "SET Out_txt_WidgetResult TO 'done'" in rendered
+    assert not re.search(r"^SET widget_result TO", rendered, re.MULTILINE), (
+        "An output-only item must never be written under its bare BP name"
+    )
+
+
+def test_7b0_collection_suppression_for_parameter_bound_item() -> None:
+    """A COLLECTION stage bound to an In_ parameter has its DataTable.Create() init
+    suppressed exactly like a DATA stage (Task 7b0 Do item 3 extended to
+    COLLECTION; review 2026-09-24-fixpass2 gap 1's missing COLLECTION-suppression
+    test). COLLECTION stages render via the ``CreateNewDataTable`` branch of
+    ``_render_stage``, a separate code path from DATA's ``SetVariable`` branch."""
+    gen = PADGenerator()
+    page = BPPage(
+        page_id="P_COLL",
+        name="Collection Bound Page",
+        role="performer",
+        stages=[
+            _annotated_start("s0", [("Data", "collection", "widget_collection")]),
+            _collection_stage("s1", "widget_collection"),
+            _annotated_end("s2", []),
+        ],
+    )
+    process = make_process(pages=[page], name="WidgetFlow")
+
+    rendered = gen._render_page_as_function(page, process, {"shape": "function"})
+
+    assert "In_dtb_WidgetCollection" in rendered
+    assert "DataTable.Create()" not in rendered, (
+        "The parameter-bound COLLECTION's own init must be suppressed, not just DATA's"
+    )
+
+
+def test_7b0_init_hoisted_to_top_not_reinitialised_after_call() -> None:
+    """A collection returned by a CALL is not re-created later by the caller's own
+    BP-authored COLLECTION declaration — every non-parameter-bound init is hoisted
+    to the top of the body (Task 7b0 Do item 8). Regression source: review
+    2026-09-24-fixpass2 gap 2 (Performer P143->P286 dtb_FinalProductCollection,
+    P291->P292 dtb_SammaryCollection; Loader L109->L154 dtb_MailItems)."""
+    gen = PADGenerator()
+    sub_page = BPPage(
+        page_id="P_SUB",
+        name="Fill Collection",
+        role="performer",
+        stages=[
+            _annotated_start("s0", []),
+            _annotated_end("s1", [("SubOut", "collection", "sub_result")]),
+        ],
+    )
+    caller_page = BPPage(
+        page_id="P_CALLER",
+        name="Caller Page",
+        role="performer",
+        stages=[
+            _annotated_start("s0", []),
+            _call_stage(
+                "s1",
+                "Call Fill",
+                processid="P_SUB",
+                params_map={},
+                outputs_stage_map={"SubOut": "widget_collection"},
+            ),
+            # BP's own Collection-stage declaration for the same data item,
+            # positioned AFTER the call in the flow — the caller-side wipe shape
+            # from the review's three cases.
+            _collection_stage("s2", "widget_collection"),
+            _annotated_end("s3", []),
+        ],
+    )
+    process = make_process(pages=[caller_page, sub_page], name="WidgetFlow")
+
+    rendered = gen._render_page_as_function(
+        caller_page, process, {"shape": "function"}, process_map={}
+    )
+
+    lines = rendered.splitlines()
+    set_idx = next(
+        i
+        for i, ln in enumerate(lines)
+        if ln.strip() == "SET widget_collection TO DataTable.Create()"
+    )
+    call_idx = next(i for i, ln in enumerate(lines) if ln.startswith("CALL "))
+    assert set_idx < call_idx, "The init must be hoisted above the CALL, not after it"
+    assert sum(1 for ln in lines if "DataTable.Create()" in ln) == 1, (
+        "The init must render exactly once (hoisted), never duplicated at its old position"
+    )
+
+
+def test_7b0_split_subfunction_flags_todo_for_entry_input_reinit() -> None:
+    """A non-entry split sub-FUNCTION that would re-initialise a data item bound to
+    the entry FUNCTION's In_ parameter is suppressed and flagged with a TODO — the
+    input-side twin of the entry's Out_ TODO (Task 7b0 Do item 9)."""
+    gen = PADGenerator()
+    page = BPPage(
+        page_id="P_SPLIT",
+        name="Multi Step Page",
+        role="performer",
+        stages=[
+            _annotated_start("s0", [("SourceLoc", "text", "widget_source_path")]),
+            _calc_stage("s1", "Step A", "widget_step_a", "1"),
+            # This sub-FUNCTION's own re-declaration of the entry's In_-bound data
+            # item — must be suppressed and flagged, not silently re-initialised.
+            _data_stage("s2", "widget_source_path"),
+            _annotated_end("s3", [("ResultLoc", "text", "widget_result_path")]),
+        ],
+    )
+    process = make_process(pages=[page], name="WidgetFlow")
+    shape_info = {
+        "shape": "split",
+        "targets": ["Multi Step Page Part A", "Multi Step Page Part B"],
+        "stage_counts": [2, 2],
+    }
+
+    rendered = gen._split_page_into_functions(page, process, shape_info)
+
+    assert (
+        "# TODO: split page — sub-function target 'Multi Step Page Part B' would "
+        "re-initialise 'widget_source_path', bound to entry FUNCTION parameter "
+        "In_txt_WidgetSourcePath" in rendered
+    )
+    assert not re.search(r"^SET txt_WidgetSourcePath TO", rendered, re.MULTILINE), (
+        "The leaked data item must not be silently re-initialised in the sub-FUNCTION"
+    )
+
+
+def test_7b0_unassigned_output_gets_todo_before_end_function() -> None:
+    """Any FUNCTION (not just split entries) whose declared Out_ parameter is never
+    assigned in the rendered body gets a `# TODO` before END FUNCTION (Task 7b0 Do
+    item 10). Regression source: review 2026-09-24-fixpass2 gap 4 (Loader L337,
+    Performer P586 x2, P705, P1253)."""
+    gen = PADGenerator()
+    page = BPPage(
+        page_id="P_UNASSIGNED",
+        name="Never Writes Output",
+        role="performer",
+        stages=[
+            _annotated_start("s0", [("SourceLoc", "text", "widget_source_path")]),
+            # No stage anywhere assigns widget_result_path.
+            _annotated_end("s1", [("ResultLoc", "text", "widget_result_path")]),
+        ],
+    )
+    process = make_process(pages=[page], name="WidgetFlow")
+
+    rendered = gen._render_page_as_function(page, process, {"shape": "function"})
+
+    lines = rendered.splitlines()
+    todo_idx = next(
+        i
+        for i, ln in enumerate(lines)
+        if "# TODO: Out_txt_WidgetResultPath is declared but not assigned" in ln
+    )
+    end_idx = next(i for i, ln in enumerate(lines) if ln.strip() == "END FUNCTION")
+    assert todo_idx < end_idx, "The TODO must appear before END FUNCTION"
+
+
+def test_7b0_inline_block_isolated_from_host_override(tmp_path: Path) -> None:
+    """inline_block/fold content rendered inside a parameterised FUNCTION body must
+    not inherit that FUNCTION's In_/Out_ override map (Task 7b0 gap 6). A folded
+    page's own data item that happens to share a name with the host's In_ parameter
+    must render under its own name, not get silently renamed to the host's In_ name."""
+    gen = PADGenerator()
+    inline_page = BPPage(
+        page_id="P_INLINE",
+        name="Inline Target",
+        role="performer",
+        stages=[
+            # Deliberately reuses the host's bound data-item name.
+            _calc_stage("s0", "Set Shared Name", "widget_source_path", "'inline value'"),
+        ],
+    )
+    host_page = BPPage(
+        page_id="P_HOST",
+        name="Host Page",
+        role="performer",
+        stages=[
+            _annotated_start("s0", [("SourceLoc", "text", "widget_source_path")]),
+            _call_stage("s1", "Call Inline", processid="P_INLINE", params_map={}),
+            _annotated_end("s2", [("ResultLoc", "text", "widget_result_path")]),
+        ],
+    )
+    process = make_process(pages=[host_page, inline_page], name="WidgetFlow")
+    process_map = {
+        "Inline Target": {
+            "shape": "inline_block",
+            "block_name": "Inline Block",
+            "container": "Host Page",
+        }
+    }
+
+    rendered = gen._render_page_as_function(
+        host_page, process, {"shape": "function"}, process_map=process_map
+    )
+
+    assert "SET widget_source_path TO 'inline value'" in rendered, (
+        "The inlined page's own data item must render under its own name"
+    )
+    assert "SET In_txt_WidgetSourcePath TO 'inline value'" not in rendered, (
+        "The inlined page's data item must not be silently renamed to the host's In_ param"
+    )
