@@ -730,8 +730,24 @@ class PADGenerator:
                 target_name = self._current_page_name_map[target_page.page_id]
             else:
                 target_name = shape_info.get("target_name", target_page.name)
+
+            # Task 7b0: generate page-call input/output bindings
+            input_bindings, output_bindings = self._render_page_call_bindings(
+                stage, target_page, target_name, variable_name_mapping
+            )
+
+            # Assemble: input SETs, CALL, output SETs
             call_template = self.env.get_template("actions/call_subflow.robin.j2")
-            return call_template.render(subflow_name=target_name)
+            call_stmt = call_template.render(subflow_name=target_name)
+
+            result_parts: list[str] = []
+            if input_bindings:
+                result_parts.append(input_bindings)
+            result_parts.append(call_stmt.rstrip())
+            if output_bindings:
+                result_parts.append(output_bindings)
+
+            return "\n".join(result_parts)
 
         elif shape == "inline_block":
             # Inline BLOCK content into container
@@ -845,8 +861,8 @@ class PADGenerator:
             else:
                 target_name = shape_info.get("target_name", page.name)
 
-            # Determine GLOBAL qualifier
-            is_global = shape_info.get("global", False)
+            # Per Task 7b0: every FUNCTION is GLOBAL. No scope decision in generator.
+            is_global = True
 
             # Render all stages in the page, applying coarse BLOCK pattern (§A5, §B15)
             # where the page has Block stages with a persisted recover_stage_id (Task 4b).
@@ -1024,12 +1040,13 @@ class PADGenerator:
                 actions_content = f"{actions_content}\n{epilogue}"
 
             # Render the FUNCTION wrapper
+            # Per Task 7b0: every FUNCTION is GLOBAL.
             subflow_template = self.env.get_template("subflow.robin.j2")
             function = subflow_template.render(
                 subflow_name=target_name,
                 actions=actions_content,
                 construct_type="function",
-                is_global=False,
+                is_global=True,
             )
             function_blocks.append(function)
 
@@ -1153,6 +1170,105 @@ class PADGenerator:
         # design question (docs/reviews/) regarding whether to upgrade this to a real flag.
         # TODO: no page_target_map.yaml entry for '{page_name}' — treating as default FUNCTION
         return {"shape": "function", "unmapped_fallback": True, "fallback_page_name": page_name}
+
+    def _render_page_call_bindings(
+        self,
+        call_stage: BPStage,
+        target_page: Any,
+        target_name: str,
+        variable_name_mapping: dict[str, str] | None = None,
+    ) -> tuple[str, str]:
+        """Render input/output variable bindings for a page call (Task 7b0).
+
+        Generates SET statements before and after a CALL to bind inputs/outputs
+        through shared variables (since all FUNCTIONs are GLOBAL with no parameters).
+
+        Args:
+            call_stage: The calling ACTION stage (is_subsheet_call or is_process_call).
+            target_page: The target BPPage.
+            target_name: The resolved PAD name of the target FUNCTION.
+            variable_name_mapping: Optional mapping for translating data item names.
+
+        Returns:
+            Tuple of (input_bindings, output_bindings) where each is a newline-joined
+            string of SET statements, or empty string if none needed. Unresolvable
+            inputs/outputs generate # TODO comments instead of silent omission.
+        """
+        if not target_page or not target_page.stages:
+            return "", ""
+
+        # Find START and END stages
+        start_stage = None
+        end_stage = None
+        for stage in target_page.stages:
+            if stage.stage_type == StageType.START:
+                start_stage = stage
+            elif stage.stage_type == StageType.END:
+                end_stage = stage
+
+        input_lines: list[str] = []
+        output_lines: list[str] = []
+
+        if start_stage and start_stage.data_items:
+            # Generate input bindings: SET <target_input> TO <caller_input_expr>
+            for data_item in start_stage.data_items:
+                if data_item.is_input:
+                    # Translate the target page's input variable name
+                    target_input_name = data_item.name
+                    if variable_name_mapping and data_item.name.lower() in variable_name_mapping:
+                        target_input_name = variable_name_mapping[data_item.name.lower()]
+
+                    # Try to get the caller's input expression from call_stage params_map
+                    caller_expr = None
+                    if call_stage.params_map and data_item.name in call_stage.params_map:
+                        caller_expr = call_stage.params_map[data_item.name]
+
+                    if caller_expr:
+                        # Generate SET statement
+                        translated_expr = self._translate_bp_expression(
+                            caller_expr, variable_name_mapping or {}
+                        )
+                        input_lines.append(f"SET {target_input_name} TO {translated_expr}")
+                    elif caller_expr == "":
+                        # Empty expression means skip the SET
+                        pass
+                    else:
+                        # Unresolvable input — emit TODO
+                        input_lines.append(
+                            f"# TODO: page-call input '{data_item.name}' for '{target_name}' "
+                            f"— no expression in call stage params_map"
+                        )
+
+        if end_stage and end_stage.data_items:
+            # Generate output bindings: SET <caller_target> TO <target_output>
+            for data_item in end_stage.data_items:
+                if data_item.is_output:
+                    # Translate the target page's output variable name
+                    target_output_name = data_item.name
+                    if variable_name_mapping and data_item.name.lower() in variable_name_mapping:
+                        target_output_name = variable_name_mapping[data_item.name.lower()]
+
+                    # Try to get the caller's target variable from call_stage params_map
+                    # (by convention, output mappings use the same key name)
+                    caller_target = None
+                    if call_stage.params_map and data_item.name in call_stage.params_map:
+                        caller_target = call_stage.params_map[data_item.name]
+
+                    if caller_target:
+                        # Translate the caller's target variable name
+                        translated_target = caller_target
+                        if variable_name_mapping and caller_target.lower() in variable_name_mapping:
+                            translated_target = variable_name_mapping[caller_target.lower()]
+
+                        output_lines.append(f"SET {translated_target} TO {target_output_name}")
+                    else:
+                        # Unresolvable output — emit TODO
+                        output_lines.append(
+                            f"# TODO: page-call output '{data_item.name}' for '{target_name}' "
+                            f"— no target variable in call stage params_map"
+                        )
+
+        return "\n".join(input_lines), "\n".join(output_lines)
 
     @staticmethod
     def _compute_boundaries_from_counts(stage_counts: list[int]) -> list[tuple[int, int]]:
@@ -2347,11 +2463,12 @@ class PADGenerator:
             "# TODO: Implement error logging per §A3\n"
             "# Placeholder stub for pre-existing boilerplate FUNCTION"
         )
+        # Per Task 7b0: every FUNCTION is GLOBAL.
         return template.render(
             subflow_name="Get Error",
             actions=stub_body,
             construct_type="function",
-            is_global=False,
+            is_global=True,
         )
 
     @staticmethod

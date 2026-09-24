@@ -14,7 +14,6 @@
 #   targets: (required for split) - list of resulting FUNCTION names
 #   stage_counts: (optional, for split) - per-target stage-count boundaries, in the same
 #     order as targets. Falls back to an even division across targets when absent.
-#   global: (optional, for function) - whether to mark FUNCTION as GLOBAL (defaults to false)
 #   citation: (required) - §B14 row number
 #   notes: (optional) - free-text rendered as a comment at the fold/inline_block call site
 #   reason: (optional, for shape "stop") - rendered as a comment at any real call site
@@ -33,7 +32,6 @@ PID_171_US_Process_LIMS_Prelude:
   Get Mails:
     shape: "function"
     target_name: "Fetch Emails from Mailbox"
-    global: true
     citation: "§B14 row 1"
 
   Populate Queue:
@@ -51,8 +49,7 @@ PID_171_US_Process_LIMS_Prelude:
   Send mail - No New Mail:
     shape: "function"
     target_name: "Send Business Exception Mail"
-    global: false
-    citation: "§B14 row 20 / DF_PID_171_US_Loader.robin.txt L173 (FUNCTION 'Send Business Exception Mail' — no GLOBAL keyword)"
+    citation: "§B14 row 20"
 
   Read Excel As Collection:
     shape: "fold"
@@ -70,14 +67,12 @@ PID_171_US_Process_LIMS_Prelude:
   Read Input Data From Excel:
     shape: "function"
     target_name: "Fetch Data from Excel file"
-    global: false
     citation: "§B14 row 4"
 
   Launch_Sample Manager:
     shape: "function"
     target_name: "Launch Application"
-    global: true
-    citation: "§B14 row 5 / DF_PID_171_US_LIMS_Prelude_Main.robin.txt L402 (FUNCTION 'Launch Application' GLOBAL)"
+    citation: "§B14 row 5"
 
   Result Entry:
     shape: "split"
@@ -111,7 +106,6 @@ PID_171_US_Process_LIMS_Prelude:
   Summary_Report:
     shape: "function"
     target_name: "Create Summary Report"
-    global: false
     citation: "§B14 row 8"
 
   Input File Management:
@@ -123,26 +117,22 @@ PID_171_US_Process_LIMS_Prelude:
   Mark as read mail:
     shape: "function"
     target_name: "Move Emails"
-    global: false
     citation: "§B14 row 10"
 
   Mark as read and move to exception folder:
     shape: "function"
     target_name: "Move Emails"
-    global: false
     citation: "§B14 row 11"
     notes: "Shares Move Emails FUNCTION with row 10 (parameterized by In_txt_DestinationFolder)"
 
   Mark Item As Completed:
     shape: "function"
     target_name: "Mark Complete"
-    global: false
     citation: "§B14 row 12"
 
   Mark Item As Exception:
     shape: "function"
     target_name: "Mark Exception"
-    global: false
     citation: "§B14 row 13"
 
   DataGateway:
@@ -160,7 +150,6 @@ PID_171_US_Process_LIMS_Prelude:
   Send mail:
     shape: "function"
     target_name: "Send Email"
-    global: false
     citation: "§B14 row 19"
 
   # Orphan/STOP pages - not rendered, flagged as unreachable
