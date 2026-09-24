@@ -1166,140 +1166,136 @@ generated calls' output variables will need (Task 7b).
 
 ---
 
-## Task 7b0 — `generator/pad.py`: PAD-scope `GLOBAL.` qualification for local `FUNCTION`s
+## Task 7b0 — `generator/pad.py`: emit every `FUNCTION` as `GLOBAL`
+
+**Status: BLOCKED** until the user confirms the PAD header syntax for a `GLOBAL` `FUNCTION` that
+also takes parameters (see "Open question" below). Do not start implementation before then.
 
 **Depends on:** Task 6b
-**Files in scope:** `src/flowsmith/generator/pad.py` (variable-reference rendering / `FUNCTION`
-body emission only), `mapping/page_target_map.yaml` (`global:` flags only, if one is wrong vs the
-reference), `tests/generator/test_pad.py`
-**Required reading:** `docs/bp-to-pad-architecture-PID171.md` §A4 (the `GLOBAL.` qualification
-rule) and §A3 (which reference `FUNCTION`s are `GLOBAL`); the reference
-`docs/pad-reference/DF_PID_171_US_LIMS_Prelude_Main.robin.txt`; `docs/reviews/7b-2026-09-24.md`
-(why the first 7b attempt was reverted: hardcoded PID_171 variable list, read-only qualification,
-`GLOBAL.GLOBAL.x`).
+**Files in scope:** `src/flowsmith/generator/pad.py` (`FUNCTION` header emission / `is_global`
+handling only), `templates/pad/subflow.robin.j2`, `mapping/page_target_map.yaml` (removing the
+`global:` field only), `tests/generator/test_pad.py`
+**Required reading:** `docs/bp-to-pad-architecture-PID171.md` §A3/§A4; the reference `FUNCTION`
+headers in `docs/pad-reference/DF_PID_171_US_LIMS_Prelude_Main.robin.txt` and
+`docs/pad-reference/DF_PID_171_US_Loader.robin.txt`; `docs/reviews/7b-2026-09-24.md` (the reverted
+`GLOBAL.`-qualification attempt this task replaces).
 
-**The rule is a PAD scoping rule, not a Blue Prism concept** (user correction, 2026-09-24). BP
-data-item visibility (`<private/>`) is irrelevant here. In PAD, **global scope** = the flow's main
-body plus every `FUNCTION` declared with the `GLOBAL` keyword (reference: `Load Config Data` L118,
-`Get Error` L219, `Launch Application` L402, `Capture Error Screenshot` L1356,
-`Process Work Queue Items` L1368). A variable assigned in global scope, when read or written from a
-**local** (non-`GLOBAL`) `FUNCTION`, must be referenced as `GLOBAL.<name>` (PAD also accepts
-`global.`; the reference uses `GLOBAL.`). Worked example: `txt_ExceptionMessage` is `SET` inside
-`FUNCTION 'Get Error' GLOBAL` (L224) and read as `GLOBAL.txt_ExceptionMessage` inside the local
-`FUNCTION 'Get Results by Analysis and SampleId'` (L447, L461). Omitting the prefix silently
-creates a local shadow (§A4).
+**Decision (user, 2026-09-24):** a `FUNCTION`'s PAD scope (`GLOBAL` or local) is a developer's
+choice with no Blue Prism equivalent; it isn't part of the migration. **Every generated `FUNCTION`
+is emitted as `GLOBAL`.** This keeps the flows consistent and means the generator never has to
+work out scope. Consequence: no variable ever needs the `GLOBAL.`/`global.` prefix (that prefix is
+only needed when a local `FUNCTION` touches a global-scope variable, §A4), so the generator emits
+none. This supersedes the per-page `global:` flag in `mapping/page_target_map.yaml` and the
+earlier idea of deriving `GLOBAL.` qualification.
 
-**Why split out of 7b:** the first 7b attempt hardcoded a `MAIN_BODY_VARIABLES` list of PID_171
-names in Python, qualified reads only, and double-prefixed. The rule has to be derived from the
-generated PAD structure itself so it works unchanged for the other ~199 automations. Task 7b then
-consumes it for the consecutive-exception counter.
+**Open question (user to confirm before implementation):** every `GLOBAL` `FUNCTION` in both
+reference files is parameterless (`FUNCTION 'Get Error' GLOBAL`, Main L219 / Loader L155; also
+Main L118, L402, L1356, L1368, Loader L213, L274). No reference shows `GLOBAL` combined with
+`In_`/`OUTPUT` parameters, so the header form for e.g. `Mark Exception`
+(`FUNCTION 'Mark Exception' In_obj_WorkQueueItem, OUTPUT Out_obj_WorkQueueItem`, L1226) as
+`GLOBAL` is uncited. Record the user-confirmed form here, with date, before implementing.
 
 **Do:**
-1. Derive the global-scope variable set from the generated flow, not from a name list: every
-   variable assigned in the main body or in a `FUNCTION` whose `page_target_map.yaml` entry has
-   `global: true`. "Assigned" means `SET x TO`, action outputs (`=> x`), `ERROR => x`, loop
-   variables, and so on: whatever the generator already emits as an assignment target. This needs
-   the set known before local `FUNCTION` bodies are finalised (e.g. a collect pass, then a
-   qualification pass).
-2. In every local `FUNCTION`, prefix `GLOBAL.` on each reference to a name in that set: **reads
-   and `SET`/output left-hand sides**, including inside `%...%` string interpolation and
-   `obj['key']` indexing (reference L820, L1255). Never qualify inside the main body or a `GLOBAL`
-   `FUNCTION`. Never double-prefix a name already written as `GLOBAL.`/`global.`
-   (case-insensitive). Never qualify a name that is one of the local `FUNCTION`'s own
-   `In_`/`Out_`/`OUTPUT` parameters.
-3. Check the `global:` flags in `mapping/page_target_map.yaml` against the reference's `GLOBAL`
-   keywords (both reference files). Correct a flag only with a citation; report any generated
-   `FUNCTION` whose scope has no reference evidence.
-4. Verify against the reference: for the local `FUNCTION`s that exist in both generated output
-   and reference, report which reference `GLOBAL.` names the generator reproduces, misses, and
-   over-qualifies. Explain or flag each mismatch; never patch one with a hardcoded name.
-5. Tests: read and write qualification in a local `FUNCTION`; no qualification in main body or a
-   `GLOBAL` `FUNCTION`; no `GLOBAL.GLOBAL.`/`GLOBAL.global.`; a parameter with the same name as a
-   global stays unqualified; interpolation/indexing cases; and at least one synthetic flow (non
-   PID_171 names, a global function setting a variable, a local function using it) proving the
-   set is derived, not hardcoded.
+1. Emit `GLOBAL` on every generated `FUNCTION` header, using the confirmed form for
+   parameterised `FUNCTION`s. Remove the per-page `global:` lookup (`pad.py` `shape_info.get("global")`)
+   and the `global:` fields in `mapping/page_target_map.yaml`, including the header comment that
+   documents it. Remove every hardcoded `is_global=False`.
+2. Ensure the generator emits no `GLOBAL.`/`global.` variable prefix anywhere.
+3. Report (don't rename) variable names that are now shared across `FUNCTION`s and could clobber
+   each other, i.e. a name assigned in two `FUNCTION`s where one calls the other (e.g. a reused
+   loop counter like `num_RetryCount`).
+4. Tests: every `FUNCTION` header in generated output carries `GLOBAL` (parameterised and
+   parameterless); no `GLOBAL.` prefix in output; no `global:` key left in `page_target_map.yaml`.
 
-**Done when:** regenerating `PID_0171.bprelease` shows `GLOBAL.`-qualified references to
-global-scope variables in local Performer/Loader `FUNCTION`s (reads and writes), none in global
-scope, no `GLOBAL.GLOBAL.`, and no hardcoded variable-name list anywhere in `src/`; the reference
-comparison from item 4 is in the implementer's report; `uv run pytest tests/generator -q` green and
-the full suite shows no new failures beyond the known PID_0127 ones.
+**Done when:** regenerating `PID_0171.bprelease` shows `GLOBAL` on every `FUNCTION` header in both
+`.robin` files, no `GLOBAL.` variable prefix, and no scope-decision logic left in `src/`;
+`uv run pytest tests/generator -q` green and the full suite has no new failures beyond the known
+PID_0127 ones.
 
-**Out of scope:** BP data-item visibility / parser / AST changes; `Mark Exception`'s
-consecutive-exception logic and the send-mail `FUNCTION`s (Task 7b); declaring or initialising
-global variables that the generator doesn't yet emit (e.g. those set in `Load Config Data`,
-Task 7d item 3). A referenced global with no generated assignment anywhere gets a `# TODO` naming
-it, not a guessed declaration.
+**Out of scope:** `Mark Exception`'s consecutive-exception logic (Task 7b); renaming shared
+variables (report only).
 
 ---
 
 ## Task 7b — `generator/pad.py`: consecutive-exception dispatch completion (BP behaviour)
 
 **Depends on:** Task 7b0
-**Files in scope:** `src/flowsmith/generator/pad.py`, `mapping/page_target_map.yaml`,
-`tests/generator/test_pad.py`
+**Files in scope:** `src/flowsmith/generator/pad.py`, `tests/generator/test_pad.py`
 **Required reading:** `docs/bp-to-pad-architecture-PID171.md` §A7 (BP ground truth for the
-`Mark Item As Exception` page, traced from `PID_0171.bprelease`) and §A8 D4/D6 (the deployed
-reference's 3-way dispatch, and its always-increment regression vs BP); §A4 (as implemented by
-Task 7b0); `docs/reviews/7b-2026-09-24.md` (why the first attempt, `2701fc8`, was reverted in
-`8960ef8`).
+`Mark Item As Exception` page, traced from `PID_0171.bprelease`), §A5 (SUE re-throws and halts the
+run), §A8 D4/D6 (how the deployed reference differs); the BP page itself as rendered in
+`outputs/report/PID_0171_html_report_20260904/data/pid-171-us-process-lims-prelude.md`
+(`## Page: Mark Item As Exception`, ~L940-1043); `docs/reviews/7b-2026-09-24.md` (why the first
+attempt, `2701fc8`, was reverted in `8960ef8`).
 
-**Decision (user, 2026-09-24): follow BP behaviour, not the deployed reference's.** Per §A7:
-on a plain System Exception, a message *match* increments `GLOBAL.num_ConsecutiveExcCount` then
-checks `Limit?` (breach if `>= GLOBAL.num_ConsecutiveExcLimit`); a *mismatch* sets
-`GLOBAL.txt_PreviousExceptionMessage` to the current message and resets the count to **0**, and is
-terminal for the item (no fall-through to `Limit?`). Reset to 0 on `Mark Complete` and on a
-Business Exception; SUE neither resets nor increments. Reproducing the reference's
-always-increment (§A8 D6) is a defect, not fidelity. Where BP's breach action (`TERMINATE`) is
-expressed with the reference's PAD mechanism (`SET GLOBAL.flg_HaltRun TO True`, checked per item
-at reference L1552-1554), cite both.
+**Decisions (user, 2026-09-24):**
+- **Follow BP behaviour, not the deployed reference's.** Reproducing the reference's
+  always-increment (§A8 D6) or its extra machinery is a defect, not fidelity.
+- **Every generated `FUNCTION` is `GLOBAL` (Task 7b0),** so all variables below are referenced by
+  bare name: no `GLOBAL.` prefix.
+- **No dedicated exception-mail `FUNCTION`s (option A).** `Send Consecutive Exception Mail` and
+  `Send System Exception Mail` are reference-only redesigns (reference L1096, L1026) with no BP page.
+  In BP, a breach hits the `TERMINATE` exception stage, which throws `System Unavailable Exception`
+  (message: `[Consecutive Exception Limit] & " consecutive incidents of " & [Exception Type] & ...`).
+  That propagates to the Main page's error path, which sends the one generic system-exception mail
+  (`Mail on System exception` → `MS Outlook Email VBO` `Send Email`) and halts (§A5). The generated
+  flow does the same: the breach throws via the existing error path (Task 5c's `ON BLOCK ERROR`),
+  with no `CALL` to a dedicated mail `FUNCTION`, no `flg_SendExceptionEmail` duplicate-mail
+  disarm, and no `flg_HaltRun` flag (all three are reference-only mechanisms).
+
+**BP semantics to reproduce (§A7):** `Mark Exception` (the VBO call) runs **before** the
+consecutive check. On a plain System Exception, `Previous Exception?`
+(`[Previous Exception Detail]=[Exception Detail]`) → *match*: `Count` (+1), then `Limit?` (`>=`
+limit) → breach throws as above. *Mismatch*: `Reset Consecutive Exception Indicators` (previous
+detail := current detail, count := 0), terminal for the item, with no fall-through to `Limit?`. The
+count is reset to 0 on item completion (`Mark Item As Completed`) and on a Business Exception; SUE
+neither resets nor increments. With limit 3, a breach needs 4 identical consecutive messages.
 
 **Hard constraints (from the reverted attempt):**
 - `Mark Exception`'s body is **translated from the BP page's actual stages** through the normal
   page→`FUNCTION` pipeline. No Python string body, no `if target_name == "Mark Exception"`
-  special case. Stages not otherwise translatable get a `# TODO` naming them; none vanish.
-- The status variant comes from the catalogue (`mapping/vbo_catalogue.yaml`
-  `clsWorkQueuesActions.method_actions`: default `"Mark Exception"` = `BusinessException`;
-  `"Mark Exception :: ITException"` for SUE / consecutive breach, `vbo-action-mapping.md` L28,
-  reference L1265/L1290; `"Mark Exception :: GenericException"` for a plain System Exception, L29,
-  reference L1309). The generator selects it from the BP page's own decision structure (the
-  exception-type branch / breach branch the stage sits in), never by stage-name or `Tag`
-  heuristics (rejected in `docs/reviews/7a-2026-09-04-thirdpass.md`). Remove the
+  special case. Stages not otherwise translatable get a `# TODO` naming them; none vanish (incl.
+  `Release Item`/Defer, `Tag Item`, `Not Completed`, `Completed No Outcome`, both `TERMINATE`s).
+- The queue-item status comes from the catalogue (`mapping/vbo_catalogue.yaml`
+  `clsWorkQueuesActions.method_actions`), chosen from the BP exception-type branch the
+  `Mark Exception` stage sits in: Business Exception branch → default `"Mark Exception"`
+  (`BusinessException`); System Exception branch → `"Mark Exception :: GenericException"`
+  (`vbo-action-mapping.md` L29, reference L1309). BP marks the item once, before the breach check,
+  so there is **no** second status update to `ITException` on breach (that is reference-only,
+  L1290). Leave `"Mark Exception :: ITException"` unused unless a BP branch genuinely maps to it,
+  and report it if so. Never select a variant by stage-name or `Tag` heuristics (rejected in
+  `docs/reviews/7a-2026-09-04-thirdpass.md`). Remove the
   `# VERIFY: Mark Exception status variant deferred to Task 7b` marker wherever the variant is now
-  selected from real context; keep it wherever context isn't determinable.
+  selected from real branch context; keep it wherever context isn't determinable.
 - No PAD syntax without a line citation to the reference or architecture doc.
 
 **Do:**
-1. Render the BP `Mark Item As Exception` page's `Previous Exception?` / `Count` /
-   `Reset Consecutive Exception Indicators` / `Limit?` stages to the §A7 BP semantics above, using
-   Task 7b0's `GLOBAL.` qualification (`GLOBAL.num_ConsecutiveExcCount`,
-   `GLOBAL.num_ConsecutiveExcLimit`, `GLOBAL.txt_PreviousExceptionMessage`). The `Limit?` `IF`
-   contains the real breach condition, not `# VERIFY`.
-2. Wire the counter's lifecycle: reset to 0 in `Mark Complete` (currently a placeholder) and in
-   the Business Exception path. Flag (`# TODO`/`# VERIFY` with citation) the counter's
-   initialisation and the limit's load from `Ctrl_ConsecutiveExceptionLimit` if they belong to
-   `Load Config Data` (not yet generated). Breach sets `GLOBAL.flg_HaltRun`, and there is a
-   per-item `flg_HaltRun` check (reference L1552-1554), or a `# TODO` naming where it is missing.
-3. Mark Exception status variant selection per the hard constraint above (the Task 7a hand-off).
-4. `Send Consecutive Exception Mail` / `Send System Exception Mail`: **pending user decision**
-   (translate from a cited `mapping/` template reproducing reference L1026-1060/L1096-1131, or keep
-   as stubs). Until decided: emit stubs that declare the `In_*` parameters their callers pass (no
-   argument/parameter mismatch) with a `# TODO` naming the reference line range; add
-   `page_target_map.yaml` entries only if they match a real BP page.
-5. Tests that exercise behaviour, not string presence: simulate a sequence of consecutive
-   exceptions (e.g. same/same/different/same messages) through the rendered logic's semantics and
-   assert count/breach per BP (breach at limit 3 needs 4 identical); assert ITException on the
-   breach and SUE paths and GenericException on the plain SE non-breach path, each selected from BP
-   structure; rename/replace `test_mark_exception_variant_selection_is_deferred_to_task_7b`.
+1. Render the BP page's `Previous Exception?` / `Count` / `Reset Consecutive Exception Indicators`
+   / `Limit?` / `TERMINATE` stages to the BP semantics above. The `Limit?` `IF` contains the real
+   breach condition, not `# VERIFY`. The breach throws `System Unavailable Exception` with the BP
+   message expression, using the existing `ThrowCustomError` rendering.
+2. Wire the counter's lifecycle: reset to 0 on item completion (the `Mark Complete` placeholder
+   today) and in the Business Exception path. Flag (`# TODO`/`# VERIFY` with citation) the
+   counter's initialisation and the limit's load from config if they belong to
+   `Load Config Data` (not yet generated, Task 7d item 3).
+3. Status variant selection per the hard constraint above (the Task 7a hand-off).
+4. Tests that exercise behaviour, not string presence: simulate a sequence of System Exceptions
+   (e.g. same/same/different/same/same/same messages) through the rendered logic's semantics and
+   assert the count and the breach point per BP (limit 3 → breach on the 4th identical); assert that
+   the breach renders a `System Unavailable Exception` throw and no dedicated-mail `CALL`; assert
+   `BusinessException`/`GenericException` are each selected from the BP branch structure; replace
+   `test_mark_exception_variant_selection_is_deferred_to_task_7b`.
 
 **Done when:** regenerating `PID_0171.bprelease` shows the `Mark Exception` `FUNCTION` translated
-from the BP page with BP reset-to-0/terminal-on-mismatch semantics and `GLOBAL.`-qualified
-counter/limit/previous-message; no dropped stages without a `# TODO`; the variant-selection test and
-the consecutive-sequence test pass; no `CALL` passes arguments a `FUNCTION` doesn't declare; no
-hardcoded `Mark Exception` body in `src/`.
+from the BP page with reset-to-0/terminal-on-mismatch semantics and a `System Unavailable
+Exception` throw on breach; no `Send Consecutive Exception Mail`/`Send System Exception Mail`
+`FUNCTION` or `CALL`; no dropped stages without a `# TODO`; the sequence and variant-selection tests
+pass; no `CALL` passes arguments a `FUNCTION` doesn't declare; no hardcoded `Mark Exception` body in
+`src/`.
 
-**Out of scope:** the `GLOBAL.` derivation itself (Task 7b0); Task 5c's `BLOCK`/`ON BLOCK ERROR`
-structure (already done); generating `Load Config Data` (Task 7d item 3).
+**Out of scope:** making every `FUNCTION` `GLOBAL` (Task 7b0); Task 5c's `BLOCK`/`ON BLOCK ERROR`
+structure (already done); generating `Load Config Data` (Task 7d item 3); translating `Tag Item`/
+`Defer` (STOP per `vbo-action-mapping.md` L32, stays `# TODO`).
 
 ---
 
