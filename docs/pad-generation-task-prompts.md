@@ -1219,8 +1219,17 @@ line range); do not assume it.
    as the parameter name (as the reference does, e.g. `In_txt_ErrorMessage` in its bodies). Do
    **not** emit the initialising `SET` for those data items; this fixes the review's gap-5
    finding that bodies reset their inputs to `%SomeVar%` on entry. Other data items keep their
-   initialisation. If a data item is both an input and an output, the body uses the `In_` name and
-   `SET Out_<x> TO In_<x>` is emitted before `END FUNCTION`.
+   initialisation. A data item that is only an output renders as its `Out_` name in the body (and
+   is not re-initialised). If a data item is both an input and an output, the body uses the `In_`
+   name and `SET Out_<x> TO In_<x>` is emitted before `END FUNCTION`.
+   **Header syntax for multiple outputs:** repeat `OUTPUT` before each output parameter
+   (`..., OUTPUT Out_a, OUTPUT Out_b`), as reference L232, L622, L1167.
+   **Split pages (user decision, 2026-09-24):** only the entry `FUNCTION` of a `split` page carries
+   the page's `In_`/`Out_` parameter list; the other sub-`FUNCTION`s are bare
+   `FUNCTION '<name>' GLOBAL`. Because the page's End stage lands in the last sub-`FUNCTION` and the
+   split call chain doesn't exist yet (Task 5a gap), the entry `FUNCTION` gets a `# TODO` stating
+   that its `Out_` parameter(s) are not yet assigned, naming them. It must not be left silently
+   unassigned.
 4. **Call sites:** emit `CALL '<name>' In_<a>: <expr> ... Out_<c>=> <caller var>` for
    `function`- **and** `split`-shaped targets. `split` resolves to its entry `FUNCTION`; the review
    found `Result Entry`'s 7 inputs + 1 output dropped silently. Rules:
