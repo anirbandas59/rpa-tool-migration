@@ -243,6 +243,9 @@ def test_spot_check_stage_renders_verify_comment() -> None:
     stage = make_annotated_stage(
         confidence=0.75,  # Results in SPOT_CHECK band
         target_type="SetVariable",
+        # Task 7d item 4: a SET needs a real BP expression — an expression-less stage
+        # now renders a TODO naming it instead of a `%SomeVar%` placeholder SET.
+        stage_params_map={"Target": "1"},
     )
     page = make_page(stages=[stage], is_main=False)
     result = gen.generate_page(page, "TestProcess")
@@ -281,7 +284,9 @@ def test_auto_stage_has_no_markers() -> None:
 def test_set_variable_stage_renders_set() -> None:
     """Test that SetVariable target_type renders SET statement."""
     gen = PADGenerator()
-    stage = make_annotated_stage(target_type="SetVariable")
+    # Task 7d item 4: give the stage a real BP expression (see
+    # test_spot_check_stage_renders_verify_comment) — without one no SET is emitted.
+    stage = make_annotated_stage(target_type="SetVariable", stage_params_map={"Target": "1"})
     page = make_page(stages=[stage], is_main=False)
     result = gen.generate_page(page, "TestProcess")
     assert "SET" in result
@@ -5503,3 +5508,534 @@ def test_7c_consolidated_flow_todo_names_bound_pad_variable_not_parameter() -> N
     assert todo_lines[0].endswith(f"PAD variable {expected_pad_name}"), todo_lines[0]
     assert "Notify" not in expected_pad_name, "fixture must make BP and PAD names differ"
     assert expected_pad_name.startswith("flg_"), "name must carry the DATA stage's type"
+
+
+# Task 7d item 3 helper tests
+class TestConfigDataHelpers:
+    """Unit tests for Load Config Data function synthesis helpers."""
+
+    def test_get_config_collection_name_from_page_target_map(self) -> None:
+        """Test reading config_collection from page_target_map.yaml."""
+        gen = PADGenerator()
+        # Create a minimal process
+        from flowsmith.ast.models import BPProcess
+
+        process = BPProcess(
+            process_id="P1",
+            name="TestProcess",
+            version="1.0",
+            source_file="test.bprelease",
+            pages=[],
+        )
+
+        # Test with no mapping
+        assert gen._get_config_collection_name(process) is None
+
+        # Test with mapping that has config_collection
+        gen.page_target_map = {"TestProcess": {"config_collection": "ConfigFileData"}}
+        assert gen._get_config_collection_name(process) == "ConfigFileData"
+
+        # Test with mapping that doesn't have config_collection
+        gen.page_target_map = {"TestProcess": {"some_other_key": "value"}}
+        assert gen._get_config_collection_name(process) is None
+
+    def test_make_config_variable_name_removes_non_alphanumerics(self) -> None:
+        """Test mapping column names to txt_ variables."""
+        gen = PADGenerator()
+
+        # Test various patterns
+        assert gen._make_config_variable_name("Sub Folder") == "txt_SubFolder"
+        assert gen._make_config_variable_name("Sender_MailID") == "txt_SenderMailID"
+        assert (
+            gen._make_config_variable_name("Cc-List Business Exception")
+            == "txt_CcListBusinessException"
+        )
+        assert gen._make_config_variable_name("App_WaitTime") == "txt_AppWaitTime"
+        assert gen._make_config_variable_name("Mail-Folder'Name") == "txt_MailFolderName"
+
+    def test_extract_config_references_finds_all_distinct_columns(self) -> None:
+        """Task 7d item 3: Test extraction of config column references from BP process."""
+        from flowsmith.ast.models import BPPage, BPProcess, BPStage, StageType
+
+        gen = PADGenerator()
+
+        # Create a stage with config references in params_map
+        stage1 = BPStage(
+            stage_id="S1",
+            name="Test1",
+            stage_type=StageType.ACTION,
+            params_map={
+                "param1": "[ConfigFileData.Sub Folder]",
+                "param2": "[ConfigFileData.Sender_MailID]",
+            },
+        )
+
+        # Create another stage with references in decision_expression
+        stage2 = BPStage(
+            stage_id="S2",
+            name="Test2",
+            stage_type=StageType.DECISION,
+            decision_expression="[ConfigFileData.Cc-List Business Exception] = true",
+        )
+
+        # Create a stage with duplicate reference (should appear once)
+        stage3 = BPStage(
+            stage_id="S3",
+            name="Test3",
+            stage_type=StageType.ACTION,
+            params_map={
+                "param": "[ConfigFileData.Sender_MailID]"  # Duplicate
+            },
+        )
+
+        page = BPPage(name="MainPage", page_id="P1", stages=[stage1, stage2, stage3])
+        process = BPProcess(
+            process_id="PROC1",
+            name="TestProcess",
+            version="1.0",
+            source_file="test.bprelease",
+            pages=[page],
+        )
+
+        refs = gen._extract_config_references(process, "ConfigFileData")
+
+        # Should have exactly 3 distinct columns, in order seen
+        assert len(refs) == 3
+        assert refs[0] == "Sub Folder"
+        assert refs[1] == "Sender_MailID"
+        assert refs[2] == "Cc-List Business Exception"
+
+
+# ── Task 7d item 3 (amendment 2026-09-25): Load Config Data synthesis ─────────
+
+
+def _config_main_process(expressions: list[str], name: str = "CfgFlow") -> BPProcess:
+    """A process whose Main page reads config columns via CALCULATION stages.
+
+    Each expression becomes ``SET Target<n> TO <expr>`` on the Main page, so every
+    ``[ConfigFileData.<X>]`` in it is a real BP config-column read.
+    """
+    stages = [
+        _set_var_stage(f"c{i}", f"Target{i}", expr, None) for i, expr in enumerate(expressions)
+    ]
+    main = BPPage(page_id="P_MAIN", name="Main Page", is_main=True, stages=stages)
+    return make_process(pages=[main], name=name)
+
+
+@pytest.mark.parametrize("role", ["loader", "performer"])
+def test_7d_load_config_data_parse_call_and_function_in_both_roles(role: str) -> None:
+    """Both roles get the parse, the CALL (in that order, before the body) and the FUNCTION.
+
+    Reference: Loader L24/L32/L213/L223, Main L35/L42/L118. One SET per referenced column,
+    key verbatim, variable = ``txt_`` + column with non-alphanumerics removed; every body
+    read resolves to that variable, never ``dtb_ConfigFileData.<X>``.
+    """
+    gen = PADGenerator()
+    process = _config_main_process(
+        ['[ConfigFileData.To-List Business Exception] & ";" & [ConfigFileData.Sub Folder]']
+    )
+    gen.page_target_map["CfgFlow"] = {"config_collection": "ConfigFileData"}
+
+    rendered = gen._generate_consolidated_flow(process, role=role)
+    lines = rendered.splitlines()
+
+    parse_line = "Variables.ConvertJsonToCustomObject Json: In_txt_Config CustomObject=> obj_Config"
+    parse_idx = lines.index(parse_line)
+    call_idx = lines.index("CALL 'Load Config Data'")
+    body_idx = next(i for i, ln in enumerate(lines) if ln.startswith("SET Target0 TO"))
+    fn_idx = lines.index("FUNCTION 'Load Config Data' GLOBAL")
+    assert parse_idx < call_idx < body_idx < fn_idx
+
+    end_idx = next(i for i in range(fn_idx, len(lines)) if lines[i] == "END FUNCTION")
+    fn_sets = [ln for ln in lines[fn_idx + 1 : end_idx] if ln.startswith("SET ")]
+    assert fn_sets == [
+        "SET txt_ToListBusinessException TO obj_Config['To-List Business Exception']",
+        "SET txt_SubFolder TO obj_Config['Sub Folder']",
+    ]
+    assert lines[body_idx] == 'SET Target0 TO txt_ToListBusinessException + ";" + txt_SubFolder'
+    assert "ConfigFileData." not in rendered
+
+
+def test_7d_config_column_name_collision_emits_todo_naming_both_not_a_guess() -> None:
+    """Two columns collapsing to one variable name get a TODO naming both, and no SET."""
+    gen = PADGenerator()
+    process = _config_main_process(["[ConfigFileData.Sub Folder]", "[ConfigFileData.Sub_Folder]"])
+    gen.page_target_map["CfgFlow"] = {"config_collection": "ConfigFileData"}
+
+    fn = gen._render_load_config_function(process)
+
+    assert "SET txt_SubFolder" not in fn
+    todo = next(ln for ln in fn.splitlines() if ln.startswith("# TODO: config columns"))
+    assert "'Sub Folder'" in todo and "'Sub_Folder'" in todo and "txt_SubFolder" in todo
+    # Neither colliding column gets a guessed body resolution either.
+    mapping = gen._build_variable_name_mapping(process)
+    assert "configfiledata.sub folder" not in mapping
+    assert "configfiledata.sub_folder" not in mapping
+
+
+def test_7d_no_config_collection_declared_emits_no_config_read() -> None:
+    """Without ``config_collection`` in page_target_map.yaml nothing config-related renders."""
+    gen = PADGenerator()
+    process = _config_main_process(["[ConfigFileData.Sub Folder]"], name="NoCfgFlow")
+
+    rendered = gen._generate_consolidated_flow(process, role="performer")
+
+    assert "ConvertJsonToCustomObject Json" not in rendered
+    assert "CALL 'Load Config Data'" not in rendered
+    assert "FUNCTION 'Load Config Data'" not in rendered
+
+
+def test_7d_load_config_function_emits_no_generic_b12_todo() -> None:
+    """Amendment 2 item 5: exposure isn't knowable yet (the AST doesn't carry BP <exposure>),
+    so the unconditional generic §B12 TODO is dropped — left to the follow-up task."""
+    gen = PADGenerator()
+    process = _config_main_process(["[ConfigFileData.Sub Folder]"])
+    gen.page_target_map["CfgFlow"] = {"config_collection": "ConfigFileData"}
+
+    fn = gen._render_load_config_function(process)
+
+    assert "§B12" not in fn
+
+
+def test_7d_header_start_input_todo_no_longer_claims_parse_missing() -> None:
+    """flow_header.robin.j2's Task 7c TODO reflects that the parse is now generated."""
+    gen = PADGenerator()
+    header = gen.env.get_template("flow_header.robin.j2").render(
+        inputs=[{"bp_name": "Flag", "data_type": "Bool", "pad_var_name": "flg_Flag"}],
+        outputs=[],
+        sensitive_vars=[],
+    )
+
+    assert "not generated yet" not in header
+    assert "That parse and CALL 'Load Config Data' are generated" in header
+    assert "# TODO: BP START-stage input 'Flag' (Bool) → PAD variable flg_Flag" in header
+
+
+# ── Task 7d item 4a/4b: translator-failure branches ──────────────────────────
+
+# A made-up BP function call. The real translator passes unknown calls through verbatim
+# (it never returns "" for non-empty input), so these tests force the "translator returned
+# empty" failure for exactly this expression to exercise each fallback branch.
+_UNTRANSLATABLE_EXPR = "MadeUpFunc([Foo], 3)"
+
+
+def _fail_translation_of_made_up_call(gen: PADGenerator, monkeypatch: pytest.MonkeyPatch) -> None:
+    real = gen._translate_bp_expression
+
+    def fake(expr: str, variable_name_mapping: dict[str, str] | None = None) -> tuple:
+        if "MadeUpFunc" in (expr or ""):
+            return "", []
+        return real(expr, variable_name_mapping)
+
+    monkeypatch.setattr(gen, "_translate_bp_expression", fake)
+
+
+_EXPECTED_TODO = (
+    f"# TODO: could not translate BP expression '{_UNTRANSLATABLE_EXPR}' on stage "
+    "'{stage}' — needs manual completion"
+)
+
+
+def test_7d_untranslatable_set_expression_emits_only_the_todo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DATA/SET branch: TODO names raw expression + stage; no SET, no placeholder value."""
+    gen = PADGenerator()
+    _fail_translation_of_made_up_call(gen, monkeypatch)
+    stage = _set_var_stage("X1", "Weird Calc", _UNTRANSLATABLE_EXPR, None)
+
+    out = gen._render_stage(stage)
+
+    assert out.splitlines() == [_EXPECTED_TODO.format(stage="Weird Calc")]
+    assert "SET " not in out
+    assert "%SomeVar%" not in out
+
+
+def test_7d_untranslatable_decision_stub_condition_is_marked_placeholder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DECISION condition branch (_render_stage): TODO + visibly-marked placeholder IF."""
+    gen = PADGenerator()
+    _fail_translation_of_made_up_call(gen, monkeypatch)
+    stage = BPStage(
+        stage_id="D1",
+        stage_type=StageType.DECISION,
+        name="Odd Check?",
+        decision_expression=_UNTRANSLATABLE_EXPR,
+        pa_annotation=PAAnnotation(
+            target_type="IF <expr> THEN <true-branch> ELSE <false-branch> END",
+            target_module="System",
+            runtime=Runtime.DESKTOP,
+            confidence=0.85,
+            band=ConfidenceBand.SPOT_CHECK,
+            params_map={},
+            flags=[],
+        ),
+    )
+
+    lines = gen._render_stage(stage).splitlines()
+
+    assert lines[0] == _EXPECTED_TODO.format(stage="Odd Check?")
+    assert lines[1].startswith("# TODO: the IF condition below (TODO_UntranslatedCondition)")
+    assert lines[2] == "# VERIFY: Odd Check? (confidence 0.85)"  # Task 7b gap 3 kept
+    assert lines[3] == "IF TODO_UntranslatedCondition = True THEN"
+    assert "ELSE" in lines and "END" in lines
+    assert not any("%SomeVar%" in ln for ln in lines)
+
+
+def test_7d_untranslatable_decision_branch_keeps_both_bodies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_render_decision_branch: TODO names raw expression + stage; both arms still render."""
+    gen = PADGenerator()
+    _fail_translation_of_made_up_call(gen, monkeypatch)
+    start = _set_var_stage("S", "Before", "0", "D")
+    decision = BPStage(
+        stage_id="D",
+        stage_type=StageType.DECISION,
+        name="Odd Branch?",
+        decision_expression=_UNTRANSLATABLE_EXPR,
+        ontrue_target="A",
+        onfalse_target="B",
+        pa_annotation=PAAnnotation(
+            target_type="IF <expr> THEN <true-branch> ELSE <false-branch> END",
+            target_module="System",
+            runtime=Runtime.DESKTOP,
+            confidence=0.85,
+            band=ConfidenceBand.SPOT_CHECK,
+            params_map={},
+            flags=[],
+        ),
+    )
+    stage_a = _set_var_stage("A", "VarA", "1", None)
+    stage_b = _set_var_stage("B", "VarB", "2", None)
+    start.onsuccess_target = "D"
+
+    rendered = gen._render_stage_list_with_coarse_blocks([start, decision, stage_a, stage_b])
+    lines = [ln.strip() for ln in rendered.splitlines()]
+
+    if_idx = lines.index("IF TODO_UntranslatedCondition = True THEN")
+    else_idx = lines.index("ELSE", if_idx)
+    end_idx = lines.index("END", else_idx)
+    assert _EXPECTED_TODO.format(stage="Odd Branch?") in lines[:if_idx]
+    assert "SET VarA TO 1" in lines[if_idx + 1 : else_idx]
+    assert "SET VarB TO 2" in lines[else_idx + 1 : end_idx]
+    assert "%SomeVar%" not in rendered
+
+
+def test_7d_decision_with_no_condition_names_stage_and_marks_placeholder() -> None:
+    """A DECISION with no BP condition at all is flagged too — no plausible-looking IF."""
+    gen = PADGenerator()
+    stage = BPStage(
+        stage_id="D2",
+        stage_type=StageType.DECISION,
+        name="Empty Check?",
+        pa_annotation=PAAnnotation(
+            target_type="IF <expr> THEN <true-branch> ELSE <false-branch> END",
+            target_module="System",
+            runtime=Runtime.DESKTOP,
+            confidence=0.85,
+            band=ConfidenceBand.SPOT_CHECK,
+            params_map={},
+            flags=[],
+        ),
+    )
+
+    lines = gen._render_stage(stage).splitlines()
+
+    assert lines[0] == (
+        "# TODO: DECISION stage 'Empty Check?' has no BP condition expression — "
+        "needs manual completion"
+    )
+    assert "IF TODO_UntranslatedCondition = True THEN" in lines
+
+
+# ── Task 7d amendment 2: wrapper, parse template, collision policy, minor items ──
+
+_REFERENCE_LOAD_CONFIG_WRAPPER = [
+    # docs/pad-reference/DF_PID_171_US_Loader.robin.txt L214-L220 (Main L119-L125),
+    # indentation as actions/error_block.robin.j2 renders it.
+    "BLOCK 'Assign values from config'",
+    "ON BLOCK ERROR all",
+    "    SET flg_Screenshot TO False",
+    "    SET flg_ConfigError TO True",
+    "    CALL 'Get Error'",
+    "    THROW ERROR",
+    "END",
+]
+
+
+def test_7d_load_config_body_wrapped_in_reference_error_block() -> None:
+    """Item 2: the SETs sit inside BLOCK 'Assign values from config' (Loader L214-L220),
+    closed by the BLOCK's own END before END FUNCTION; the unwired flags get a TODO."""
+    gen = PADGenerator()
+    process = _config_main_process(["[ConfigFileData.Sub Folder]"])
+    gen.page_target_map["CfgFlow"] = {"config_collection": "ConfigFileData"}
+
+    lines = gen._render_load_config_function(process).splitlines()
+
+    block_idx = lines.index("BLOCK 'Assign values from config'")
+    assert lines[block_idx : block_idx + 7] == _REFERENCE_LOAD_CONFIG_WRAPPER
+    set_idx = lines.index("SET txt_SubFolder TO obj_Config['Sub Folder']")
+    assert set_idx > block_idx + 6
+    assert lines[-2:] == ["END", "END FUNCTION"]
+    todo = next(ln for ln in lines[:block_idx] if ln.startswith("# TODO:"))
+    assert "flg_Screenshot" in todo and "flg_ConfigError" in todo and "'Get Error'" in todo
+
+
+def test_7d_load_config_wrapper_gets_get_error_function_in_flow() -> None:
+    """The wrapper's CALL 'Get Error' is satisfied: the flow emits FUNCTION 'Get Error'."""
+    gen = PADGenerator()
+    process = _config_main_process(["[ConfigFileData.Sub Folder]"])
+    gen.page_target_map["CfgFlow"] = {"config_collection": "ConfigFileData"}
+
+    rendered = gen._generate_consolidated_flow(process, role="loader")
+
+    assert rendered.count("FUNCTION 'Get Error' GLOBAL") == 1
+
+
+def test_7d_parse_line_renders_from_convert_json_template() -> None:
+    """Item 3: the parse line comes from actions/convert_json.robin.j2 (reference Loader
+    L24 / Main L35 verbatim), not a Python constant."""
+    import flowsmith.generator.pad as pad_module
+
+    gen = PADGenerator()
+    line = gen.env.get_template("actions/convert_json.robin.j2").render(
+        json_var="In_txt_Config", object_var="obj_Config"
+    )
+
+    assert line == (
+        "Variables.ConvertJsonToCustomObject Json: In_txt_Config CustomObject=> obj_Config"
+    )
+    assert not hasattr(pad_module, "CONFIG_PARSE_LINE")
+
+
+def test_7d_set_clobbering_config_variable_after_load_gets_todo() -> None:
+    """Item 4: a Main-body SET after CALL 'Load Config Data' targeting a config variable is
+    flagged directly before it; the read of the same variable and the FUNCTION's own SET
+    are not."""
+    gen = PADGenerator()
+    process = _config_main_process(["[ConfigFileData.Sub Folder]"])
+    process.pages[0].stages.append(_set_var_stage("c9", "txt_SubFolder", '"override"', None))
+    gen.page_target_map["CfgFlow"] = {"config_collection": "ConfigFileData"}
+
+    lines = gen._generate_consolidated_flow(process, role="performer").splitlines()
+
+    set_idx = lines.index('SET txt_SubFolder TO "override"')
+    assert lines[set_idx - 1].startswith("# TODO: this SET overwrites txt_SubFolder")
+    assert sum(ln.startswith("# TODO: this SET overwrites") for ln in lines) == 1
+
+
+def test_7d_config_clobber_policy_flags_only_writes_after_load() -> None:
+    """Item 4: pre-CALL init SETs, other variables and reads are not flagged; a FUNCTION
+    body (no skip) flags every write, keeping its indentation."""
+    gen = PADGenerator()
+    gen._current_config_variables = {"txt_MailSubject"}
+    main = "\n".join(
+        [
+            'SET txt_MailSubject TO ""',  # Initialise Values: runs before the load
+            "CALL 'Load Config Data'",
+            "SET txt_Other TO txt_MailSubject",
+            'SET txt_MailSubject TO "x"',
+        ]
+    )
+    fn = "\n".join(["FUNCTION 'Mail' GLOBAL", '    SET txt_MailSubject TO "y"', "END FUNCTION"])
+
+    main_lines = gen._flag_config_variable_writes(main, skip_until_config_call=True).splitlines()
+    fn_lines = gen._flag_config_variable_writes(fn, skip_until_config_call=False).splitlines()
+
+    assert sum(ln.startswith("# TODO: this SET overwrites") for ln in main_lines) == 1
+    assert main_lines[0] == 'SET txt_MailSubject TO ""'
+    assert main_lines[-2].startswith("# TODO: this SET overwrites txt_MailSubject")
+    assert fn_lines[1].startswith("    # TODO: this SET overwrites txt_MailSubject")
+    assert fn_lines[2] == '    SET txt_MailSubject TO "y"'
+
+
+def test_7d_config_clobber_policy_inactive_without_config_collection() -> None:
+    """No config_collection declared → nothing is a config variable → nothing flagged."""
+    gen = PADGenerator()
+    process = _config_main_process(['"a"'], name="NoCfgFlow")
+    process.pages[0].stages.append(_set_var_stage("c9", "txt_SubFolder", '"override"', None))
+
+    rendered = gen._generate_consolidated_flow(process, role="performer")
+
+    assert "this SET overwrites" not in rendered
+
+
+def test_7d_text_config_value_into_numeric_parameter_gets_verify() -> None:
+    """Item 5: a txt_ config value passed to an In_num_ parameter gets a # VERIFY naming the
+    Text.ToNumber conversion (reference Loader L228) before the CALL; a txt_ one doesn't."""
+    gen = PADGenerator()
+    gen._current_config_variables = {"txt_WorksheetPosition", "txt_SubFolder"}
+    target_page = BPPage(
+        page_id="P_FETCH",
+        name="Fetch Data",
+        role="performer",
+        stages=[
+            _annotated_start(
+                "s0",
+                [
+                    ("Position", "number", "Worksheet Position"),
+                    ("Folder", "text", "Folder"),
+                ],
+            ),
+        ],
+    )
+    call_stage = _call_stage(
+        "c0",
+        "Call Fetch",
+        processid="P_FETCH",
+        params_map={
+            "Position": "[ConfigFileData.WorksheetPosition]",
+            "Folder": "[ConfigFileData.Sub Folder]",
+        },
+    )
+    mapping = {
+        "configfiledata.worksheetposition": "txt_WorksheetPosition",
+        "configfiledata.sub folder": "txt_SubFolder",
+    }
+
+    lines = gen._render_page_call_with_arguments(
+        call_stage, target_page, "Fetch Data", mapping
+    ).splitlines()
+
+    verifies = [ln for ln in lines if ln.startswith("# VERIFY: call argument")]
+    assert len(verifies) == 1
+    assert "'In_num_WorksheetPosition'" in verifies[0]
+    assert "txt_WorksheetPosition" in verifies[0] and "Text.ToNumber" in verifies[0]
+    call_idx = next(i for i, ln in enumerate(lines) if ln.startswith("CALL"))
+    assert lines.index(verifies[0]) < call_idx
+
+
+def test_7d_config_reference_scan_covers_exception_code_and_binding_text() -> None:
+    """Item 5: [<collection>.<X>] in exception detail, code-stage text and input bindings
+    are found too, not just conditions/params/initial values."""
+    gen = PADGenerator()
+    stages = [
+        BPStage(
+            stage_id="E1",
+            name="Throw",
+            stage_type=StageType.EXCEPTION,
+            exception_detail='"Missing " & [ConfigFileData.Error Detail]',
+        ),
+        BPStage(
+            stage_id="C1",
+            name="Code",
+            stage_type=StageType.CODE,
+            code_text="x = [ConfigFileData.Code Col]",
+        ),
+        BPStage(
+            stage_id="A1",
+            name="Call",
+            stage_type=StageType.ACTION,
+            inputs_stage_map={"p": "[ConfigFileData.Input Col]"},
+        ),
+    ]
+    process = make_process(
+        pages=[BPPage(name="Main Page", page_id="P1", is_main=True, stages=stages)],
+        name="ScanFlow",
+    )
+
+    refs = gen._extract_config_references(process, "ConfigFileData")
+
+    assert refs == ["Error Detail", "Code Col", "Input Col"]

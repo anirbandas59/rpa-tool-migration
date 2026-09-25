@@ -19,6 +19,10 @@
 #   reason: (optional, for shape "stop") - rendered as a comment at any real call site
 
 PID_171_US_Process_LIMS_Prelude:
+  # Task 7d item 3: Process-level config collection name (not a page entry)
+  # ConfigFileData is the BP collection; PAD reads it via obj_Config parsing
+  config_collection: ConfigFileData
+
   # Main Page - special case: split across both Loader and Performer
   # Pre-Get-Next-Item stages route to their target's role; post-Get-Next-Item to Performer
   Main Page:

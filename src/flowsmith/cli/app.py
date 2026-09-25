@@ -32,7 +32,7 @@ def convert(
 
     from flowsmith.ast import build_ast, serialise
     from flowsmith.engine import create_annotator
-    from flowsmith.generator import CloudFlowGenerator, PADGenerator, SolutionPackager
+    from flowsmith.generator import PADGenerator, SolutionPackager
     from flowsmith.parser import parse_process
 
     input_path = Path(input)
@@ -53,13 +53,11 @@ def convert(
         robin_dir = output_dir / "robin"
         PADGenerator().generate_process(process, robin_dir)
 
-        console.print("[bold]Generating[/bold] Cloud Flow JSON...")
-        cf_dir = output_dir / "cloudflow"
-        CloudFlowGenerator().generate_process(process, cf_dir)
-
         console.print("[bold]Packaging[/bold] solution...")
         zip_path = output_dir / f"{process.name}_solution.zip"
-        SolutionPackager().package(process, robin_dir, cf_dir, zip_path, managed=managed)
+        # The consolidated path generates the orchestrator Cloud Flow inside the packager,
+        # so there are no per-page Cloud Flow files and no cloudflow/ folder (Task 7d).
+        SolutionPackager().package(process, robin_dir, None, zip_path, managed=managed)
 
         console.print(f"[green]Done[/green] -> {zip_path}")
     except (ParseError, Exception) as exc:

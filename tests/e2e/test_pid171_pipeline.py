@@ -20,7 +20,7 @@ from lxml import etree
 from flowsmith.ast import build_ast
 from flowsmith.ast.models import BPProcess, ConfidenceBand, StageType
 from flowsmith.engine import create_annotator
-from flowsmith.generator import CloudFlowGenerator, PADGenerator, SolutionPackager
+from flowsmith.generator import PADGenerator, SolutionPackager
 from flowsmith.parser import parse_process
 
 SAMPLE = Path("samples/blueprism/PID_0171.bprelease")
@@ -38,14 +38,18 @@ def annotated_process() -> BPProcess:
 
 @pytest.fixture(scope="module")
 def solution_zip(annotated_process: BPProcess, tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """Generate the full solution .zip from the annotated process."""
+    """Generate the full solution .zip from the annotated process.
+
+    Task 7d item 1: in consolidated path, CloudFlowGenerator is embedded in the packager.
+    The per-page CloudFlowGenerator.generate_process() call is no longer part of the pipeline.
+    """
     out = tmp_path_factory.mktemp("pid171")
     robin_dir = out / "robin"
-    cf_dir = out / "cloudflow"
     PADGenerator().generate_process(annotated_process, robin_dir)
-    CloudFlowGenerator().generate_process(annotated_process, cf_dir)
+    # Task 7d: no per-page Cloud Flow files and no cloudflow/ folder — the packager
+    # generates the orchestrator itself on the consolidated path (mirrors cli/app.py).
     zip_path = out / "solution.zip"
-    SolutionPackager().package(annotated_process, robin_dir, cf_dir, zip_path, managed=True)
+    SolutionPackager().package(annotated_process, robin_dir, None, zip_path, managed=True)
     return zip_path
 
 
@@ -182,30 +186,24 @@ class TestDefinitionContent:
 
     @staticmethod
     def _cloud_flow_definitions(solution_zip: Path) -> list[dict]:
-        """Decode every Cloud Flow (Category 5) Workflow's <Definition> to Logic App JSON dict.
+        """Load every Cloud Flow (Category 5) Workflow's actual JSON from the referenced file.
+
+        Task 7d item 2: Cloud Flows store their Logic App JSON in the <JsonFileName> file,
+        not in a <Definition> XML element. This method reads the actual JSON files.
 
         Used for Cloud Flow (orchestrator) well-formedness checks.
-
-        Note: the definition is double-JSON-encoded in the XML (the JSON string is itself
-        a JSON value), so we need to json.loads() twice to get the actual object.
         """
         with zipfile.ZipFile(solution_zip) as zf:
             cust = etree.fromstring(zf.read("customizations.xml"))
-        # Filter to workflows with Category=5 (Cloud Flows, Logic App JSON)
-        cloud_workflows = [
-            w for w in cust.findall(".//{*}Workflow") if w.findtext("{*}Category") == "5"
-        ]
-        result = []
-        for w in cloud_workflows:
-            def_text = w.findtext("Definition")
-            if def_text:
-                # Double-encoded: json.loads twice
-                once_parsed = json.loads(def_text)
-                twice_parsed = (
-                    json.loads(once_parsed) if isinstance(once_parsed, str) else once_parsed
-                )
-                result.append(twice_parsed)
-        return result
+            # Filter to workflows with Category=5 (Cloud Flows, Logic App JSON)
+            cloud_workflows = [
+                w for w in cust.findall(".//{*}Workflow") if w.findtext("{*}Category") == "5"
+            ]
+            # No error swallowing: a missing or undecodable file must fail the test.
+            return [
+                json.loads(zf.read(w.findtext("{*}JsonFileName").lstrip("/")).decode("utf-8"))
+                for w in cloud_workflows
+            ]
 
     def test_definitions_are_non_empty(self, solution_zip: Path) -> None:
         """Every Desktop Flow carries embedded PAD script."""
@@ -255,3 +253,33 @@ class TestDefinitionContent:
             assert isinstance(definition, dict), (
                 f"Cloud Flow definition should be a dict after JSON parsing, got {type(definition)}"
             )
+
+    def test_cloud_flow_json_file_is_real_logic_app_definition(self, solution_zip: Path) -> None:
+        """Task 7d item 2 (§A1): the CF <JsonFileName> payload is the Logic App JSON."""
+        cloud_defs = self._cloud_flow_definitions(solution_zip)
+        assert len(cloud_defs) == 1
+        assert cloud_defs[0] != {"package": ""}
+        definition = cloud_defs[0]["properties"]["definition"]
+        assert "triggers" in definition and "actions" in definition
+
+    def test_cloud_flow_workflow_has_no_inline_definition(self, solution_zip: Path) -> None:
+        """Task 7d item 2 (§A1): Category-5 <Workflow>s carry no <Definition>; DFs do."""
+        with zipfile.ZipFile(solution_zip) as zf:
+            cust = etree.fromstring(zf.read("customizations.xml"))
+        workflows = cust.findall(".//{*}Workflow")
+        by_category = {
+            cat: [w for w in workflows if w.findtext("{*}Category") == cat] for cat in ("5", "6")
+        }
+        assert len(by_category["5"]) == 1 and len(by_category["6"]) == 2
+        assert all(w.find("{*}Definition") is None for w in by_category["5"])
+        assert all(w.find("{*}Definition") is not None for w in by_category["6"])
+
+    def test_no_unreferenced_workflow_json(self, solution_zip: Path) -> None:
+        """Task 7d item 1: every Workflows/*.json file is referenced by a <JsonFileName>."""
+        with zipfile.ZipFile(solution_zip) as zf:
+            cust = etree.fromstring(zf.read("customizations.xml"))
+            files = {n for n in zf.namelist() if n.startswith("Workflows/")}
+        referenced = {
+            w.findtext("{*}JsonFileName").lstrip("/") for w in cust.findall(".//{*}Workflow")
+        }
+        assert files == referenced

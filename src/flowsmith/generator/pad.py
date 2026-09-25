@@ -80,6 +80,35 @@ _COARSE_CATCHALL_ACTIONS: list[str] = [
 # Main Page split point (Get Next Item stage ID, per architecture doc §B11)
 GET_NEXT_ITEM_STAGE_ID = "85fbb578-f410-4f72-8ca9-58513939bc51"
 
+# Task 7d item 3 (amendment 2026-09-25): config-read shape, verbatim from the reference.
+# FUNCTION name: Loader L213 / Main L118 (`FUNCTION 'Load Config Data' GLOBAL`).
+LOAD_CONFIG_FUNCTION_NAME = "Load Config Data"
+# Parsed config object: Loader L24 / Main L35 (`... CustomObject=> obj_Config`), read as
+# `obj_Config['<key>']` (Loader L223, L236).
+CONFIG_OBJECT_VAR = "obj_Config"
+# The flow's single @INPUT (Task 7c; Loader L8 / Main L8).
+CONFIG_INPUT_VAR = "In_txt_Config"
+# Initialise Values parse (Loader L24 / Main L35) renders through
+# actions/convert_json.robin.j2; the CALL (Loader L32 / Main L42) through
+# actions/call_subflow.robin.j2.
+
+# Task 7d amendment 2 item 2: 'Load Config Data' body wrapper, verbatim from reference
+# Loader L214-L220 / Main L119-L125 (`BLOCK 'Assign values from config'` / `ON BLOCK ERROR
+# all` -> SET flg_Screenshot TO False, SET flg_ConfigError TO True, CALL 'Get Error',
+# THROW ERROR / END ... END).
+LOAD_CONFIG_BLOCK_NAME = "Assign values from config"
+LOAD_CONFIG_SCREENSHOT_FLAG = "flg_Screenshot"
+LOAD_CONFIG_ERROR_FLAG = "flg_ConfigError"
+# PAD parameter prefix whose value the reference converts from text before use
+# (Loader L228 `Text.ToNumber Text: obj_Config['App_WaitTime'] Number=> ...`).
+NUMERIC_PARAMETER_PREFIX = "In_num_"
+
+# Task 7d item 4b: an untranslatable DECISION condition still needs an IF so both branch
+# bodies stay rendered (never silently dropped). The condition is this deliberately
+# undeclared, self-describing marker — not a plausible-looking value — so PAD's designer
+# flags it as an unknown variable until a developer replaces it.
+UNTRANSLATED_CONDITION_PLACEHOLDER = "TODO_UntranslatedCondition = True"
+
 # Task 7b fix pass (gap 5): the exact literal values the Mark Item As Exception
 # page's "Retry Exception?" Decision compares [Exception Type] against —
 # `Lower([Exception Type])="system exception" OR Lower([Exception Type])=
@@ -220,6 +249,354 @@ class PADGenerator:
         # a recognised branch", which keeps the pre-existing
         # "# VERIFY: Mark Exception status variant deferred to Task 7b" marker.
         self._current_exception_branch_context: str | None = None
+        # Task 7d amendment 2 items 4/5: the 'Load Config Data' txt_ variables of the
+        # process being generated (set per role by _generate_consolidated_flow), so a SET
+        # that clobbers one, or a text config value passed into an In_num_ parameter, can
+        # be flagged where it is rendered.
+        self._current_config_variables: set[str] = set()
+
+    def _get_config_collection_name(self, process: BPProcess) -> str | None:
+        """Task 7d item 3: Read the process-level config_collection name from page_target_map.yaml.
+
+        Returns:
+            The name of the config collection (e.g. 'ConfigFileData') if declared, None otherwise.
+        """
+        if not self.page_target_map or not isinstance(self.page_target_map, dict):
+            return None
+        # Get the process entry from the map (e.g. "PID_171_US_Process_LIMS_Prelude")
+        proc_entry = self.page_target_map.get(process.name)
+        if isinstance(proc_entry, dict):
+            return proc_entry.get("config_collection")
+        return None
+
+    def _extract_config_references(self, process: BPProcess, config_collection: str) -> list[str]:
+        """Task 7d item 3: Extract distinct [ConfigFileData.<X>] references from the BP process.
+
+        Scans every stage text that can hold a BP expression — decision conditions,
+        parameter expressions, input/output bindings, exception detail, code-stage text and
+        data items' initial values — for references to the specified config collection.
+        Returns column names in first-seen order.
+
+        Args:
+            process: The BPProcess to scan.
+            config_collection: Name of the config collection (e.g. 'ConfigFileData').
+
+        Returns:
+            List of distinct column names referenced as [<collection>.<X>], in order seen.
+        """
+        pattern = re.compile(rf"\[{re.escape(config_collection)}\.([^\]]+)\]")
+        seen: dict[str, None] = {}  # Preserve first-seen order: column_name -> None
+
+        for page in process.pages:
+            for stage in page.stages:
+                texts: list[str | None] = [
+                    stage.decision_expression,
+                    stage.exception_detail,
+                    stage.code_text,
+                    *stage.params_map.values(),
+                    *stage.inputs_stage_map.values(),
+                    *stage.outputs_stage_map.values(),
+                    *(item.initial_value for item in stage.data_items),
+                ]
+                for text in texts:
+                    if not text:
+                        continue
+                    for match in pattern.finditer(text):
+                        seen.setdefault(match.group(1), None)
+
+        return list(seen.keys())
+
+    def _make_config_variable_name(self, column_name: str) -> str:
+        """Task 7d item 3: Map a config column name to a PAD variable name.
+
+        Removes all non-alphanumeric characters (preserves case) and prepends 'txt_'.
+        Example: 'Sub Folder' -> 'txt_SubFolder', 'Sender_MailID' -> 'txt_SenderMailID'
+
+        Args:
+            column_name: The BP column name (may have spaces, hyphens, etc).
+
+        Returns:
+            The PAD variable name (txt_ prefix + alphanumerics only).
+        """
+        # Remove all non-alphanumeric characters
+        clean = re.sub(r"[^a-zA-Z0-9]", "", column_name)
+        return f"txt_{clean}"
+
+    @staticmethod
+    def _untranslated_expression_todo(bp_expr: str, stage_name: str) -> str:
+        """Task 7d item 4: the one TODO line emitted when a BP expression isn't translated.
+
+        Args:
+            bp_expr: The raw BP expression that could not be translated.
+            stage_name: The BP stage carrying it.
+
+        Returns:
+            ``# TODO: could not translate BP expression '<raw>' on stage '<name>' — needs
+            manual completion`` (text fixed by the Task 7d spec, item 4).
+        """
+        return (
+            f"# TODO: could not translate BP expression '{bp_expr}' on stage "
+            f"'{stage_name}' — needs manual completion"
+        )
+
+    def _untranslated_condition_todos(self, bp_condition: str, stage_name: str) -> list[str]:
+        """Task 7d item 4b: TODO lines preceding an IF whose condition was not translated.
+
+        The IF itself is still emitted (with ``UNTRANSLATED_CONDITION_PLACEHOLDER``) so both
+        branch bodies stay rendered; the second line marks that condition as a placeholder
+        so it can't be mistaken for real logic.
+
+        Args:
+            bp_condition: The raw BP condition ("" when the stage has none at all).
+            stage_name: The BP DECISION stage's name.
+
+        Returns:
+            Two ``# TODO`` lines.
+        """
+        first = (
+            self._untranslated_expression_todo(bp_condition, stage_name)
+            if bp_condition
+            else f"# TODO: DECISION stage '{stage_name}' has no BP condition expression — "
+            "needs manual completion"
+        )
+        placeholder = UNTRANSLATED_CONDITION_PLACEHOLDER.split(" ", 1)[0]
+        return [
+            first,
+            f"# TODO: the IF condition below ({placeholder}) is a placeholder, not real "
+            "logic — replace it with the translated condition",
+        ]
+
+    def _build_config_variable_map(self, process: BPProcess) -> tuple[dict[str, str], list[str]]:
+        """Task 7d item 3: map each referenced BP config column to its PAD ``txt_`` variable.
+
+        The column set is exactly the distinct ``[<config_collection>.<X>]`` references in
+        the BP process (amendment item 3 — never invented). Columns whose variable names
+        collide (e.g. ``Sub Folder`` and ``Sub_Folder`` both → ``txt_SubFolder``) are left
+        out of the map entirely — so neither gets a guessed assignment or a guessed body
+        resolution — and reported as a ``# TODO`` naming every colliding column instead.
+
+        Args:
+            process: The BPProcess to scan.
+
+        Returns:
+            Tuple of (column name → PAD variable name, in first-seen order, for the
+            non-colliding columns; collision TODO lines). Both empty when the process
+            declares no ``config_collection`` in page_target_map.yaml.
+        """
+        collection = self._get_config_collection_name(process)
+        if not collection:
+            return {}, []
+
+        columns = self._extract_config_references(process, collection)
+        by_var: dict[str, list[str]] = {}
+        for column in columns:
+            by_var.setdefault(self._make_config_variable_name(column), []).append(column)
+
+        column_map: dict[str, str] = {}
+        collision_todos: list[str] = []
+        for column in columns:
+            var_name = self._make_config_variable_name(column)
+            group = by_var[var_name]
+            if len(group) == 1:
+                column_map[column] = var_name
+            elif group[0] == column:
+                named = ", ".join(f"'{c}'" for c in group)
+                collision_todos.append(
+                    f"# TODO: config columns {named} of {collection} all map to PAD variable "
+                    f"{var_name} — not assigned; choose distinct names and resolve their "
+                    "body references manually"
+                )
+        return column_map, collision_todos
+
+    def _config_reference_mapping(self, process: BPProcess) -> dict[str, str]:
+        """Task 7d item 3: variable-name-mapping entries for BP config-column reads.
+
+        Keys are the lowercase full dotted BP reference (``configfiledata.sub folder``), so
+        ``_resolve_dotted_reference`` resolves ``[ConfigFileData.Sub Folder]`` to the
+        ``Load Config Data`` variable (``txt_SubFolder``) instead of
+        ``dtb_ConfigFileData.Sub Folder`` (amendment item 4).
+
+        Args:
+            process: The BPProcess to scan.
+
+        Returns:
+            Dict of lowercase ``<collection>.<column>`` → PAD variable name (empty when no
+            config collection is declared).
+        """
+        collection = self._get_config_collection_name(process)
+        if not collection:
+            return {}
+        column_map, _collision_todos = self._build_config_variable_map(process)
+        return {
+            f"{collection}.{column}".lower(): var_name for column, var_name in column_map.items()
+        }
+
+    def _render_config_prologue(self, process: BPProcess) -> str:
+        """Task 7d item 3: the Initialise Values config parse + ``CALL 'Load Config Data'``.
+
+        Emitted at the top of each role's Main body — reference Loader L24 + L32,
+        Main L35 + L42.
+
+        Args:
+            process: The BPProcess (its config_collection declaration gates emission).
+
+        Returns:
+            The two lines joined by a newline, or ``""`` when the process declares no
+            ``config_collection`` in page_target_map.yaml.
+
+        Raises:
+            GenerationError: If template rendering fails.
+        """
+        if not self._get_config_collection_name(process):
+            return ""
+        try:
+            parse_line = self.env.get_template("actions/convert_json.robin.j2").render(
+                json_var=CONFIG_INPUT_VAR, object_var=CONFIG_OBJECT_VAR
+            )
+            call_line = self.env.get_template("actions/call_subflow.robin.j2").render(
+                subflow_name=LOAD_CONFIG_FUNCTION_NAME
+            )
+        except Exception as e:
+            raise GenerationError(f"Failed to render the Load Config Data prologue: {e}") from e
+        return f"{parse_line}\n{call_line}"
+
+    def _render_load_config_function(self, process: BPProcess) -> str:
+        """Task 7d item 3: synthesise ``FUNCTION 'Load Config Data' GLOBAL``.
+
+        One ``SET txt_<Name> TO obj_Config['<BP column verbatim>']`` per referenced config
+        column (reference Loader L213 FUNCTION header, L223/L236 ``obj_Config['<key>']``
+        read syntax; Main L118), wrapped in the reference's ``BLOCK 'Assign values from
+        config'`` / ``ON BLOCK ERROR all`` handler (Loader L214-L220, Main L119-L125),
+        rendered through ``actions/error_block.robin.j2``. The reference's regions and
+        typed conversions are not reproduced — BP columns are untyped.
+
+        Args:
+            process: The BPProcess.
+
+        Returns:
+            The rendered FUNCTION, or ``""`` when no config_collection is declared.
+
+        Raises:
+            GenerationError: If template rendering fails.
+        """
+        collection = self._get_config_collection_name(process)
+        if not collection:
+            return ""
+        column_map, collision_todos = self._build_config_variable_map(process)
+        try:
+            set_template = self.env.get_template("actions/set_variable.robin.j2")
+            body: list[str] = []
+            for column, var_name in column_map.items():
+                if "'" in column:
+                    # No cited escape syntax for a quote inside a PAD '...' key.
+                    body.append(
+                        f"# TODO: config column '{column}' contains a single quote — no "
+                        f"confirmed PAD escape for obj_Config['...']; assign {var_name} manually"
+                    )
+                    continue
+                body.append(
+                    set_template.render(
+                        var_name=var_name,
+                        value=f"{CONFIG_OBJECT_VAR}['{column}']",
+                        verify_comment=None,
+                    )
+                )
+            body.extend(collision_todos)
+            if not column_map and not collision_todos:
+                body.append(
+                    f"# TODO: no [{collection}.<column>] references found in the BP process "
+                    "— nothing to load"
+                )
+            # §B12 (architecture doc L730) Environment-exposed DATA items are not emitted
+            # here: the AST does not carry BP <exposure> yet, so which items qualify is
+            # unknowable — deferred to the Task 7d follow-up (amendment 2 item 6).
+
+            # Reference Loader L214-L220: the handler flags a config error, logs through
+            # 'Get Error' and re-throws.
+            catchall_actions = [
+                set_template.render(
+                    var_name=LOAD_CONFIG_SCREENSHOT_FLAG, value="False", verify_comment=None
+                ),
+                set_template.render(
+                    var_name=LOAD_CONFIG_ERROR_FLAG, value="True", verify_comment=None
+                ),
+                self.env.get_template("actions/call_subflow.robin.j2").render(
+                    subflow_name="Get Error"
+                ),
+                self.env.get_template("actions/throw_error.robin.j2").render(custom=False),
+            ]
+            wrapper_header = self.env.get_template("actions/error_block.robin.j2").render(
+                block_name=LOAD_CONFIG_BLOCK_NAME,
+                typed_handlers=[],
+                catchall_actions=catchall_actions,
+            )
+            # Neither flag is otherwise generated: the reference initialises
+            # flg_Screenshot in Initialise Values (Loader L16 / Main L23) and reads it in
+            # its real 'Get Error' (Loader L163); flg_ConfigError is only ever set, here,
+            # in both reference files. The generated 'Get Error' is the §A3 stub.
+            flags_todo = (
+                f"# TODO: {LOAD_CONFIG_SCREENSHOT_FLAG} and {LOAD_CONFIG_ERROR_FLAG} (set by "
+                "the handler below, reference Loader L216-L217) are not initialised in this "
+                f"generated flow — the reference initialises {LOAD_CONFIG_SCREENSHOT_FLAG} in "
+                "Initialise Values (Loader L16) and reads it in its real 'Get Error' (Loader "
+                "L163), which is generated only as a stub here; wire both when 'Get Error' "
+                "is implemented"
+            )
+            # Reference shape: handler section closed by END, then the protected body,
+            # then the BLOCK's own END (Loader L220 / L272) — same layout as the coarse
+            # BLOCKs rendered in _render_stage_list_with_coarse_blocks.
+            actions = "\n".join([flags_todo, wrapper_header, *body, "END"])
+            return self.env.get_template("subflow.robin.j2").render(
+                subflow_name=LOAD_CONFIG_FUNCTION_NAME,
+                actions=actions,
+                construct_type="function",
+                parameters="",
+            )
+        except Exception as e:
+            raise GenerationError(f"Failed to render FUNCTION 'Load Config Data': {e}") from e
+
+    def _flag_config_variable_writes(self, content: str, skip_until_config_call: bool) -> str:
+        """Task 7d amendment 2 item 4: flag a SET that would clobber a config value.
+
+        A ``SET`` outside ``FUNCTION 'Load Config Data'`` whose target is also one of its
+        ``txt_`` variables overwrites the global config value for every later reader, so a
+        ``# TODO`` is inserted directly before it (same indentation). Other name overlaps —
+        reads, or SETs that run before the config is loaded — are not flagged.
+
+        Args:
+            content: Rendered PAD text of a Main body or a FUNCTION (never the
+                'Load Config Data' FUNCTION itself).
+            skip_until_config_call: True for a Main body — SETs up to and including the
+                ``CALL 'Load Config Data'`` line (the Initialise Values init SETs) run before
+                the config is loaded, so they are overwritten by it rather than clobbering it.
+
+        Returns:
+            ``content`` with a ``# TODO`` line before every clobbering SET.
+        """
+        config_vars = self._current_config_variables
+        if not config_vars or not content:
+            return content
+        call_line = f"CALL '{LOAD_CONFIG_FUNCTION_NAME}'"
+        armed = not skip_until_config_call
+        out: list[str] = []
+        for line in content.split("\n"):
+            stripped = line.strip()
+            if not armed:
+                if stripped == call_line:
+                    armed = True
+                out.append(line)
+                continue
+            match = re.match(r"SET (\S+) TO ", stripped)
+            if match and match.group(1) in config_vars:
+                indent = line[: len(line) - len(line.lstrip())]
+                out.append(
+                    f"{indent}# TODO: this SET overwrites {match.group(1)}, which "
+                    f"'{LOAD_CONFIG_FUNCTION_NAME}' assigns from {CONFIG_OBJECT_VAR} — every "
+                    "later reader gets this value instead of the config value; rename one of "
+                    "them or confirm the overwrite is intended"
+                )
+            out.append(line)
+        return "\n".join(out)
 
     def generate_process(
         self,
@@ -391,6 +768,10 @@ class PADGenerator:
             # Build variable name mapping for Task 5b expression translation (per §A4, §B10)
             variable_name_mapping = self._build_variable_name_mapping(process)
 
+            # Task 7d amendment 2 items 4/5: this process's 'Load Config Data' variables,
+            # in effect for the whole role (restored in the finally below).
+            config_column_map, _config_collision_todos = self._build_config_variable_map(process)
+
             # Task 7c: only the Main page's START-stage inputs are genuine process inputs;
             # they surface as header TODOs, the flow's sole @INPUT being In_txt_Config.
             input_vars = (
@@ -459,6 +840,8 @@ class PADGenerator:
                 if target_name is not None:
                     once_only_names.add(target_name.lower())
             self._current_role_once_only_names = once_only_names
+            previous_config_variables = self._current_config_variables
+            self._current_config_variables = set(config_column_map.values())
             try:
                 # Render main page content (split by role)
                 if main_page:
@@ -484,6 +867,11 @@ class PADGenerator:
                         f"{once_only_prefix}\n{main_content}" if main_content else once_only_prefix
                     )
 
+                # Task 7d amendment 2 item 4: a SET after CALL 'Load Config Data' that
+                # overwrites a config variable is flagged.
+                main_content = self._flag_config_variable_writes(
+                    main_content, skip_until_config_call=True
+                )
                 if main_content:
                     lines.append(main_content)
                     lines.append("")
@@ -528,12 +916,25 @@ class PADGenerator:
                     page_content = self._render_page_in_consolidated_flow(
                         page, process, process_map, variable_name_mapping
                     )
+                    page_content = self._flag_config_variable_writes(
+                        page_content, skip_until_config_call=False
+                    )
                     if page_content:
                         rendered_functions.append(page_content)
                         lines.append(page_content)
                         lines.append("")
                         # Track this function name to prevent duplicates
                         seen_function_names.add(resolved_target_name)
+
+                # Task 7d item 3: the synthesised config-read FUNCTION (no BP source page),
+                # in both roles — reference Loader L213 / Main L118. Only when the Main
+                # body carries its CALL (i.e. a main page was rendered for this role).
+                if main_page and LOAD_CONFIG_FUNCTION_NAME not in seen_function_names:
+                    load_config_fn = self._render_load_config_function(process)
+                    if load_config_fn:
+                        lines.append(load_config_fn)
+                        lines.append("")
+                        seen_function_names.add(LOAD_CONFIG_FUNCTION_NAME)
 
                 # Emit boilerplate "Get Error" FUNCTION if any page references it
                 full_content = "\n".join(lines)
@@ -546,6 +947,7 @@ class PADGenerator:
                     lines.append("")
             finally:
                 self._current_role_once_only_names = previous_role_once_only
+                self._current_config_variables = previous_config_variables
 
             # Only return if we have content beyond the header
             if len(lines) > 3:  # header + banner lines + empty line
@@ -686,6 +1088,15 @@ class PADGenerator:
             finally:
                 self._current_suppress_init_names = previous_suppress
                 self._current_host_page = previous_host_page
+
+            # Task 7d item 3: Initialise Values order per reference Loader L12-L32 /
+            # Main L25-L42 — the init SETs, then the In_txt_Config parse, then
+            # CALL 'Load Config Data', then the body proper.
+            config_prologue = self._render_config_prologue(process)
+            if config_prologue:
+                actions_content = (
+                    f"{config_prologue}\n{actions_content}" if actions_content else config_prologue
+                )
 
             if hoisted_inits:
                 actions_content = (
@@ -1182,7 +1593,8 @@ class PADGenerator:
                             helper_actions.extend(actions)
 
                         # Task 7b0 gap 5: a translated expression containing a space (e.g. a
-                        # raw BP field name like `dtb_ConfigFileData.Sub Folder`) is not valid
+                        # raw BP field name like `dtb_SomeCollection.Some Field` — config
+                        # columns now resolve to txt_ variables, Task 7d) is not valid
                         # PAD syntax unmarked at a call site. Flag it with a TODO on its own
                         # line before the CALL, but keep the argument in the CALL (per Do item
                         # 4's "never a silent drop" — the root cause is Task 5b's translator).
@@ -1191,6 +1603,20 @@ class PADGenerator:
                                 f"# TODO: call argument '{param_name}' → '{translated_expr}' "
                                 f"for page '{target_page.name}' contains a raw BP field name "
                                 "with a space — not valid PAD syntax as-is"
+                            )
+
+                        # Task 7d amendment 2 item 5: config values are all txt_ (BP
+                        # columns are untyped); the reference converts before numeric use
+                        # (Loader L228 Text.ToNumber), so a numeric parameter fed one is
+                        # flagged rather than given a guessed conversion.
+                        if (
+                            param_name.startswith(NUMERIC_PARAMETER_PREFIX)
+                            and translated_expr.strip() in self._current_config_variables
+                        ):
+                            pre_call_todos.append(
+                                f"# VERIFY: call argument '{param_name}' is passed the text "
+                                f"config value {translated_expr.strip()} — needs Text.ToNumber "
+                                "conversion to a number first (reference Loader L228)"
                             )
 
                         # Format as In_param: <expr>
@@ -2453,6 +2879,10 @@ class PADGenerator:
                                 padded_name = self._apply_type_prefix(base_name, "collection")
                                 mapping[base_lower] = padded_name
 
+        # Task 7d item 3/4: a BP config-column read ([ConfigFileData.<X>]) resolves to its
+        # 'Load Config Data' variable, keyed on the full lowercase dotted reference.
+        mapping.update(self._config_reference_mapping(process))
+
         return mapping
 
     def _apply_type_prefix(self, name: str, pad_type: str) -> str:
@@ -2554,6 +2984,12 @@ class PADGenerator:
         """
         if not variable_name_mapping or "." not in reference:
             return reference
+
+        # Task 7d item 3/4: a full dotted key (a config-column read such as
+        # 'configfiledata.sub folder' → 'txt_SubFolder') wins over base-name resolution.
+        full_key = reference.strip().lower()
+        if full_key in variable_name_mapping:
+            return variable_name_mapping[full_key]
 
         parts = reference.split(".", 1)
         base_name = parts[0].strip()
@@ -3052,15 +3488,34 @@ class PADGenerator:
                 lines.append(action)
 
             # Determine the final value to assign
+            # Task 7d item 4: Follow §B12 L730 — DATA/COLLECTION with no initial_value
+            # should emit nothing. Only emit TODO for genuine translation failures (bp_expr
+            # was provided but couldn't translate), not for missing initial values.
             if stage.stage_type == StageType.COLLECTION:
                 final_value = "DataTable.Create()"
             elif translated_expr:
                 final_value = translated_expr
+            elif bp_expr:
+                # bp_expr was provided but translation failed (returned empty string)
+                # Emit ONLY the TODO comment, no placeholder or SET statement
+                lines.append(self._untranslated_expression_todo(bp_expr, stage.name))
+                return "\n".join(lines)
+            elif stage.stage_type in (StageType.DATA, StageType.COLLECTION):
+                # No bp_expr and this is a DATA/COLLECTION stage with no initial_value
+                # Per §B12 L730: emit nothing at declaration time. (An
+                # Environment-exposed one belongs in 'Load Config Data' instead; the AST
+                # does not carry BP <exposure> yet — deferred to the Task 7d follow-up.)
+                return ""
             else:
-                # For empty expressions or DATA stages with no initial value
-                final_value = "%SomeVar%"
+                # CALCULATION stage with no BP expression at all: nothing to translate,
+                # so no SET with a made-up value — a TODO naming the stage instead.
+                lines.append(
+                    f"# TODO: CALCULATION stage '{stage.name}' has no BP expression for "
+                    f"'{target_var_name}' — needs manual completion"
+                )
+                return "\n".join(lines)
 
-            # Add the SET variable line
+            # Add the SET variable line (only reached if final_value was set above)
             rendered = set_template.render(
                 var_name=mapped_target,
                 value=final_value,
@@ -3138,11 +3593,23 @@ class PADGenerator:
             # preceding line instead of inside the template, matching the existing
             # convention used just above for the WorkQueues Get Next Item/Mark
             # Exception VERIFY lines.
+            # Task 7d item 4 (corrected): if the condition couldn't be translated,
+            # emit a TODO comment in place of the condition but keep the IF statement structure.
+            # Only emit TODO if there's an actual BP condition that failed to translate;
+            # if there's no BP condition at all (empty stub), just emit normal VERIFY marker.
+            if not translated_cond:
+                # Condition missing or not translated: TODO naming the raw expression and
+                # the stage, and a visibly-marked placeholder condition (never a
+                # plausible-looking value) so the IF/ELSE/END structure is kept.
+                lines.extend(self._untranslated_condition_todos(bp_condition, stage.name))
+                condition_text = UNTRANSLATED_CONDITION_PLACEHOLDER
+            else:
+                condition_text = translated_cond
+            # Task 7b gap 3: VERIFY marker for SPOT_CHECK band, directly before the IF.
             if band == ConfidenceBand.SPOT_CHECK:
                 lines.append(f"# VERIFY: {stage.name} (confidence {annotation.confidence:.2f})")
-
             rendered = cond_template.render(
-                condition=translated_cond if translated_cond else "%SomeVar% = True",
+                condition=condition_text,
                 band=band.value,
             )
             lines.append(rendered)
@@ -3964,7 +4431,14 @@ class PADGenerator:
         translated_cond, cond_actions = self._translate_bp_expression(
             bp_condition, variable_name_mapping
         )
-        condition_text = translated_cond if translated_cond else "%SomeVar% = True"
+        # Task 7d item 4b: an untranslated (or absent) condition gets the TODO naming the
+        # raw expression and stage, plus a visibly-marked placeholder condition — both
+        # branch bodies below are still rendered in full.
+        if translated_cond:
+            condition_text = translated_cond
+        else:
+            condition_text = UNTRANSLATED_CONDITION_PLACEHOLDER
+            cond_actions.extend(self._untranslated_condition_todos(bp_condition, stage.name))
 
         true_context, false_context = self._detect_exception_branch_contexts(bp_condition)
         if true_context is None and false_context is None:

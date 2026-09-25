@@ -64,7 +64,7 @@ class SolutionPackager:
         self,
         process: BPProcess,
         robin_dir: Path,
-        cloudflow_dir: Path,
+        cloudflow_dir: Path | None,
         output_path: Path,
         publisher_prefix: str = "flowsmith",
         version: str = "1.0.0.0",
@@ -85,7 +85,11 @@ class SolutionPackager:
         Args:
             process:          Fully annotated BPProcess.
             robin_dir:        Directory containing .robin files from PADGenerator.
-            cloudflow_dir:    Directory containing .json files from CloudFlowGenerator.
+            cloudflow_dir:    Directory containing per-page .json files from
+                              CloudFlowGenerator, or None when there are none (the
+                              consolidated path generates its orchestrator itself, so the
+                              CLI passes None and creates no empty cloudflow/ folder —
+                              Task 7d amendment 2 item 5).
             output_path:      Full path for output .zip file.
             publisher_prefix: PA publisher unique name.
             version:          Solution version string.
@@ -97,18 +101,20 @@ class SolutionPackager:
 
         Raises:
             GenerationError: If input directories missing, files unreadable,
+                the consolidated path is handed per-page Cloud Flow files, the
+                orchestrator Cloud Flow definition does not decode to a JSON object,
                 or .zip cannot be written.
         """
         # Validate input directories exist
         if not robin_dir.exists():
             raise GenerationError(f"Robin directory not found: {robin_dir.absolute()}")
-        if not cloudflow_dir.exists():
+        if cloudflow_dir is not None and not cloudflow_dir.exists():
             raise GenerationError(f"Cloud Flow directory not found: {cloudflow_dir.absolute()}")
 
         try:
             # Collect files
             robin_files = sorted(robin_dir.glob("*.robin"))
-            cf_files = sorted(cloudflow_dir.glob("*.json"))
+            cf_files = sorted(cloudflow_dir.glob("*.json")) if cloudflow_dir is not None else []
 
             builder = WorkflowBuilder(publisher_prefix=publisher_prefix)
             cloudflow_generator = CloudFlowGenerator()
@@ -120,19 +126,30 @@ class SolutionPackager:
                 f for f in robin_files if "_Loader.robin" in f.name or "_Performer.robin" in f.name
             ]
 
-            if len(consolidated_files) >= 2:
+            is_consolidated = len(consolidated_files) >= 2
+            if is_consolidated:
                 # Task 6a consolidated path: use build_all_workflows_consolidated()
                 # This generates exactly 2 Desktop Flows + 1 orchestrator (3 total).
                 # The orchestrator is already included in builder.workflows, so we
-                # don't generate it separately. Set orchestrator_json to None to
-                # skip the redundant write below.
+                # don't generate it separately. No individual page CloudFlow files
+                # should be present in consolidated path (Task 7d item 1).
+                if cf_files:
+                    raise GenerationError(
+                        f"Consolidated generation path (2+ Loader/Performer files) "
+                        f"must not receive orphan Cloud Flow files ({len(cf_files)} found: "
+                        f"{[f.name for f in cf_files]}). Either: (a) use the per-page path "
+                        f"(fewer than 2 .robin files), or (b) remove the stale .json files "
+                        f"from the cloudflow_dir before packaging."
+                    )
                 workflows = builder.build_all_workflows_consolidated(
                     process=process,
                     robin_files=consolidated_files,
                     cloudflow_generator=cloudflow_generator,
                 )
                 workflow_ids = [w["workflow_id"] for w in workflows]
-                orchestrator_json = None  # Already in builder.workflows from consolidated build
+                # The orchestrator is already a Category-5 entry in builder.workflows, so
+                # there is no separate orchestrator file to write below.
+                orchestrator_json = None
             else:
                 # Fallback: per-page path (for backward compatibility or processes with only 1 page)
                 # Pass 1 — pre-allocate every WorkflowId.
@@ -209,23 +226,33 @@ class SolutionPackager:
                 zf.writestr("[Content_Types].xml", content_types_xml)
                 zf.writestr("customizations.xml", customizations_xml)
 
-                # Per-workflow manifest JSON — the file every Workflow
-                # element's <JsonFileName> points at. Without it the
-                # customizations.xml references dangle and the solution
-                # cannot be imported.
+                # Per-workflow JSON file — the file every Workflow element's
+                # <JsonFileName> points at. Without it the customizations.xml
+                # references dangle and the solution cannot be imported.
+                #
+                # Task 7d item 2 (§A1): on the consolidated path the Cloud Flow
+                # (Category 5 — the orchestrator) carries no inline <Definition>; its
+                # <JsonFileName> file holds the real Logic App JSON instead. Desktop
+                # Flows keep their PAD script in <Definition> and get the manifest JSON.
+                # The per-page path's Category-5 entries hold .robin text, not Logic App
+                # JSON, so they keep the manifest (pre-Task-7d behaviour).
                 for workflow in builder.workflows:
-                    zf.writestr(
-                        f"Workflows/{workflow['json_file_name']}",
-                        WorkflowBuilder.build_definition_json(workflow),
-                    )
+                    if is_consolidated and workflow.get("category") == 5:
+                        json_output = self._decode_cloud_flow_definition(workflow)
+                    else:
+                        json_output = WorkflowBuilder.build_definition_json(workflow)
+                    zf.writestr(f"Workflows/{workflow['json_file_name']}", json_output)
 
                 # Cloud Flow JSON files (if any)
                 for cf_file in cf_files:
                     arcname = f"Workflows/{cf_file.name}"
                     zf.write(cf_file, arcname=arcname)
 
-                # Orchestrator Cloud Flow (references the desktop flow GUIDs)
-                if orchestrator_json is not None:
+                # Orchestrator Cloud Flow (fallback per-page path only — consolidated
+                # path includes orchestrator in builder.workflows via consolidated build)
+                # In the fallback path, orchestrator_json was generated above but not
+                # added to builder.workflows, so write it here with a standard filename.
+                if orchestrator_json is not None and not is_consolidated:
                     zf.writestr(
                         f"Workflows/CF_{solution_name}_Cloud_Main.json",
                         orchestrator_json,
@@ -259,6 +286,40 @@ class SolutionPackager:
             raise GenerationError(
                 f"Failed to package solution for process '{process.name}': {e}"
             ) from e
+
+    @staticmethod
+    def _decode_cloud_flow_definition(workflow: dict) -> str:
+        """Decode a Cloud Flow workflow's escaped definition back to Logic App JSON.
+
+        ``WorkflowBuilder`` stores the orchestrator JSON as a JSON string literal (the
+        ``<Definition>`` encoding); §A1 puts the real Logic App JSON in the
+        ``<JsonFileName>`` file instead, so it is decoded back to an object here.
+
+        Args:
+            workflow: A Category-5 workflow dict from ``WorkflowBuilder``.
+
+        Returns:
+            The Logic App JSON object, pretty-printed.
+
+        Raises:
+            GenerationError: If the definition does not decode to a JSON object — the
+                raw string is never written in its place (Task 7d amendment 2 item 5).
+        """
+        name = workflow.get("name", "<unnamed>")
+        try:
+            decoded = json.loads(workflow["definition"])
+            if isinstance(decoded, str):
+                decoded = json.loads(decoded)
+        except (KeyError, TypeError, json.JSONDecodeError) as e:
+            raise GenerationError(
+                f"Cloud Flow '{name}' definition does not decode to Logic App JSON: {e}"
+            ) from e
+        if not isinstance(decoded, dict):
+            raise GenerationError(
+                f"Cloud Flow '{name}' definition decodes to {type(decoded).__name__}, "
+                "not a Logic App JSON object"
+            )
+        return json.dumps(decoded, indent=2)
 
     def _render_template(self, template_name: str, **kwargs) -> str:
         """Render a Jinja2 template with given context.

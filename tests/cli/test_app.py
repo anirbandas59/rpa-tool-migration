@@ -63,3 +63,26 @@ def test_convert_exposes_managed_flag():
     )
     assert result.returncode == 0
     assert "--managed" in result.stdout
+
+
+def test_convert_creates_no_cloudflow_folder_and_packages(tmp_path):
+    """Task 7d items 1/5: convert no longer runs the per-page Cloud Flow path — no
+    cloudflow/ folder is created, and packaging succeeds (the consolidated packager
+    raises if it is handed per-page Cloud Flow files)."""
+    result = subprocess.run(
+        [
+            "uv",
+            "run",
+            "flowsmith",
+            "convert",
+            "--input",
+            "samples/blueprism/PID_0171.bprelease",
+            "--output",
+            str(tmp_path),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not (tmp_path / "cloudflow").exists()
+    assert list(tmp_path.glob("*_solution.zip"))

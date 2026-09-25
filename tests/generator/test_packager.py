@@ -1886,3 +1886,177 @@ class TestPageWithSpacesIsPackaged:
 
         definition = json.loads(root.find(".//{*}Definition").text)
         assert "# right flow" in definition
+
+
+# ── Task 7d items 1/2 (amendment 2 item 1): consolidated-path Cloud Flow storage ──
+
+
+class TestConsolidatedCloudFlowStorage:
+    """Task 7d item 1 (no orphan Cloud Flow files) and item 2 (§A1 CF storage direction)."""
+
+    @pytest.fixture
+    def role_process(self) -> BPProcess:
+        """A process whose pages are role-tagged Loader/Performer (consolidated path)."""
+
+        def page(page_id: str, name: str, role: str, is_main: bool) -> BPPage:
+            stage = BPStage(
+                stage_id=f"{page_id}_S1",
+                stage_type=StageType.ACTION,
+                name="Get Next Item",
+                data_items=[],
+                pa_annotation=PAAnnotation(
+                    target_type="WorkQueues.GetNextItem",
+                    target_module="WorkQueues",
+                    runtime=Runtime.DESKTOP,
+                    params_map={},
+                    confidence=0.90,
+                    band=ConfidenceBand.AUTO,
+                    flags=[],
+                ),
+            )
+            return BPPage(
+                page_id=page_id,
+                name=name,
+                stages=[stage],
+                is_main=is_main,
+                published=True,
+                role=role,
+            )
+
+        return BPProcess(
+            process_id="test_cons",
+            name="ConsProcess",
+            version="1.0",
+            pages=[
+                page("P1", "Main Page", "loader", True),
+                page("P2", "Work Items", "performer", False),
+            ],
+            source_file="test.bprelease",
+        )
+
+    @pytest.fixture
+    def consolidated_robin_dir(self, tmp_path: Path) -> Path:
+        """The two consolidated .robin files PADGenerator writes (Loader + Performer)."""
+        robin_path = tmp_path / "robin_cons"
+        robin_path.mkdir(parents=True, exist_ok=True)
+        (robin_path / "ConsProcess_Loader.robin").write_text("FUNCTION 'A' GLOBAL\nEND FUNCTION")
+        (robin_path / "ConsProcess_Performer.robin").write_text("FUNCTION 'B' GLOBAL\nEND FUNCTION")
+        return robin_path
+
+    @staticmethod
+    def _cloud_workflows(zip_path: Path) -> tuple[list, zipfile.ZipFile]:
+        zf = zipfile.ZipFile(zip_path)
+        cust = etree.fromstring(zf.read("customizations.xml"))
+        cloud = [w for w in cust.findall(".//{*}Workflow") if w.findtext("{*}Category") == "5"]
+        return cloud, zf
+
+    def test_consolidated_path_rejects_per_page_cloud_flow_files(
+        self,
+        packager: SolutionPackager,
+        role_process: BPProcess,
+        consolidated_robin_dir: Path,
+        cloudflow_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """Item 1: handed stale per-page Cloud Flow JSON, the consolidated path raises."""
+        with pytest.raises(GenerationError, match="must not receive orphan Cloud Flow files"):
+            packager.package(
+                role_process,
+                robin_dir=consolidated_robin_dir,
+                cloudflow_dir=cloudflow_dir,
+                output_path=tmp_path / "solution.zip",
+            )
+
+    def test_consolidated_path_accepts_no_cloudflow_dir(
+        self,
+        packager: SolutionPackager,
+        role_process: BPProcess,
+        consolidated_robin_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """Item 5 (amendment 2): no cloudflow_dir needed — exactly 2 DF + 1 CF JSON files."""
+        output_path = tmp_path / "solution.zip"
+        packager.package(
+            role_process,
+            robin_dir=consolidated_robin_dir,
+            cloudflow_dir=None,
+            output_path=output_path,
+        )
+        with zipfile.ZipFile(output_path) as zf:
+            wf_files = sorted(n for n in zf.namelist() if n.startswith("Workflows/"))
+        assert len(wf_files) == 3
+        assert sum(n.startswith("Workflows/CF_") for n in wf_files) == 1
+
+    def test_cloud_flow_workflow_has_no_inline_definition(
+        self,
+        packager: SolutionPackager,
+        role_process: BPProcess,
+        consolidated_robin_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """Item 2 (§A1): the Category-5 <Workflow> carries no <Definition>; DFs keep theirs."""
+        output_path = tmp_path / "solution.zip"
+        packager.package(
+            role_process,
+            robin_dir=consolidated_robin_dir,
+            cloudflow_dir=None,
+            output_path=output_path,
+        )
+        cloud, zf = self._cloud_workflows(output_path)
+        with zf:
+            cust = etree.fromstring(zf.read("customizations.xml"))
+        assert len(cloud) == 1
+        assert cloud[0].find("{*}Definition") is None
+        desktop = [w for w in cust.findall(".//{*}Workflow") if w.findtext("{*}Category") == "6"]
+        assert len(desktop) == 2
+        assert all(w.find("{*}Definition") is not None for w in desktop)
+
+    def test_cloud_flow_json_file_is_real_logic_app_definition(
+        self,
+        packager: SolutionPackager,
+        role_process: BPProcess,
+        consolidated_robin_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """Item 2 (§A1): the CF <JsonFileName> payload is the Logic App JSON, not a stub."""
+        output_path = tmp_path / "solution.zip"
+        packager.package(
+            role_process,
+            robin_dir=consolidated_robin_dir,
+            cloudflow_dir=None,
+            output_path=output_path,
+        )
+        cloud, zf = self._cloud_workflows(output_path)
+        with zf:
+            payload = json.loads(zf.read(cloud[0].findtext("{*}JsonFileName").lstrip("/")))
+        assert payload != {"package": ""}
+        definition = payload["properties"]["definition"]
+        assert "triggers" in definition and "actions" in definition
+
+    def test_undecodable_cloud_flow_definition_raises(
+        self,
+        packager: SolutionPackager,
+        role_process: BPProcess,
+        consolidated_robin_dir: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Item 5 (amendment 2): a CF definition that doesn't decode raises, never written raw."""
+        from flowsmith.generator.workflow_builder import WorkflowBuilder
+
+        real = WorkflowBuilder.build_orchestrator_workflow
+
+        def broken(self: WorkflowBuilder, *args: object, **kwargs: object) -> dict:
+            workflow = real(self, *args, **kwargs)
+            workflow["definition"] = "not json {"
+            return workflow
+
+        monkeypatch.setattr(WorkflowBuilder, "build_orchestrator_workflow", broken)
+        output_path = tmp_path / "solution.zip"
+        with pytest.raises(GenerationError, match="does not decode to Logic App JSON"):
+            packager.package(
+                role_process,
+                robin_dir=consolidated_robin_dir,
+                cloudflow_dir=None,
+                output_path=output_path,
+            )

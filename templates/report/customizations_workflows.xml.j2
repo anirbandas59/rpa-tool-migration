@@ -32,7 +32,9 @@
       <Outputs>{{ workflow.outputs | xmltext }}</Outputs>
       <Dependencies>{{ workflow.dependencies | xmltext }}</Dependencies>
       <ConnectionReferences>{{ workflow.connection_references | xmltext }}</ConnectionReferences>
+{% if workflow.category != 5 %}
       <Definition>{{ workflow.definition | xmltext }}</Definition>
+{% endif %}
       <SchemaVersion>{{ workflow.schema_version | xmltext }}</SchemaVersion>
       <Claims>{{ workflow.claims | tojson }}</Claims>
       <DesktopFlowModules>[]</DesktopFlowModules>
