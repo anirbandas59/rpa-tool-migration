@@ -734,9 +734,13 @@ class TestRealSampleScoring:
         Shifted from 623 to 694 by Task 4a (this pass): MultipleCalculation fix
         adds 71 calculation stages, most classified as SPOT_CHECK confidence band,
         increasing overall SPOT_CHECK count. Reflects stage_count change from 725→796.
+        Shifted from 694 to 710 by Task 8a item 1: the 16 LOOP stages of
+        PID_0127_Process_US_BulkUnlock now resolve to stage_rules.yaml's LoopStart row
+        (confidence 0.80 → SPOT_CHECK) instead of the false "No mapping rule"
+        (0.0 → MANUAL); 694 + 16 = 710. The "623" in the name is historical.
         """
         score = scorer.score_process(annotated_process)
-        assert score.spot_check_count == 694
+        assert score.spot_check_count == 710
 
     def test_real_sample_partial_count_30(self, scorer, annotated_process):
         """Real sample has 31 PARTIAL stages.
@@ -760,27 +764,42 @@ class TestRealSampleScoring:
         test_real_sample_stage_count_724); the prior 489->491 shift from
         Task 2b's catalogue corrections still applies within the correctly
         scoped main-process-only stage set.
+        Shifted from 20 to 4 by Task 8a item 1: the 16 LOOP stages leave MANUAL
+        (now SPOT_CHECK, see test_real_sample_spot_check_count_623). The 4 left are
+        VBO calls at catalogue confidence 0.45: 3 clsEnvironmentLockingBusinessObject
+        calls (1 'Acquire Lock', 2 'Release Lock') and 'FormatReport'
+        (Utility_Object_Format_Queue_Report 'Format Excel(Standard)').
+        The "20" in the name is historical.
         """
         score = scorer.score_process(annotated_process)
-        assert score.manual_count == 20
+        assert score.manual_count == 4
 
     def test_real_sample_error_flag_count_16(self, scorer, annotated_process):
         """Real sample has 16 error flags.
 
         Shifted from 485 by Task 3a's artefact-isolation fix (see
         test_real_sample_stage_count_724).
+        Shifted from 16 to 4 by Task 8a: the 16 were the false "No mapping rule for
+        stage type 'LOOP'" errors (removed by item 1); the 4 now are one
+        band-mandated error per MANUAL stage (item 2) — the 4 stages listed in
+        test_real_sample_manual_count_20. The "16" in the name is historical.
         """
         score = scorer.score_process(annotated_process)
-        assert score.error_flag_count == 16
+        assert score.error_flag_count == 4
 
     def test_real_sample_warn_flag_count_4(self, scorer, annotated_process):
         """Real sample has 4 warn flags.
 
         Shifted from 53 by Task 3a's artefact-isolation fix (see
         test_real_sample_stage_count_724).
+        Shifted from 4 to 35 by Task 8a item 3: the 4 existing warns (3 env-lock
+        catalogue review_severity=warn flags + 1 DataTypeMapper TimeSpan flag on DATA
+        'tmspan_Worktime') plus one band-mandated warn on each of the 31 PARTIAL
+        stages (30 VBO calls + 1 Process call), none of which had a flag before;
+        4 + 31 = 35. The "4" in the name is historical.
         """
         score = scorer.score_process(annotated_process)
-        assert score.warn_flag_count == 4
+        assert score.warn_flag_count == 35
 
     def test_real_sample_page_count_18(self, scorer, annotated_process):
         """Real sample has 19 pages.

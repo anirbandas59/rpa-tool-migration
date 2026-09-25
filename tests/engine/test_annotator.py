@@ -12,10 +12,18 @@ from flowsmith.ast import (
     BPProcess,
     BPStage,
     ConfidenceBand,
+    ReviewFlag,
     StageType,
 )
 from flowsmith.engine import StageAnnotator, create_annotator
-from flowsmith.mapper import DataTypeMapper, MappingConfig, VBORouter, load_rules
+from flowsmith.mapper import (
+    DataTypeMapper,
+    MappingConfig,
+    StageRule,
+    VBOEntry,
+    VBORouter,
+    load_rules,
+)
 
 # ── Fixtures ───────────────────────────────────────────────────────────────
 
@@ -443,3 +451,378 @@ class TestIntegration:
             for s in p.stages:
                 for flag in s.pa_annotation.flags:
                     assert flag.stage_id != "", f"Stage {s.stage_id} has flag with empty stage_id"
+
+
+# ── Task 8a: ReviewFlag correctness and completeness ──────────────────────
+
+_PID_0171 = Path("samples/blueprism/PID_0171.bprelease")
+_ENV_LOCK_VBO = "BluePrism.AutomateAppCore.clsEnvironmentLockingBusinessObject"
+_RESULTS_ENTRY_VBO = "PID_0005_Object_US_ SampleResultsEntry"
+
+
+def _stage_rule(
+    bp_stage_type: str, canonical_type: str, confidence: float, notes: str = "", module: str = ""
+) -> StageRule:
+    """Build a StageRule for a synthetic MappingConfig."""
+    return StageRule(
+        bp_stage_type=bp_stage_type,
+        canonical_type=canonical_type,
+        pa_module=module,
+        runtime="DESKTOP",
+        confidence_base=confidence,
+        notes=notes,
+    )
+
+
+def _annotator_for(config: MappingConfig) -> StageAnnotator:
+    """Wire a StageAnnotator around a synthetic MappingConfig."""
+    return StageAnnotator(config, VBORouter(config), DataTypeMapper())
+
+
+class TestNormalisedTypeRuleLookup:
+    """Item 1: canonical LOOP/WAIT stages resolve to their stage_rules.yaml rows."""
+
+    @pytest.mark.parametrize(
+        ("stage_type", "confidence", "band"),
+        [
+            # LOOP <- LoopStart/LoopEnd: stage_rules.yaml L156/L171, both 0.80
+            (StageType.LOOP, 0.80, ConfidenceBand.SPOT_CHECK),
+            # WAIT <- WaitStart/WaitEnd: stage_rules.yaml L98/L112, both 0.70
+            (StageType.WAIT, 0.70, ConfidenceBand.SPOT_CHECK),
+            # CALCULATION <- Calculation (and MultipleCalculation fan-out): 'Calculation' row
+            (StageType.CALCULATION, 0.80, ConfidenceBand.SPOT_CHECK),
+        ],
+    )
+    def test_normalised_type_gets_its_rule_not_no_mapping_error(
+        self,
+        annotator: StageAnnotator,
+        make_stage,
+        stage_type: StageType,
+        confidence: float,
+        band: ConfidenceBand,
+    ) -> None:
+        """No false "No mapping rule" error; confidence comes from the matching row."""
+        annotation = annotator.annotate_stage(make_stage(stage_type=stage_type))
+        assert not any("No mapping rule" in f.reason for f in annotation.flags)
+        assert annotation.flags == []
+        assert annotation.confidence == confidence
+        assert annotation.band == band
+
+    def test_loop_end_stage_resolves_like_loop_start(
+        self, annotator: StageAnnotator, make_stage
+    ) -> None:
+        """Both brackets of a LOOP pair (pair_id = the Start id) get the same rule."""
+        start = make_stage(stage_type=StageType.LOOP, stage_id="ls", pair_id="ls")
+        end = make_stage(stage_type=StageType.LOOP, stage_id="le", pair_id="ls")
+        a_start, a_end = annotator.annotate_stage(start), annotator.annotate_stage(end)
+        assert a_start.confidence == a_end.confidence == 0.80
+        assert a_start.target_type == a_end.target_type
+
+    def test_multiple_calculation_fan_out_uses_calculation_row(
+        self, annotator: StageAnnotator, make_stage
+    ) -> None:
+        """A MultipleCalculation sub-stage ('<id>__calc_1') is a plain CALCULATION."""
+        stage = make_stage(stage_type=StageType.CALCULATION, stage_id="mc__calc_1")
+        annotation = annotator.annotate_stage(stage)
+        assert annotation.target_type == "SET <var> TO <expr>"
+        assert annotation.confidence == 0.80
+
+    def test_type_with_no_rule_row_still_gets_error(self, make_stage) -> None:
+        """A canonical type with no row at all keeps the explicit 'No mapping rule' error."""
+        config = MappingConfig(stage_rules=[_stage_rule("Start", "START", 0.95)], vbo_catalogue=[])
+        annotation = _annotator_for(config).annotate_stage(make_stage(stage_type=StageType.LOOP))
+        assert annotation.band == ConfidenceBand.MANUAL
+        assert [f.severity for f in annotation.flags] == ["error"]
+        assert "No mapping rule for stage type 'LOOP'" in annotation.flags[0].reason
+
+
+class TestManualBandErrorFlag:
+    """Item 2: every MANUAL annotation carries at least one specific error flag."""
+
+    def test_ui_vbo_call_gets_ui_selector_error(
+        self, annotator: StageAnnotator, make_stage
+    ) -> None:
+        """A SampleResultsEntry UI call (catalogue 0.15, UIAutomation) cites §B9."""
+        stage = make_stage(
+            stage_type=StageType.ACTION,
+            stage_id="ui1",
+            params_map={"_vbo_object": _RESULTS_ENTRY_VBO, "_vbo_action": "Enter Values"},
+        )
+        annotation = annotator.annotate_stage(stage)
+        assert annotation.band == ConfidenceBand.MANUAL
+        errors = [f for f in annotation.flags if f.severity == "error"]
+        assert len(errors) == 1
+        assert "needs a UI selector (architecture doc §B9)" in errors[0].reason
+        assert "'Enter Values'" in errors[0].reason
+        assert errors[0].stage_id == "ui1"
+        assert "low confidence" not in errors[0].reason.lower()
+
+    def test_warn_only_env_lock_gets_error_added_after_warn(
+        self, annotator: StageAnnotator, make_stage
+    ) -> None:
+        """Env-lock (0.45, catalogue warn): the warn is kept first, one error appended."""
+        stage = make_stage(
+            stage_type=StageType.ACTION,
+            params_map={"_vbo_object": _ENV_LOCK_VBO, "_vbo_action": "Acquire Lock"},
+        )
+        annotation = annotator.annotate_stage(stage)
+        assert annotation.band == ConfidenceBand.MANUAL
+        assert [f.severity for f in annotation.flags] == ["warn", "error"]
+        reason = annotation.flags[1].reason
+        assert reason.startswith("No catalogue mapping: no method_actions template")
+        assert "confidence 0.45" in reason
+        assert reason.endswith("Low confidence; needs design review.")
+
+    def test_existing_error_flag_is_not_duplicated(
+        self, annotator: StageAnnotator, make_stage
+    ) -> None:
+        """Unknown VBO and CODE already carry an error; no second one is added."""
+        unknown = make_stage(
+            stage_type=StageType.ACTION,
+            params_map={"_vbo_object": "Unknown VBO", "_vbo_action": "X"},
+        )
+        code = make_stage(stage_type=StageType.CODE)
+        for stage in (unknown, code):
+            annotation = annotator.annotate_stage(stage)
+            assert annotation.band == ConfidenceBand.MANUAL
+            assert [f.severity for f in annotation.flags] == ["error"]
+
+    def test_low_confidence_rule_gets_error_with_full_note(self, make_stage) -> None:
+        """Rule path below 0.50 -> one error flag carrying the rule's whole note."""
+        note = "Word " * 40 + "ending."
+        config = MappingConfig(
+            stage_rules=[_stage_rule("Decision", "DECISION", 0.30, notes=note)],
+            vbo_catalogue=[],
+        )
+        stage = make_stage(stage_type=StageType.DECISION)
+        annotation = _annotator_for(config).annotate_stage(stage)
+        assert [f.severity for f in annotation.flags] == ["error"]
+        assert annotation.flags[0].reason.endswith("Word ending.")
+        assert "stage_rules.yaml 'Decision' rule" in annotation.flags[0].reason
+
+    def test_low_confidence_process_call_gets_error(self, make_stage) -> None:
+        """Process-call path below 0.50 -> one error flag from the 'Process' row's note."""
+        config = MappingConfig(
+            stage_rules=[_stage_rule("Process", "ACTION", 0.20, notes="Needs routing.")],
+            vbo_catalogue=[],
+        )
+        stage = make_stage(stage_type=StageType.ACTION, is_process_call=True)
+        annotation = _annotator_for(config).annotate_stage(stage)
+        assert [f.severity for f in annotation.flags] == ["error"]
+        assert annotation.flags[0].reason == (
+            "confidence 0.20 from stage_rules.yaml 'Process' rule: Needs routing."
+        )
+
+    def test_no_derivable_cause_is_stated_honestly(self, make_stage) -> None:
+        """A low score with no note and a method template says 'no specific cause recorded'."""
+        entry = VBOEntry(
+            vbo_name="Bare VBO",
+            runtime="DESKTOP",
+            confidence_base=0.40,
+            method_actions={"Do": "System.Do"},
+        )
+        config = MappingConfig(stage_rules=[], vbo_catalogue=[entry])
+        stage = make_stage(
+            stage_type=StageType.ACTION,
+            params_map={"_vbo_object": "Bare VBO", "_vbo_action": "Do"},
+        )
+        annotation = _annotator_for(config).annotate_stage(stage)
+        assert annotation.flags[-1].reason == (
+            "confidence 0.40 from vbo_catalogue.yaml entry 'Bare VBO'; no specific cause recorded"
+        )
+
+
+class TestPartialBandFlag:
+    """Item 3: every PARTIAL annotation carries at least one specific flag."""
+
+    def test_vbo_call_without_template_gets_warn(
+        self, annotator: StageAnnotator, make_stage
+    ) -> None:
+        """File Management_Extended 'File Exists' (0.60, no method_actions) -> one warn."""
+        stage = make_stage(
+            stage_type=StageType.ACTION,
+            params_map={
+                "_vbo_object": "Utility - File Management_Extended",
+                "_vbo_action": "File Exists",
+            },
+        )
+        annotation = annotator.annotate_stage(stage)
+        assert annotation.band == ConfidenceBand.PARTIAL
+        assert [f.severity for f in annotation.flags] == ["warn"]
+        assert annotation.flags[0].reason.startswith(
+            "No catalogue mapping: no method_actions template for 'File Exists'; "
+            "confidence 0.60 from vbo_catalogue.yaml entry 'Utility - File Management_Extended'"
+        )
+
+    def test_process_call_gets_warn_from_process_rule(
+        self, annotator: StageAnnotator, make_stage
+    ) -> None:
+        """Process call (stage_rules.yaml 'Process', 0.5) -> warn citing that rule's note."""
+        stage = make_stage(stage_type=StageType.ACTION, is_process_call=True)
+        annotation = annotator.annotate_stage(stage)
+        assert annotation.band == ConfidenceBand.PARTIAL
+        assert [f.severity for f in annotation.flags] == ["warn"]
+        assert annotation.flags[0].reason.startswith(
+            "confidence 0.50 from stage_rules.yaml 'Process' rule: Normalises to ACTION."
+        )
+
+    @pytest.mark.parametrize("stage_type", [StageType.NAVIGATE, StageType.READ, StageType.WRITE])
+    def test_ui_stage_types_get_ui_selector_warn(
+        self, annotator: StageAnnotator, make_stage, stage_type: StageType
+    ) -> None:
+        """NAVIGATE/READ/WRITE (0.65, UIAutomation rows) -> warn citing §B9."""
+        annotation = annotator.annotate_stage(make_stage(stage_type=stage_type))
+        assert annotation.band == ConfidenceBand.PARTIAL
+        assert [f.severity for f in annotation.flags] == ["warn"]
+        assert "needs a UI selector (architecture doc §B9)" in annotation.flags[0].reason
+
+    def test_data_stage_without_data_item_gets_warn(
+        self, annotator: StageAnnotator, make_stage
+    ) -> None:
+        """DATA with no data item (0.60 fixed score) -> warn naming the Text default."""
+        annotation = annotator.annotate_stage(make_stage(stage_type=StageType.DATA, name="X"))
+        assert annotation.band == ConfidenceBand.PARTIAL
+        assert [f.severity for f in annotation.flags] == ["warn"]
+        assert "has no data item recorded" in annotation.flags[0].reason
+
+    def test_partial_with_existing_flag_gets_nothing_added(
+        self, annotator: StageAnnotator, make_stage
+    ) -> None:
+        """PARTIAL DATA stage with an unknown type keeps only the mapper's warn."""
+        stage = make_stage(
+            stage_type=StageType.DATA,
+            data_items=[BPDataItem(name="v", data_type="weird")],
+        )
+        annotation = annotator.annotate_stage(stage)
+        assert annotation.band == ConfidenceBand.PARTIAL
+        assert len(annotation.flags) == 1
+        assert "Unknown BP type" in annotation.flags[0].reason
+
+    def test_spot_check_gets_no_flag(self, annotator: StageAnnotator, make_stage) -> None:
+        """Band enforcement never touches SPOT-CHECK/AUTO stages."""
+        annotation = annotator.annotate_stage(make_stage(stage_type=StageType.DECISION))
+        assert annotation.band == ConfidenceBand.SPOT_CHECK
+        assert annotation.flags == []
+
+
+class TestPendingFlagTransfer:
+    """Item 4: Task 1b's BPStage.pending_flags reach pa_annotation.flags."""
+
+    @staticmethod
+    def _fusion_candidate(make_stage) -> BPStage:
+        """A synthetic unresolved fusion-candidate stage, shaped as ast/builder.py builds it."""
+        flag = ReviewFlag(
+            stage_id="f2",
+            reason="Detected numeric-handle handoff from 'Create' (variable 'Handle').",
+            severity="warn",
+            suggested_fix="Add fusion_patterns entry to vbo_catalogue.yaml",
+        )
+        return make_stage(
+            stage_type=StageType.ACTION,
+            stage_id="f2",
+            params_map={"_vbo_object": "MS Excel VBO", "_vbo_action": "Open Workbook"},
+            pending_flags=[flag],
+        )
+
+    def test_pending_flag_transferred(self, annotator: StageAnnotator, make_stage) -> None:
+        """The pending flag appears on the annotation with the stage's id."""
+        stage = self._fusion_candidate(make_stage)
+        annotation = annotator.annotate_stage(stage)
+        reasons = [f.reason for f in annotation.flags]
+        assert stage.pending_flags[0].reason in reasons
+        assert all(f.stage_id == "f2" for f in annotation.flags)
+
+    def test_annotating_twice_does_not_duplicate(
+        self, annotator: StageAnnotator, make_stage, make_process
+    ) -> None:
+        """Running annotate_process twice leaves exactly one copy of the pending flag."""
+        stage = self._fusion_candidate(make_stage)
+        process = make_process([stage])
+        annotator.annotate_process(process)
+        annotator.annotate_process(process)
+        reason = stage.pending_flags[0].reason
+        assert [f.reason for f in stage.pa_annotation.flags].count(reason) == 1
+
+    def test_pending_flag_already_on_annotation_not_duplicated(
+        self, annotator: StageAnnotator, make_stage
+    ) -> None:
+        """A pending flag equal to one the path already produced is not added twice."""
+        dup = ReviewFlag(
+            stage_id="c1",
+            reason=(
+                "Code stage contains inline VBScript/VB.NET — "
+                "must be rewritten as PowerShell or PAD script action"
+            ),
+            severity="error",
+            suggested_fix="x",
+        )
+        stage = make_stage(stage_type=StageType.CODE, stage_id="c1", pending_flags=[dup])
+        annotation = annotator.annotate_stage(stage)
+        assert len(annotation.flags) == 1
+
+
+@pytest.mark.skipif(not _PID_0171.exists(), reason="PID_0171 sample unavailable")
+class TestPid0171FlagContract:
+    """Items 1-3 on the real PID_0171 sample (Task 8 report's regression check).
+
+    parse_process + build_ast (processes[0], 'PID_171_US_Process_LIMS_Prelude', 749
+    stages) + annotate_process: the same AST `flowsmith convert` writes to ast.json.
+    Before Task 8a: AUTO 60 / SPOT_CHECK 640 / PARTIAL 19 / MANUAL 30, flags
+    error 14 / warn 5 (docs/reviews/8-2026-09-25.md).
+    """
+
+    @pytest.fixture(scope="class")
+    def pid171(self) -> BPProcess:
+        """Build and annotate PID_0171 once."""
+        from flowsmith.ast import build_ast
+        from flowsmith.parser import parse_process
+
+        process = build_ast(parse_process(_PID_0171))
+        return create_annotator().annotate_process(process)
+
+    @staticmethod
+    def _stages(process: BPProcess) -> list[BPStage]:
+        """All stages of the process."""
+        return [s for p in process.pages for s in p.stages]
+
+    def test_no_false_no_mapping_rule_flags(self, pid171: BPProcess) -> None:
+        """0 "No mapping rule" flags; the 14 LOOP stages are SPOT_CHECK at 0.80."""
+        stages = self._stages(pid171)
+        assert not any("No mapping rule" in f.reason for s in stages for f in s.pa_annotation.flags)
+        loops = [s for s in stages if s.stage_type == StageType.LOOP]
+        assert len(loops) == 14
+        assert all(s.pa_annotation.band == ConfidenceBand.SPOT_CHECK for s in loops)
+
+    def test_every_manual_stage_has_error_flag(self, pid171: BPProcess) -> None:
+        """All 16 MANUAL stages (13 with no flag + 3 env-lock warn-only) now have an error."""
+        manual = [s for s in self._stages(pid171) if s.pa_annotation.band == ConfidenceBand.MANUAL]
+        assert len(manual) == 16
+        assert all(any(f.severity == "error" for f in s.pa_annotation.flags) for s in manual)
+
+    def test_every_partial_stage_has_flag(self, pid171: BPProcess) -> None:
+        """All 19 PARTIAL stages (none flagged before Task 8a) now carry a flag."""
+        partial = [
+            s for s in self._stages(pid171) if s.pa_annotation.band == ConfidenceBand.PARTIAL
+        ]
+        assert len(partial) == 19
+        assert all(s.pa_annotation.flags for s in partial)
+
+    def test_band_and_flag_totals(self, pid171: BPProcess) -> None:
+        """Totals: the 14 LOOP stages move MANUAL -> SPOT_CHECK; 16 errors / 24 warns.
+
+        error 16 = one per MANUAL stage (12 UI-selector VBO calls, 'Save Attachments',
+        3 env-lock calls). warn 24 = 19 PARTIAL band flags + 3 env-lock catalogue
+        warns + 2 DATA TimeSpan lossy-type warns.
+        """
+        from collections import Counter
+
+        stages = self._stages(pid171)
+        bands = Counter(s.pa_annotation.band for s in stages)
+        assert bands == {
+            ConfidenceBand.AUTO: 60,
+            ConfidenceBand.SPOT_CHECK: 654,
+            ConfidenceBand.PARTIAL: 19,
+            ConfidenceBand.MANUAL: 16,
+        }
+        severities = Counter(f.severity for s in stages for f in s.pa_annotation.flags)
+        assert severities == {"error": 16, "warn": 24}

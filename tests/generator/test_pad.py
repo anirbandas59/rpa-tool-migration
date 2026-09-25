@@ -1227,6 +1227,14 @@ def test_real_sample_stub_count(tmp_path: Path) -> None:
     independent top-level entities. This is consistent with the consolidated rendering model,
     though a per-stage trace would be needed to pinpoint the exact pages affected.
     See docs/reviews/5a-2026-08-31-rebuild.md for more context.
+
+    Task 8a item 1 (engine rule lookup): changed from 18 to 4. Of the 18, 14 were the
+    rendered LOOP stages (of the sample's 16 LOOP stages, 14 sit on emitted pages)
+    stubbed as "No mapping rule for stage type 'LOOP'"; they now resolve to
+    stage_rules.yaml's LoopStart row (0.80, SPOT_CHECK) and render as a
+    "# System.LOOP ... # VERIFY:" comment instead of a stub (4 in the Loader, 10 in
+    the Performer). The 4 remaining stubs are the 4 MANUAL VBO calls (confidence
+    0.45): 'Aquire Lock' and 2x 'Release Lock' (Loader) and 'FormatReport' (Performer).
     """
     sample_path = Path("samples/blueprism/PID_0127.bprelease")
     if not sample_path.exists():
@@ -1251,7 +1259,8 @@ def test_real_sample_stub_count(tmp_path: Path) -> None:
     # After artefact isolation (Task 3a), reduced to 20 stubs.
     # After consolidated-by-role consolidation (Task 5a), reduced further to 18 stubs
     # due to changes in page routing and rendering logic.
-    assert stub_count == 18
+    # After Task 8a's LOOP rule-lookup fix, 4 (the 4 MANUAL VBO calls; see docstring).
+    assert stub_count == 4
 
 
 @pytest.mark.integration

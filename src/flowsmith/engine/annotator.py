@@ -14,13 +14,29 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from flowsmith.ast.models import ConfidenceBand, PAAnnotation, ReviewFlag, Runtime, StageType
-from flowsmith.exceptions import TransformError
+from flowsmith.exceptions import ConfigError, TransformError
 from flowsmith.mapper import DataTypeMapper, MappingConfig, VBORouter, load_rules
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     from flowsmith.ast.models import BPProcess, BPStage
+
+# PAD module name that marks a mapping as UI interaction needing an element selector.
+# Data-driven, not a hardcoded stage list: it is the `pa_module` value both YAML files
+# already use for selector-bearing targets — mapping/stage_rules.yaml's Navigate/Read/
+# Write rows ("Out of scope per architecture doc §B9. Requires appdef/ControlRepository
+# UI selector") and mapping/vbo_catalogue.yaml's UI-automation VBO entries
+# (PID_0003_Object_US_SampleManager, PID_0005_Object_US_ SampleResultsEntry: "Per
+# architecture doc §B9, all methods require UI selectors"). Task 8a items 2-3.
+_UI_SELECTOR_MODULE = "UIAutomation"
+
+# Stage types whose score is fixed in this module rather than read from a
+# stage_rules.yaml row (see _annotate_data/_annotate_collection/_annotate_code/
+# _annotate_exception); a rule row's note would not describe their score.
+_SELF_SCORED_TYPES = frozenset(
+    {StageType.DATA, StageType.COLLECTION, StageType.CODE, StageType.EXCEPTION}
+)
 
 
 class StageAnnotator:
@@ -98,6 +114,21 @@ class StageAnnotator:
             PAAnnotation with all fields populated.
 
         """
+        annotation = self._dispatch(stage)
+        annotation = self._transfer_pending_flags(stage, annotation)
+        return self._enforce_band_flags(stage, annotation)
+
+    def _dispatch(self, stage: BPStage) -> PAAnnotation:
+        """Route a stage to its per-type annotation method.
+
+        Args:
+            stage: A BPStage from the AST.
+
+        Returns:
+            The PAAnnotation produced by the per-type method, before the
+            post-confidence steps in annotate_stage().
+
+        """
         if stage.stage_type == StageType.ACTION:
             return self._annotate_action(stage)
         if stage.stage_type == StageType.DATA:
@@ -109,6 +140,151 @@ class StageAnnotator:
         if stage.stage_type == StageType.EXCEPTION:
             return self._annotate_exception(stage)
         return self._annotate_from_rules(stage)
+
+    def _transfer_pending_flags(self, stage: BPStage, annotation: PAAnnotation) -> PAAnnotation:
+        """Merge the stage's AST-build ``pending_flags`` into the annotation (Task 8a item 4).
+
+        Task 1b's fusion detection (``ast/builder.py``, unresolved call-fusion
+        candidates) stores ReviewFlags in ``BPStage.pending_flags`` because no
+        PAAnnotation exists yet; the field's docstring (``ast/models.py``) says the
+        engine merges them into ``pa_annotation.flags``. ``pending_flags`` is left
+        untouched so annotate_stage() has no side effect on the stage:
+        re-annotating the same stage builds a fresh annotation and transfers the
+        same flags again, and a flag already present on the annotation (same
+        severity and reason) is never added twice.
+
+        Args:
+            stage: The stage being annotated.
+            annotation: The annotation produced for it by _dispatch().
+
+        Returns:
+            The annotation, with any not-yet-present pending flags appended.
+
+        """
+        if not stage.pending_flags:
+            return annotation
+        flags = list(annotation.flags)
+        seen = {(f.severity, f.reason) for f in flags}
+        for pending in stage.pending_flags:
+            key = (pending.severity, pending.reason)
+            if key in seen:
+                continue
+            seen.add(key)
+            flags.append(
+                ReviewFlag(
+                    stage_id=stage.stage_id,
+                    reason=pending.reason,
+                    severity=pending.severity,
+                    suggested_fix=pending.suggested_fix,
+                )
+            )
+        return annotation.model_copy(update={"flags": flags})
+
+    def _enforce_band_flags(self, stage: BPStage, annotation: PAAnnotation) -> PAAnnotation:
+        """Apply CLAUDE.md's band-table flag contract once confidence is final (Task 8a 2-3).
+
+        CLAUDE.md's confidence-band table: MANUAL (< 0.50) = "Stub only +
+        ReviewFlag(severity=error)"; PARTIAL (0.50-0.69) = "Scaffold + TODO:
+        complete this block". Enforced here, after every annotation path, so no
+        path can skip it:
+
+        - MANUAL with no ``error`` flag → append one ``error`` flag.
+        - PARTIAL with no flag at all → append one ``warn`` flag.
+
+        Existing flags are kept, in order, ahead of the added one. The added
+        flag's reason is the specific cause from _low_confidence_cause().
+
+        Args:
+            stage: The stage being annotated.
+            annotation: Its annotation with final confidence and band.
+
+        Returns:
+            The annotation, with the band-mandated flag appended if missing.
+
+        """
+        flags = annotation.flags
+        if annotation.band == ConfidenceBand.MANUAL:
+            if any(f.severity == "error" for f in flags):
+                return annotation
+            severity = "error"
+        elif annotation.band == ConfidenceBand.PARTIAL:
+            if flags:
+                return annotation
+            severity = "warn"
+        else:
+            return annotation
+
+        reason, suggested_fix = self._low_confidence_cause(stage, annotation)
+        added = ReviewFlag(
+            stage_id=stage.stage_id,
+            reason=reason,
+            severity=severity,
+            suggested_fix=suggested_fix,
+        )
+        return annotation.model_copy(update={"flags": [*flags, added]})
+
+    def _low_confidence_cause(self, stage: BPStage, annotation: PAAnnotation) -> tuple[str, str]:
+        """Derive why a stage's confidence is low, from the mapping data that produced it.
+
+        Uses only what the stage and the mapping YAML actually carry — never a
+        generic "low confidence". In order:
+
+        1. UI interaction: the mapping's module is ``UIAutomation`` → needs a UI
+           selector, out of scope per architecture doc §B9.
+        2. VBO call: the ``vbo_catalogue.yaml`` entry it routed to — whether the
+           called method has a ``method_actions`` template (no catalogue mapping
+           if not) and the entry's own note.
+        3. Process call / rule-driven stage: the ``stage_rules.yaml`` row and its note.
+        4. DATA stage with no data item: its PAD type defaulted to Text.
+        5. Otherwise: the score's source plus "no specific cause recorded".
+
+        Args:
+            stage: The stage being annotated.
+            annotation: Its annotation with final confidence.
+
+        Returns:
+            A ``(reason, suggested_fix)`` pair for the band-mandated ReviewFlag.
+
+        """
+        score = f"confidence {annotation.confidence:.2f}"
+        if stage.stage_type == StageType.ACTION and not stage.is_subsheet_call:
+            if stage.is_process_call:
+                rule = self._config.get_stage_rule("Process")
+                if rule is not None:
+                    return _rule_cause(rule.bp_stage_type, rule.notes, rule.pa_module, score)
+            else:
+                vbo_name = stage.params_map.get("_vbo_object", "")
+                method = stage.params_map.get("_vbo_action", "")
+                entry = self._config.get_vbo_entry_fuzzy(vbo_name) if vbo_name else None
+                if entry is not None:
+                    return _vbo_cause(
+                        entry.vbo_name,
+                        method,
+                        entry.pa_module,
+                        method in entry.method_actions,
+                        entry.notes,
+                        score,
+                    )
+        elif stage.stage_type == StageType.DATA and not stage.data_items:
+            return (
+                f"DATA stage '{stage.name}' has no data item recorded, so its PAD variable "
+                f"type defaulted to Text ({score}, the annotator's fixed score for an "
+                "unresolved data type)",
+                "Check the BP Data stage was parsed with its data type",
+            )
+        elif stage.stage_type not in _SELF_SCORED_TYPES:
+            try:
+                rule = self._config.get_stage_rule_for_canonical_type(stage.stage_type.value)
+            except ConfigError:
+                rule = None
+            if rule is not None:
+                return _rule_cause(rule.bp_stage_type, rule.notes, rule.pa_module, score)
+
+        return (
+            f"{score} from the annotator's fixed score for {stage.stage_type.value} stages; "
+            "no specific cause recorded",
+            "Review the generated block against the BP stage and complete it by hand",
+        )
 
     def _annotate_action(self, stage: BPStage) -> PAAnnotation:
         """Annotate ACTION stage (VBO call, subsheet call, or process call)."""
@@ -151,18 +327,8 @@ class StageAnnotator:
                     ],
                 )
 
-            # Rule found
-            flags = []
-            if rule.confidence_base < 0.50:
-                flags.append(
-                    ReviewFlag(
-                        stage_id=stage.stage_id,
-                        reason=f"Process call has low confidence ({rule.confidence_base}) — {rule.notes[:100]}",
-                        severity="error",
-                        suggested_fix="Review and complete manually",
-                    )
-                )
-
+            # Rule found. Any band-mandated flag is added by _enforce_band_flags()
+            # (Task 8a) with the rule's full note, not a truncated copy here.
             return PAAnnotation(
                 target_type=rule.pa_target_action,
                 target_module=rule.pa_module,
@@ -170,7 +336,7 @@ class StageAnnotator:
                 confidence=rule.confidence_base,
                 band=ConfidenceBand.from_score(rule.confidence_base),
                 params_map={},
-                flags=flags,
+                flags=[],
             )
 
         # VBO call
@@ -351,8 +517,26 @@ class StageAnnotator:
         )
 
     def _annotate_from_rules(self, stage: BPStage) -> PAAnnotation:
-        """Annotate stage using stage_rules.yaml."""
-        rule = self._config.get_stage_rule(stage.stage_type.value)
+        """Annotate stage using stage_rules.yaml.
+
+        The rule is looked up by the stage's *canonical* type against the
+        ``canonical_type`` column (Task 8a item 1), because the AST does not keep
+        the raw BP type of normalised stages (LOOP ← LoopStart/LoopEnd, WAIT ←
+        WaitStart/WaitEnd). See MappingConfig.get_stage_rule_for_canonical_type()
+        for which row is chosen when several share a canonical type.
+
+        Args:
+            stage: A BPStage whose type has no dedicated annotation method.
+
+        Returns:
+            PAAnnotation from the matching rule, or a MANUAL annotation with an
+            error flag if stage_rules.yaml has no row for the canonical type.
+
+        """
+        try:
+            rule = self._config.get_stage_rule_for_canonical_type(stage.stage_type.value)
+        except ConfigError:
+            rule = None
 
         if rule is None:
             # No rule found
@@ -374,19 +558,8 @@ class StageAnnotator:
                 ],
             )
 
-        # Rule found
-        flags = []
-        if rule.confidence_base < 0.50:
-            flags.append(
-                ReviewFlag(
-                    stage_id=stage.stage_id,
-                    reason=f"{stage.stage_type.value} stage has low confidence "
-                    f"({rule.confidence_base}) — {rule.notes[:100]}",
-                    severity="error",
-                    suggested_fix="Review and complete manually",
-                )
-            )
-
+        # Rule found. Any band-mandated flag is added by _enforce_band_flags()
+        # (Task 8a) with the rule's full note, not a truncated copy here.
         return PAAnnotation(
             target_type=rule.pa_target_action,
             target_module=rule.pa_module,
@@ -394,8 +567,106 @@ class StageAnnotator:
             confidence=rule.confidence_base,
             band=ConfidenceBand.from_score(rule.confidence_base),
             params_map={},
-            flags=flags,
+            flags=[],
         )
+
+
+def _one_line(text: str) -> str:
+    """Collapse a YAML note (folded scalars end in a newline) onto one line.
+
+    Args:
+        text: Raw ``notes`` text from a mapping YAML row.
+
+    Returns:
+        The text with every whitespace run collapsed to one space, stripped.
+
+    """
+    return " ".join(text.split())
+
+
+def _rule_cause(bp_stage_type: str, notes: str, pa_module: str, score: str) -> tuple[str, str]:
+    """Build the low-confidence cause for a stage scored by a stage_rules.yaml row.
+
+    Args:
+        bp_stage_type: The rule's ``bp_stage_type`` (identifies the YAML row).
+        notes: The rule's ``notes`` text.
+        pa_module: The rule's ``pa_module``.
+        score: Pre-formatted "confidence X.XX" text.
+
+    Returns:
+        A ``(reason, suggested_fix)`` pair.
+
+    """
+    source = f"{score} from stage_rules.yaml '{bp_stage_type}' rule"
+    note = _one_line(notes)
+    if pa_module == _UI_SELECTOR_MODULE:
+        reason = f"UI interaction needs a UI selector (architecture doc §B9); {source}"
+        return (
+            reason + (f": {note}" if note else ""),
+            "Build the UI element selector in PAD's UI element repository and implement "
+            "this step by hand (architecture doc §B9 — never a fabricated selector)",
+        )
+    if note:
+        return (
+            f"{source}: {note}",
+            f"Resolve the point raised in the stage_rules.yaml '{bp_stage_type}' note "
+            "and complete this block by hand",
+        )
+    return (
+        f"{source}; no specific cause recorded",
+        "Review the generated block against the BP stage and complete it by hand",
+    )
+
+
+def _vbo_cause(
+    vbo_name: str,
+    method: str,
+    pa_module: str,
+    has_template: bool,
+    notes: str,
+    score: str,
+) -> tuple[str, str]:
+    """Build the low-confidence cause for a VBO-call stage.
+
+    Args:
+        vbo_name: The matched ``vbo_catalogue.yaml`` entry's ``vbo_name``.
+        method: The BP VBO method (action) name the stage calls.
+        pa_module: The entry's ``pa_module``.
+        has_template: True if the entry's ``method_actions`` has this method.
+        notes: The entry's ``notes`` text.
+        score: Pre-formatted "confidence X.XX" text.
+
+    Returns:
+        A ``(reason, suggested_fix)`` pair.
+
+    """
+    source = f"{score} from vbo_catalogue.yaml entry '{vbo_name}'"
+    note = _one_line(notes)
+    if pa_module == _UI_SELECTOR_MODULE:
+        return (
+            f"UI interaction needs a UI selector (architecture doc §B9): '{vbo_name}' "
+            f"action '{method}'; {source}",
+            "Build the UI element selector in PAD's UI element repository and implement "
+            "this action by hand (architecture doc §B9 — never a fabricated selector)",
+        )
+    if not has_template:
+        reason = f"No catalogue mapping: no method_actions template for '{method}'; {source}"
+        return (
+            reason + (f". Catalogue note: {note}" if note else ""),
+            f"Add a confirmed PAD template for '{method}' to the '{vbo_name}' entry's "
+            "method_actions (docs/pad-reference/vbo-action-mapping.md), or implement "
+            "this action by hand",
+        )
+    if note:
+        return (
+            f"{source}: {note}",
+            f"Resolve the point raised in the '{vbo_name}' catalogue note and complete "
+            "this action by hand",
+        )
+    return (
+        f"{source}; no specific cause recorded",
+        "Review the generated action against the BP stage and complete it by hand",
+    )
 
 
 def create_annotator(mapping_dir: Path | None = None) -> StageAnnotator:

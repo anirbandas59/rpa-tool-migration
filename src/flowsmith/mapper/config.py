@@ -161,6 +161,45 @@ class MappingConfig(BaseModel):
                 return rule
         return None
 
+    def get_stage_rule_for_canonical_type(self, canonical_type: str) -> StageRule:
+        """Look up the stage rule for a canonical AST stage type (case-insensitive).
+
+        ``stage_rules.yaml`` is keyed by the raw BP stage type (``bp_stage_type``),
+        but the AST only keeps the canonical type after normalisation on parse
+        (CLAUDE.md "Normalised on parse": ``LoopStart``/``LoopEnd`` → ``LOOP``,
+        ``WaitStart``/``WaitEnd`` → ``WAIT``, ``MultipleCalculation`` →
+        ``CALCULATION``). Matching the canonical name against ``bp_stage_type``
+        therefore misses every type whose BP name differs from its canonical name
+        (Task 8a item 1). This method matches on the ``canonical_type`` column.
+
+        Deterministic choice when several rows share a canonical type:
+          1. the row whose ``bp_stage_type`` equals the canonical name
+             (case-insensitive) — the direct-map row, e.g. ``Calculation`` for
+             ``CALCULATION`` rather than ``MultipleCalculation``;
+          2. otherwise the first matching row in ``stage_rules.yaml`` file order —
+             ``LoopStart`` for ``LOOP`` (L156, before ``LoopEnd`` L171) and
+             ``WaitStart`` for ``WAIT`` (L98, before ``WaitEnd`` L112). Both rows of
+             each pair carry the same ``confidence_base``, so the choice only
+             affects ``pa_target_action``/``notes``, never the band.
+
+        Args:
+            canonical_type: A canonical AST stage type value, e.g. ``"LOOP"``.
+
+        Returns:
+            The StageRule chosen by the order above.
+
+        Raises:
+            ConfigError: If no row in stage_rules.yaml has this canonical type.
+        """
+        target = canonical_type.lower()
+        candidates = [r for r in self.stage_rules if r.canonical_type.lower() == target]
+        if not candidates:
+            raise ConfigError(f"No stage_rules.yaml row has canonical_type '{canonical_type}'")
+        for rule in candidates:
+            if rule.bp_stage_type.lower() == target:
+                return rule
+        return candidates[0]
+
     def get_vbo_entry(self, vbo_name: str) -> VBOEntry | None:
         """Look up a VBO entry by exact name match.
 

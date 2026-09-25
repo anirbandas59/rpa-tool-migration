@@ -420,33 +420,82 @@ def test_flag_entry_is_frozen(make_flag_entry):
 
 
 # ── Integration Tests (real sample) ─────────────────────────────────────────
+#
+# Expected values re-derived by Task 8a (docs/pad-generation-task-prompts.md, item 6)
+# from the current samples/blueprism/PID_0127.bprelease. The original totals
+# (538 / 485 / 53 / 296 / 50, commit 695d8c8) date from before Task 3a, when
+# parse_element() walked the whole release for every artefact, so the fixture's
+# process also carried the stages of all 25 VBO objects (every CODE stage lives in
+# a VBO). Since Task 3a, build_ast() takes only processes[0],
+# 'PID_0127_Process_US_BulkUnlock' (796 stages, 19 pages; see test_annotator.py's
+# test_all_stages_annotated_real_sample). Its 39 flags, all from Task 8a's engine:
+#
+#   error  3  env-lock VBO calls (1 'Acquire Lock' + 2 'Release Lock', catalogue
+#             confidence 0.45 → MANUAL): Task 8a item 2's band-mandated error flag
+#   error  1  'FormatReport' → Utility_Object_Format_Queue_Report 'Format Excel(Standard)'
+#             (confidence 0.45 → MANUAL): Task 8a item 2's band-mandated error flag
+#   warn   3  the same 3 env-lock calls: the catalogue's review_severity=warn flag
+#   warn  31  every PARTIAL stage (30 VBO calls + 1 Process call, 0.50-0.69, none
+#             carried a flag before): Task 8a item 3's band-mandated warn flag
+#   warn   1  DATA 'tmspan_Worktime' (page 'Reset Global Data'): DataTypeMapper's
+#             lossy TimeSpan → Text flag
+#
+# Before Task 8a the same sample gave 20 (16 error / 4 warn): the 16 errors were
+# the false "No mapping rule for stage type 'LOOP'" flags on its 16 LOOP stages
+# (Task 8a item 1), and the 4 MANUAL VBO calls had no error flag.
 
 
 def test_real_total_flags_538(real_index):
-    """Test real sample has 538 total flags."""
-    assert len(real_index.entries) == 538
+    """Real sample (PID_0127 processes[0]) has 39 flags: 4 error + 35 warn.
+
+    Name kept from the pre-Task-3a baseline (538). See the derivation table above
+    this test: 3 + 1 error (MANUAL, Task 8a item 2) + 3 env-lock catalogue warn +
+    31 PARTIAL warn (Task 8a item 3) + 1 DATA TimeSpan warn = 39.
+    """
+    assert len(real_index.entries) == 39
 
 
 def test_real_error_count_485(real_index):
-    """Test real sample has 485 error flags."""
-    assert len(real_index.errors()) == 485
+    """Real sample has 4 error flags — one per MANUAL stage (CLAUDE.md band table).
+
+    Name kept from the pre-Task-3a baseline (485). The 4 MANUAL stages are the 3
+    env-lock VBO calls and 'FormatReport', all at catalogue confidence 0.45; each
+    gets exactly one band-mandated error flag (Task 8a item 2). The former 16
+    LOOP "No mapping rule" errors are gone (Task 8a item 1).
+    """
+    assert len(real_index.errors()) == 4
 
 
 def test_real_warn_count_53(real_index):
-    """Test real sample has 53 warn flags."""
-    assert len(real_index.warnings()) == 53
+    """Real sample has 35 warn flags.
+
+    Name kept from the pre-Task-3a baseline (53). 3 env-lock catalogue
+    review_severity=warn flags + 31 PARTIAL-band flags added by Task 8a item 3
+    (30 VBO calls + 1 Process call) + 1 DATA TimeSpan lossy-type flag = 35.
+    """
+    assert len(real_index.warnings()) == 35
 
 
 def test_real_code_flags_296(real_index):
-    """Test real sample has 296 CODE stage flags."""
+    """Real sample has 0 CODE stage flags.
+
+    Name kept from the pre-Task-3a baseline (296). processes[0] has no CODE
+    stages at all: every CODE stage in PID_0127.bprelease is inside a VBO object,
+    and VBO objects stopped being merged into the process by Task 3a.
+    """
     code_flags = real_index.by_stage_type("CODE")
-    assert len(code_flags) == 296
+    assert len(code_flags) == 0
 
 
 def test_real_data_flags_50(real_index):
-    """Test real sample has 50 DATA stage flags (all warn severity)."""
+    """Real sample has 1 DATA stage flag, of warn severity.
+
+    Name kept from the pre-Task-3a baseline (50). The one flag is DataTypeMapper's
+    lossy TimeSpan → Text warning on DATA stage 'tmspan_Worktime' (page 'Reset
+    Global Data'), the only lossy-typed DATA stage in processes[0].
+    """
     data_flags = real_index.by_stage_type("DATA")
-    assert len(data_flags) == 50
+    assert len(data_flags) == 1
     # All DATA flags should be warn severity
     assert all(f.severity == "warn" for f in data_flags)
 
@@ -458,15 +507,37 @@ def test_real_checklist_starts_with_error(real_index):
 
 
 def test_real_checklist_length_538(real_index):
-    """Test real checklist contains all 538 entries."""
+    """Real checklist contains all 39 entries (see test_real_total_flags_538).
+
+    Name kept from the pre-Task-3a baseline (538).
+    """
     checklist = real_index.checklist()
-    assert len(checklist) == 538
+    assert len(checklist) == 39
 
 
 def test_real_summary_by_vbo_contains_acs(real_index):
-    """Test real summary_by_vbo contains ACS VBO."""
+    """Real summary_by_vbo is exactly the 8 VBOs whose calls carry a flag.
+
+    Name kept from the pre-Task-3a baseline. 'RPA Sharepoint ACS Authentication'
+    is no longer present: it is only called by the sibling process
+    'RPA_Sharepoint_API_ConfigFile_Download' (processes[1]), which build_ast()
+    has not included since Task 3a. Each count is that VBO's flagged calls
+    (Task 8a band flags, plus the 3 env-lock catalogue warns, which make its
+    count 6 = 3 calls x 2 flags). The Process call and the DATA flag have no VBO,
+    so they are not keys here.
+    """
     summary = real_index.summary_by_vbo()
-    assert "RPA Sharepoint ACS Authentication" in summary
+    assert "RPA Sharepoint ACS Authentication" not in summary
+    assert summary == {
+        "Utility_Object_Generic_IE_SharePoint_CommonActions - Edge": 17,
+        "BluePrism.AutomateAppCore.clsEnvironmentLockingBusinessObject": 6,
+        "Utility - Collection Manipulation": 5,
+        "Utility - Environment Extended": 3,
+        "DWF Utility - Screenshot": 2,
+        "Utility_DataGateways-CustomFramework": 2,
+        "Utility_Object_Format_Queue_Report": 1,
+        "Utility - Collection Manipulation_Extended": 1,
+    }
 
 
 def test_real_all_entries_have_stage_id(real_index):
@@ -480,6 +551,6 @@ def test_real_all_entries_have_page_name(real_index):
 
 
 def test_real_by_page_sums_to_total(real_index):
-    """Test summary_by_page counts sum to total flags."""
+    """summary_by_page counts sum to the 39 total flags (test_real_total_flags_538)."""
     summary = real_index.summary_by_page()
-    assert sum(summary.values()) == 538
+    assert sum(summary.values()) == 39

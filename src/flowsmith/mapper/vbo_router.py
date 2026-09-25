@@ -153,9 +153,13 @@ class VBORouter:
         # Inject mandatory flags if present
         flags: list[ReviewFlag] = []
         if entry.review_severity is not None:
+            # Carry the full catalogue note, whitespace-normalised (YAML folded
+            # scalars end in a newline). Task 8a item 5: the former `notes[:120]`
+            # cut the reason mid-word ("...via SharePoin"), unreadable for hand-off.
+            note = " ".join(entry.notes.split())
             flag = ReviewFlag(
                 stage_id="",
-                reason=f"VBO '{vbo_name}' requires mandatory review: {entry.notes[:120]}",
+                reason=f"VBO '{vbo_name}' requires mandatory review: {note}",
                 severity=entry.review_severity,
                 suggested_fix="Review and replace with Power Platform equivalent",
             )

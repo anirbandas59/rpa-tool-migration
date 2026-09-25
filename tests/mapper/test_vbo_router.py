@@ -206,6 +206,37 @@ class TestMandatoryFlagInjection:
         assert flag.suggested_fix != ""
         assert len(flag.suggested_fix) > 0
 
+    def test_locking_flag_reason_carries_full_note(self, router: VBORouter) -> None:
+        """Task 8a item 5: the reason carries the whole catalogue note, not notes[:120].
+
+        The env-lock note is longer than 120 characters; the former cut ended the
+        reason at "...must implement via SharePoin" (docs/reviews/8-2026-09-25.md).
+        """
+        vbo = "BluePrism.AutomateAppCore.clsEnvironmentLockingBusinessObject"
+        entry = router._config.get_vbo_entry(vbo)
+        assert entry is not None
+        assert len(entry.notes.strip()) > 120
+        reason = router.route(vbo, "Acquire Lock").review_flags[0].reason
+        assert "via SharePoint list mutex pattern or Azure Service Bus" in reason
+        assert reason.endswith("Low confidence; needs design review.")
+        assert reason == f"VBO '{vbo}' requires mandatory review: {' '.join(entry.notes.split())}"
+
+    def test_long_note_is_not_cut_mid_word(self) -> None:
+        """A synthetic 300-character note reaches the flag reason intact, on one line."""
+        note = "alpha beta gamma\n" * 17 + "omega"
+        entry = VBOEntry(
+            vbo_name="Long Note VBO",
+            runtime="DESKTOP",
+            confidence_base=0.4,
+            notes=note,
+            review_severity="error",
+        )
+        router = VBORouter(MappingConfig(stage_rules=[], vbo_catalogue=[entry]))
+        reason = router.route("Long Note VBO", "Any").review_flags[0].reason
+        assert reason.endswith("alpha beta gamma omega")
+        assert "\n" not in reason
+        assert reason.count("gamma") == 17
+
 
 # ── Unknown VBO tests ──────────────────────────────────────────────────────
 
@@ -381,38 +412,68 @@ class TestIntegration:
         # All VBO calls must be known
         assert results["unknown"] == 0, f"Found unknown VBOs: {unknown_vbos}"
 
-    def test_sample_routed_count_is_correct(self, router: VBORouter) -> None:
-        """Real sample routes exactly 489 VBO calls."""
+    @staticmethod
+    def _count_sample(router: VBORouter, whole_release: bool) -> tuple[int, int]:
+        """Count routed VBO calls and router review flags in PID_0127.bprelease.
+
+        Args:
+            router: The router under test.
+            whole_release: False → only processes[0] (what build_ast() builds from a
+                release); True → every process and VBO object artefact, each built
+                on its own, summed.
+
+        Returns:
+            (routed VBO-call count, total RoutingDecision.review_flags count).
+        """
         from flowsmith.ast import build_ast
         from flowsmith.parser import parse_process
 
         raw = parse_process(Path("samples/blueprism/PID_0127.bprelease"))
-        process = build_ast(raw)
-
+        artefacts = [*raw["processes"], *raw["objects"]] if whole_release else None
+        processes = (
+            [build_ast({**raw, "processes": [art]}) for art in artefacts]
+            if artefacts is not None
+            else [build_ast(raw)]
+        )
         routed = 0
-        for page in process.pages:
-            for stage in page.stages:
-                if router.route_stage(stage) is not None:
-                    routed += 1
+        flag_count = 0
+        for process in processes:
+            for page in process.pages:
+                for stage in page.stages:
+                    decision = router.route_stage(stage)
+                    if decision is not None:
+                        routed += 1
+                        flag_count += len(decision.review_flags)
+        return routed, flag_count
 
-        assert routed == 489
+    def test_sample_routed_count_is_correct(self, router: VBORouter) -> None:
+        """Real sample routes 148 VBO calls in processes[0]; 489 across the whole release.
+
+        Re-derived by Task 8a item 6. 489 (commit 5ee3869) predates Task 3a, when the
+        parser merged every artefact of the release into the one process build_ast()
+        returns. Since Task 3a build_ast() takes only processes[0],
+        'PID_0127_Process_US_BulkUnlock', whose 175 ACTION stages are 148 VBO calls +
+        26 SubSheet calls + 1 Process call — only the 148 VBO calls are routed.
+        Building each of the release's 2 processes and 25 VBO objects on its own and
+        summing reproduces the original 489 exactly, which is why that number was
+        right for the pre-3a merged fixture.
+        """
+        assert self._count_sample(router, whole_release=False)[0] == 148
+        assert self._count_sample(router, whole_release=True)[0] == 489
 
     def test_sample_mandatory_flags_count(self, router: VBORouter) -> None:
-        """Real sample has exactly 4 mandatory review flags."""
-        from flowsmith.ast import build_ast
-        from flowsmith.parser import parse_process
+        """Real sample has 3 mandatory review flags in processes[0]; 4 across the release.
 
-        raw = parse_process(Path("samples/blueprism/PID_0127.bprelease"))
-        process = build_ast(raw)
-
-        flag_count = 0
-        for page in process.pages:
-            for stage in page.stages:
-                decision = router.route_stage(stage)
-                if decision is not None:
-                    flag_count += len(decision.review_flags)
-
-        assert flag_count == 4
+        Re-derived by Task 8a item 6. Only 2 catalogue entries set review_severity:
+        clsEnvironmentLockingBusinessObject (warn) and RPA Sharepoint ACS
+        Authentication (error). processes[0] calls the env-lock VBO 3 times (1
+        'Acquire Lock' + 2 'Release Lock') → 3 flags. The 4th flag of the original
+        (pre-Task-3a, whole-release) count is the ACS 'Authenticate' call, made only
+        by the sibling process 'RPA_Sharepoint_API_ConfigFile_Download'
+        (processes[1]) — summing all artefacts reproduces 4 exactly.
+        """
+        assert self._count_sample(router, whole_release=False)[1] == 3
+        assert self._count_sample(router, whole_release=True)[1] == 4
 
 
 # ── method_actions precedence tests ────────────────────────────────────────

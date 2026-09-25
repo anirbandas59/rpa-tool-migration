@@ -844,3 +844,96 @@ class TestIntegration:
         lock = config.get_vbo_entry("BluePrism.AutomateAppCore.clsEnvironmentLockingBusinessObject")
         assert lock is not None
         assert lock.review_severity == "warn"
+
+
+# ── Task 8a item 1: canonical-type stage-rule lookup ───────────────────────
+
+
+def _rule(bp_stage_type: str, canonical_type: str, confidence: float = 0.8) -> StageRule:
+    """Build a minimal StageRule for canonical-lookup tests."""
+    return StageRule(
+        bp_stage_type=bp_stage_type,
+        canonical_type=canonical_type,
+        runtime="DESKTOP",
+        confidence_base=confidence,
+    )
+
+
+class TestCanonicalStageRuleLookup:
+    """MappingConfig.get_stage_rule_for_canonical_type (Task 8a item 1).
+
+    stage_rules.yaml is keyed by bp_stage_type, but the AST keeps only the canonical
+    type of normalised stages (CLAUDE.md "Normalised on parse"), so the old lookup
+    get_stage_rule(<canonical>) found no rule for LOOP/WAIT.
+    """
+
+    @pytest.fixture
+    def real_config(self) -> MappingConfig:
+        """Load the real mapping/ YAML."""
+        return load_rules(force_reload=True)
+
+    def test_loop_resolves_to_loopstart_row(self, real_config: MappingConfig) -> None:
+        """LOOP (← LoopStart/LoopEnd) resolves; LoopStart is first in file order (L156)."""
+        assert real_config.get_stage_rule("LOOP") is None  # the defect being fixed
+        rule = real_config.get_stage_rule_for_canonical_type("LOOP")
+        assert rule.bp_stage_type == "LoopStart"
+        assert rule.confidence_base == 0.80
+
+    def test_wait_resolves_to_waitstart_row(self, real_config: MappingConfig) -> None:
+        """WAIT (← WaitStart/WaitEnd) resolves; WaitStart is first in file order (L98)."""
+        assert real_config.get_stage_rule("WAIT") is None  # the defect being fixed
+        rule = real_config.get_stage_rule_for_canonical_type("WAIT")
+        assert rule.bp_stage_type == "WaitStart"
+        assert rule.confidence_base == 0.70
+
+    def test_calculation_prefers_direct_map_row(self, real_config: MappingConfig) -> None:
+        """CALCULATION (← Calculation/MultipleCalculation) picks the 'Calculation' row."""
+        rule = real_config.get_stage_rule_for_canonical_type("CALCULATION")
+        assert rule.bp_stage_type == "Calculation"
+        assert rule.confidence_base == 0.80
+
+    def test_direct_map_row_wins_over_file_order(self) -> None:
+        """The row named like the canonical type wins even if it is not listed first."""
+        config = MappingConfig(
+            stage_rules=[
+                _rule("MultipleCalculation", "CALCULATION", 0.75),
+                _rule("Calculation", "CALCULATION", 0.80),
+            ],
+            vbo_catalogue=[],
+        )
+        assert config.get_stage_rule_for_canonical_type("calculation").bp_stage_type == (
+            "Calculation"
+        )
+
+    def test_first_row_in_file_order_when_no_direct_row(self) -> None:
+        """With no row named like the canonical type, the first matching row is chosen."""
+        config = MappingConfig(
+            stage_rules=[_rule("LoopEnd", "LOOP"), _rule("LoopStart", "LOOP")],
+            vbo_catalogue=[],
+        )
+        assert config.get_stage_rule_for_canonical_type("LOOP").bp_stage_type == "LoopEnd"
+
+    def test_every_canonical_rule_type_resolves(self, real_config: MappingConfig) -> None:
+        """Every canonical type annotated from stage_rules.yaml has a rule row."""
+        for canonical in (
+            "START",
+            "END",
+            "DECISION",
+            "CALCULATION",
+            "WAIT",
+            "NAVIGATE",
+            "READ",
+            "WRITE",
+            "LOOP",
+            "RECOVER",
+            "RESUME",
+            "BLOCK",
+        ):
+            rule = real_config.get_stage_rule_for_canonical_type(canonical)
+            assert rule.canonical_type == canonical
+
+    def test_unknown_canonical_type_raises_config_error(self) -> None:
+        """No row with the canonical type → ConfigError, never None."""
+        config = MappingConfig(stage_rules=[_rule("Start", "START")], vbo_catalogue=[])
+        with pytest.raises(ConfigError, match="LOOP"):
+            config.get_stage_rule_for_canonical_type("LOOP")
