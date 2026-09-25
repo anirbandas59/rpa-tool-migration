@@ -1901,6 +1901,90 @@ corrected rule lookup produces (band thresholds stay per `CLAUDE.md`).
 
 ---
 
+## Task 8b — LOOP rendering + honest output for unfilled templates
+
+**Why this task exists:** Task 8a fixed the engine's LOOP rule lookup, so LOOP stages now score
+0.80 (SPOT-CHECK) instead of 0.0 (MANUAL). But the generator has no LOOP rendering: each LoopStart
+and LoopEnd comes out as a commented `pa_target_action` template with `<item>`/`<collection>`
+placeholders marked `# VERIFY:`, and the loop body is emitted flat, so it would run once. That
+contradicts `CLAUDE.md`'s band table (SPOT-CHECK = "Full code + inline comment to verify") — the
+output looks reviewed when nothing is built (`docs/reviews/8a-2026-09-25.md`, gap 1; 14 LOOP stages
+on PID_0171, 16 on PID_0127). This task builds real loops and makes any remaining unfilled
+template honest. It also takes two small leftovers from the 8a review.
+
+**Depends on:** Task 8a
+**Files in scope:** `src/flowsmith/parser/process.py`, `src/flowsmith/ast/models.py`,
+`src/flowsmith/ast/builder.py`, `src/flowsmith/generator/pad.py`,
+`templates/pad/actions/loop.robin.j2`, `src/flowsmith/reporter/coverage.py` (item 5 only), and the
+matching tests (`tests/parser/test_process.py`, `tests/ast/test_models.py`,
+`tests/ast/test_builder.py`, `tests/generator/test_pad.py`, `tests/reporter/`,
+`tests/e2e/test_pid171_pipeline.py`)
+**Required reading:** `docs/bp-to-pad-architecture-PID171.md` §A4 (`dtb_`/`dtr_` — "Datatable /
+Datatable row", example `dtr_CurrentItem`; and the Collection → `dtb_` vs `obj_` rule: a collection
+that is looped over is `dtb_`) and §B12's `LOOP` row (`LOOP FOREACH <item> IN <collection> ... END`;
+`EXIT LOOP`/`NEXT LOOP` map directly); reference loops — Loader L64 (`LOOP FOREACH obj_CurrentMail IN
+lst_MailItems`), L109, L194 (`LOOP FOREACH CurrentItem IN In_lst_Attachments`), L242/L277 (counted
+`LOOP <var> FROM … TO … STEP 1`); `docs/reviews/8a-2026-09-25.md`; `ast/builder.py`'s LoopStart/
+LoopEnd pairing (`pair_id`, `group_id`, ~L287 and ~L373); the existing structured control-flow
+rendering in `generator/pad.py` from Task 7b's fix pass (CFG join/loop handling).
+
+**Do (implement and test each item separately):**
+1. **Capture the loop definition.** BP stores it on the LoopStart only:
+   `<looptype>ForEach</looptype><loopdata>InputMapping_Collection</loopdata>` (LoopEnd carries just
+   `<groupid>`). The parser drops both today. Parse them (namespace-aware, like `<groupid>`) and
+   carry them onto the LOOP start stage in the AST. PID_0171 has 19 LoopStart stages, PID_0127 20,
+   all `ForEach` — assert both counts against the real samples. Store `looptype` as the raw string;
+   don't invent other loop kinds.
+2. **Render a real loop.** For each paired LoopStart/LoopEnd (paired by `group_id`, falling back to
+   `pair_id`), emit one `LOOP FOREACH <row var> IN <collection var>` … `END` via
+   `templates/pad/actions/loop.robin.j2`, with the stages between them (following the flow graph from
+   LoopStart's `onsuccess` to the paired LoopEnd) rendered **nested inside** the loop, not flat after
+   it. The LoopEnd emits nothing of its own, since its `END` closes the loop. Reuse the existing
+   structured-CFG rendering rather than a new traversal. Replace the template's
+   `# TODO: implement loop body` with the real body.
+   - **Collection variable:** the name the collection already resolves to through
+     `variable_name_mapping` (a looped-over collection is `dtb_` per §A4).
+   - **Row variable:** `dtr_Current<collection name, non-alphanumerics removed, without a trailing
+     `_Collection`/`Collection`>` (§A4 `dtr_`, example `dtr_CurrentItem`). E.g. `InputMapping_Collection`
+     → `dtr_CurrentInputMapping`. If two loops on the same page would get the same row variable, and
+     one is nested in the other, emit a `# TODO` naming both instead of guessing.
+   - **Row-field reads inside the body:** in BP, `[InputMapping_Collection.Field]` inside the loop
+     reads the *current row*. Inside the loop body these must resolve to `dtr_Current…['Field']`
+     (resolve at name-resolution time, like Task 7d's config reads; no regex over the final text).
+     Outside the loop, the same reference keeps its current rendering.
+   - **Control flow:** a BP edge from inside the body to the LoopEnd before the body finishes is
+     `NEXT LOOP`; an edge from inside the body to a stage after the LoopEnd is `EXIT LOOP` (§B12).
+     If the body's flow can't be structured (e.g. a jump into the middle of another loop), leave the
+     loop unbuilt for that pair and emit a `# TODO` naming the loop and the offending edge — never a
+     half-built loop, never a silent flat body.
+3. **Honest output for any unfilled template.** Whatever the band, when a stage's output would be a
+   commented `pa_target_action` template still containing `<…>` placeholders (e.g. the old LOOP
+   output, or `# Variables.Remove Row # VERIFY:` at 0.70), emit a `# TODO: <stage name> — template
+   not filled: <template>` stub instead of a `# VERIFY:` comment. `# VERIFY:` is reserved for real,
+   generated code. Count before/after on PID_0171.
+4. **Normalise Alert and Skill in the builder.** `CLAUDE.md` says `ALERT → ACTION (is_alert=True)`
+   and `SKILL → ACTION (is_skill=True, confidence forced to MANUAL)`, and `stage_rules.yaml` has rows
+   for both, but `ast/builder.py`'s `_DIRECT_MAP` doesn't include them, so an `Alert` or `Skill`
+   stage raises `ASTBuildError` (8a review, gap 5). Add the normalisation per `CLAUDE.md`. Neither
+   sample contains one, so test with synthetic stages.
+5. **Stop listing transferred fusion flags as "untransferred".** Task 8a keeps `pending_flags` after
+   copying them to `pa_annotation.flags` (clearing them would break re-annotation). The reporter's
+   "Untransferred AST flags" row (`reporter/coverage.py` ~L150) must list only pending flags *not*
+   already in the annotation's flags (8a review, gap 2). Test with a synthetic fusion-candidate stage.
+
+**Done when:** regenerating `PID_0171.bprelease` shows every emitted LoopStart/LoopEnd pair as one
+`LOOP FOREACH dtr_… IN dtb_…` … `END` with its body nested inside and row reads using `dtr_…['…']`
+(or, for any pair that can't be structured, a `# TODO` naming it — report how many of each); 0
+`# System.LOOP` comments; 0 `# VERIFY:` lines on output that still contains `<…>` placeholders;
+the Task 7c/7d/7e/8a invariants still hold; the full suite has 0 failures; and `flowsmith report`
+on the new AST shows no change in band or flag totals (this task changes rendering, not scoring).
+
+**Out of scope:** counted loops (`LOOP <var> FROM … TO …`) — neither sample has a non-`ForEach`
+BP loop; WAIT rendering; changing any confidence score or `stage_rules.yaml` value; the reporter's
+other display gaps from the Task 8 review.
+
+---
+
 ## Task 9 — Calibration checkpoint: validate against a second automation before team rollout
 
 **Why this task exists:** every task above proves the tool works for PID_171 specifically. Before
