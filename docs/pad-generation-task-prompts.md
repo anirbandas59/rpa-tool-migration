@@ -1829,6 +1829,78 @@ already done); this task only presents what's already computed.
 
 ---
 
+## Task 8a — `engine/`: ReviewFlag correctness and completeness (found by the Task 8 report)
+
+**Why this task exists:** Task 8's report (`docs/reviews/8-2026-09-25.md`, 92% pass) made the
+engine's flag output visible for the first time, and it is both noisy and incomplete: most of the
+PID_0171 error flags are false positives, while the stages a developer actually has to build (UI
+selectors) carry no flag at all and only surface in the report's "PARTIAL / MANUAL stages with no
+ReviewFlag" fallback section. For a ~200-automation rollout the flag list must be the trustworthy
+to-do list; this task fixes it at the source.
+
+**Depends on:** Task 8 (the report is how the before/after is measured)
+**Files in scope:** `src/flowsmith/engine/annotator.py`, `src/flowsmith/engine/flag_index.py`
+(only if item 5 requires it), `src/flowsmith/mapper/config.py` (stage-rule lookup only),
+`src/flowsmith/mapper/vbo_router.py`, `mapping/stage_rules.yaml` (only if a rule row is genuinely
+missing), and the matching tests (`tests/engine/test_annotator.py`, `tests/engine/test_flag_index.py`,
+`tests/mapper/test_config.py`, `tests/mapper/test_vbo_router.py`)
+**Required reading:** `CLAUDE.md`'s confidence-band table and its "Normalised on parse" list;
+`docs/reviews/8-2026-09-25.md`; `engine/annotator.py` and `engine/scorer.py` in full;
+`mapping/stage_rules.yaml` (note it is keyed by BP stage type, `bp_stage_type`, with a
+`canonical_type` column); `ast/builder.py` ~L570–580 (where Task 1b stores `pending_flags`) and
+`ast/models.py` ~L355 (the `pending_flags` field's docstring says the engine transfers them).
+
+**Do (independent items — implement and test each separately):**
+1. **False "No mapping rule" errors for normalised types.** `_annotate_from_rules`
+   (`annotator.py` ~L355) calls `get_stage_rule(stage.stage_type.value)` — the *canonical* type
+   (`LOOP`) — but `get_stage_rule` matches `bp_stage_type` (`LoopStart`/`LoopEnd`,
+   `stage_rules.yaml` L156/L171), so every LOOP stage gets an error flag and confidence 0.0 (14 on
+   PID_0171). Fix the lookup so a canonical type resolves to its rule — prefer the stage's original
+   BP type if the AST keeps it, else match on `canonical_type`; when several rows share a canonical
+   type (`LoopStart`/`LoopEnd`), pick deterministically and document how. Check every other
+   type normalised on parse (`WAIT` ← `WaitStart`/`WaitEnd`, `CALCULATION` ← `MultipleCalculation`,
+   and any other CLAUDE.md lists) for the same defect, and add a test per affected type.
+2. **MANUAL without an error flag.** `CLAUDE.md`'s band table says MANUAL (< 0.50) =
+   "Stub only + `ReviewFlag(severity=error)`", but 16 MANUAL stages on PID_0171 have none (13 with no
+   flag at all — including the SampleManager / SampleResultsEntry UI calls — and 3 environment-lock
+   stages with only a `warn`). The gap is in `_annotate_action`'s VBO path, which copies the router's
+   flags but never adds the band-mandated one. Enforce the rule once, after confidence is final, for
+   *every* annotation path: MANUAL ⇒ at least one `error` flag (keep existing flags; add one if none
+   is `error`) whose reason says *why* confidence is low — e.g. UI interaction needing a selector
+   (architecture doc §B9), no catalogue mapping, or the router's own reason — never a generic
+   "low confidence".
+3. **PARTIAL without a flag.** The band table says PARTIAL (0.50–0.69) = "Scaffold + TODO: complete
+   this block". Apply the same post-confidence enforcement with a `warn` flag carrying the specific
+   reason (19 PARTIAL stages on PID_0171 have none). After items 2–3, Task 8's "no ReviewFlag"
+   section must be empty on PID_0171 — keep that section as the regression check.
+4. **Transfer `pending_flags`.** Task 1b's fusion detection stores flags in `BPStage.pending_flags`,
+   and the model says the engine transfers them onto `pa_annotation.flags`; nothing does. Transfer
+   them during annotation (no duplicates if annotation runs twice), and test with a synthetic
+   fusion-candidate stage (PID_0171 currently has 0).
+5. **Truncated flag reasons.** `vbo_router.py` L158 cuts the catalogue note at `entry.notes[:120]`
+   (PID_0171's environment-lock reason ends "…via SharePoin"). Carry the full note, or cut at a word
+   boundary with an ellipsis — the reason must stay readable for hand-off.
+6. **Stale real-sample tests.** The 10 long-standing failures — 8 `tests/engine/test_flag_index.py`
+   `test_real_*` (asserting totals such as 538/485/53/296/50) and 2
+   `tests/mapper/test_vbo_router.py::TestIntegration` — assert counts that no longer match the
+   sample. After items 1–5, re-derive each expected value from the current sample, **explain in the
+   test docstring where each number comes from**, and make them pass. Do not delete or loosen them to
+   ranges; if a value can't be explained, report it instead of adjusting it.
+
+**Done when:** on a fresh `flowsmith convert` + `flowsmith report` of `PID_0171.bprelease`, the
+report shows 0 "No mapping rule" flags for normalised types, every MANUAL stage has an `error`
+flag, every PARTIAL stage has a flag, the "no ReviewFlag" section is empty, and no flag reason is
+cut mid-word; the full test suite has **0 failures** (the 10 long-standing failures fixed, not
+skipped); the report's before/after band and flag counts are recorded in the review.
+
+**Out of scope:** the reporter's own display gaps from the Task 8 review (telling LOOP start from
+end, showing a process name instead of a GUID for external process calls, running from outside the
+repo root, `SPOT-CHECK` spelling in the terminal) — presentation, a separate reporter pass; the
+parser not recording a loop's collection; changing confidence *scores* beyond what item 1's
+corrected rule lookup produces (band thresholds stay per `CLAUDE.md`).
+
+---
+
 ## Task 9 — Calibration checkpoint: validate against a second automation before team rollout
 
 **Why this task exists:** every task above proves the tool works for PID_171 specifically. Before
