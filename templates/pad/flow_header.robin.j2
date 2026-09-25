@@ -7,6 +7,15 @@ IMPORT 'imageRepo.imgrepo' AS imgrepo
 {% if sensitive_vars -%}
 @SENSITIVE: [{{ sensitive_vars | join(', ') }}]
 {% endif -%}
+{# Reference: docs/pad-reference/DF_PID_171_US_Loader.robin.txt L8, DF_PID_171_US_LIMS_Prelude_Main.robin.txt L8 #}
+@INPUT In_txt_Config : { 'Description': '', 'FriendlyName': 'In_txt_Config', 'Type': 'String', 'IsOptional': False, 'DefaultValue': '{}' }
+{% if inputs -%}
+# TODO: The following BP START-stage inputs are expected via In_txt_Config (parsed via
+# Variables.ConvertJsonToCustomObject in the Initialise Values region — Loader L24, Main L35;
+# architecture doc §A4 describes the single-JSON-blob interface).
+# That parse is not generated yet, so these variables are currently neither
+# flow inputs nor initialised — any body reader of them needs the parse first.
 {% for input_var in inputs -%}
-@INPUT {{ input_var.name }} : { 'Type': '{{ input_var.data_type }}', 'IsOptional': {{ input_var.is_optional | lower }} }
+# TODO: BP START-stage input '{{ input_var.bp_name }}' ({{ input_var.data_type }}) → PAD variable {{ input_var.pad_var_name }}
 {% endfor -%}
+{% endif -%}

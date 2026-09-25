@@ -21,6 +21,7 @@ from flowsmith.ast.models import BPProcess, BPStage, ConfidenceBand, StageType
 from flowsmith.exceptions import GenerationError
 from flowsmith.generator.naming import flow_file_stem
 from flowsmith.mapper.config import load_rules
+from flowsmith.mapper.type_mapper import DataTypeMapper
 
 # Data types that always make a variable sensitive in the generated @SENSITIVE list.
 SENSITIVE_DATA_TYPES: frozenset[str] = frozenset({"password", "binary"})
@@ -102,6 +103,7 @@ class PADGenerator:
             raise GenerationError(f"Template directory not found: {template_dir.absolute()}")
 
         self.template_dir = template_dir
+        self._type_mapper = DataTypeMapper()
         self.env = Environment(
             loader=FileSystemLoader(str(template_dir)),
             undefined=StrictUndefined,
@@ -256,22 +258,13 @@ class PADGenerator:
         try:
             lines: list[str] = []
 
-            # Flow header
-            input_vars = []
-            for stage in page.stages:
-                for data_item in stage.data_items:
-                    if data_item.is_input:
-                        input_vars.append(
-                            {
-                                "name": data_item.name,
-                                "data_type": self._map_bp_type_to_robin(data_item.data_type),
-                                "is_optional": False,
-                            }
-                        )
+            # Flow header — Task 7c: the single In_txt_Config @INPUT lives in the template;
+            # START-stage process inputs only surface as TODOs there.
+            start_inputs = self._collect_header_start_inputs(page, {})
 
             header_template = self.env.get_template("flow_header.robin.j2")
             header = header_template.render(
-                inputs=input_vars,
+                inputs=start_inputs,
                 outputs=[],
                 sensitive_vars=self._collect_sensitive_vars(page.stages),
             )
@@ -355,37 +348,16 @@ class PADGenerator:
             if not pages_for_role and not main_page:
                 return ""
 
-            # Determine input vars from all pages for this role
-            input_vars: list[dict[str, Any]] = []
-            seen_inputs: set[str] = set()
+            # Build variable name mapping for Task 5b expression translation (per §A4, §B10)
+            variable_name_mapping = self._build_variable_name_mapping(process)
 
-            # Collect from main page if it exists
-            if main_page:
-                for stage in main_page.stages:
-                    for data_item in stage.data_items:
-                        if data_item.is_input and data_item.name not in seen_inputs:
-                            input_vars.append(
-                                {
-                                    "name": data_item.name,
-                                    "data_type": self._map_bp_type_to_robin(data_item.data_type),
-                                    "is_optional": False,
-                                }
-                            )
-                            seen_inputs.add(data_item.name)
-
-            # Collect from sub-pages
-            for page in pages_for_role:
-                for stage in page.stages:
-                    for data_item in stage.data_items:
-                        if data_item.is_input and data_item.name not in seen_inputs:
-                            input_vars.append(
-                                {
-                                    "name": data_item.name,
-                                    "data_type": self._map_bp_type_to_robin(data_item.data_type),
-                                    "is_optional": False,
-                                }
-                            )
-                            seen_inputs.add(data_item.name)
+            # Task 7c: only the Main page's START-stage inputs are genuine process inputs;
+            # they surface as header TODOs, the flow's sole @INPUT being In_txt_Config.
+            input_vars = (
+                self._collect_header_start_inputs(main_page, variable_name_mapping)
+                if main_page
+                else []
+            )
 
             # Collect sensitive vars from all pages for this role
             sensitive_vars: list[str] = []
@@ -417,9 +389,6 @@ class PADGenerator:
             lines.append(f"# Process: {process.name}")
             lines.append(f"# Role: {role.capitalize()}")
             lines.append("")
-
-            # Build variable name mapping for Task 5b expression translation (per §A4, §B10)
-            variable_name_mapping = self._build_variable_name_mapping(process)
 
             # Render main page content (split by role)
             if main_page:
@@ -587,10 +556,10 @@ class PADGenerator:
             # target's inits can no longer leak into the Performer Main) — to the top
             # of the main body.
             #
-            # Fix pass 4 gap 2: Main's Start-stage inputs become the flow's ``@INPUT``s
-            # (Task 7c) — a hoisted re-init must never clobber one (e.g.
-            # ``flg_SendDatatoDataGateways``). Exclude them the same way Do item 3
-            # excludes a FUNCTION's own In_/Out_ parameters.
+            # Fix pass 4 gap 2: Main's Start-stage inputs are the process's inputs (since
+            # Task 7c expected via In_txt_Config, not a flow @INPUT) — a hoisted re-init must
+            # never clobber one (e.g. ``flg_SendDatatoDataGateways``). Exclude them the same way
+            # Do item 3 excludes a FUNCTION's own In_/Out_ parameters.
             main_input_bound = self._get_input_bound_names(main_page)
             hoistable_sources = self._collect_hoistable_stage_sources(
                 stages_to_render, process, process_map, variable_name_mapping
@@ -1452,6 +1421,47 @@ class PADGenerator:
         all_suppress = set(param_suppress_names) | hoist_targets
         return "\n".join(hoisted_lines), all_suppress
 
+    def _collect_header_start_inputs(
+        self,
+        page: Any,
+        variable_name_mapping: dict[str, str],
+    ) -> list[dict[str, str]]:
+        """List a page's START-stage process inputs for the flow-header TODOs (Task 7c).
+
+        The flow's only ``@INPUT`` is ``In_txt_Config`` (reference Loader/Main L8, §A4), so
+        BP process inputs are no longer declared; each one is named in a header ``# TODO``
+        instead of being dropped silently. The PAD name is the one the body uses for the
+        bound data item: ``variable_name_mapping`` first, else the §A4 type prefix applied to
+        the same PAD type the annotator derives for DATA stages.
+
+        Args:
+            page: The BPPage whose START stage carries the inputs and ``stage=`` bindings.
+            variable_name_mapping: Lowercase BP data-item name -> PAD variable name.
+
+        Returns:
+            One dict per input with ``bp_name``, ``pad_var_name`` and ``data_type`` keys, in
+            declaration order.
+        """
+        start_stage = next((s for s in page.stages if s.stage_type == StageType.START), None)
+        if not start_stage:
+            return []
+        inputs: list[dict[str, str]] = []
+        for data_item in start_stage.data_items:
+            if not data_item.is_input:
+                continue
+            bound_name = start_stage.inputs_stage_map.get(data_item.name, data_item.name)
+            pad_var_name = variable_name_mapping.get(bound_name.lower()) or self._apply_type_prefix(
+                bound_name, self._type_mapper.map_type(data_item.data_type).pad_type
+            )
+            inputs.append(
+                {
+                    "bp_name": data_item.name,
+                    "pad_var_name": pad_var_name,
+                    "data_type": self._map_bp_type_to_robin(data_item.data_type),
+                }
+            )
+        return inputs
+
     def _get_input_bound_names(self, page: Any) -> dict[str, str]:
         """Return this page's In_-bound BP data-item names, lowercase -> original case.
 
@@ -1460,8 +1470,8 @@ class PADGenerator:
         silently re-initialise or read a data item that only the entry FUNCTION
         receives as an In_ parameter — the split call chain (Task 5a follow-up) does
         not yet propagate it there. Also used by Do item 8's gap 2 fix (Main-page
-        hoisting must never re-initialise a flow ``@INPUT``) with the Main page's own
-        START stage.
+        hoisting must never re-initialise the Main START-stage process inputs, now
+        expected via In_txt_Config) with the Main page's own START stage.
 
         Args:
             page: The BPPage whose START stage carries the ``stage=`` input bindings.
