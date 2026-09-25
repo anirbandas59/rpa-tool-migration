@@ -18,6 +18,7 @@ from pydantic import ValidationError as PydanticValidationError
 from flowsmith.ast.models import (
     BPDataItem,
     BPEnvironmentVariable,
+    BPLinkedExposedItem,
     BPPage,
     BPProcess,
     BPStage,
@@ -57,6 +58,9 @@ class RawDataItem(TypedDict):
     only, Task 7b3). Absent/omitted for non-Data/Collection RawDataItems (Start/
     End stage inputs/outputs), where <alwaysinit/> does not apply — defaults to
     True (see BPDataItem.always_init for the citation)."""
+    exposure: NotRequired[str | None]
+    """Raw BP <exposure> text of a Data/Collection stage (Task 7e item 1), e.g.
+    "Environment"/"Session"; None/absent when the stage has no <exposure> element."""
 
 
 class RawStage(TypedDict):
@@ -182,6 +186,7 @@ def _build_data_items(raw_items: list[RawDataItem]) -> list[BPDataItem]:
             is_input=item.get("is_input", False),
             is_output=item.get("is_output", False),
             always_init=item.get("always_init", True),
+            exposure=item.get("exposure"),  # Task 7e item 1
         )
         for item in raw_items
     ]
@@ -1276,6 +1281,55 @@ def _tag_loader_performer_roles(
 # ── Public API ──────────────────────────────────────────────────────────────
 
 
+def _collect_linked_exposed_items(
+    release: MultiArtefactRelease, main_process: RawProcess
+) -> list[BPLinkedExposedItem]:
+    """Collect exposed Data/Collection items from a release's other processes and objects.
+
+    Task 7e item 1 (exposure capture only): every raw data item carrying a non-empty
+    ``exposure`` in any artefact other than ``main_process`` becomes one
+    ``BPLinkedExposedItem`` (declaration order, one per declaring stage).
+
+    Args:
+        release: The MultiArtefactRelease from ``parse_process``.
+        main_process: The process the AST is built from (excluded).
+
+    Returns:
+        The linked exposed items, in release order.
+
+    Raises:
+        ASTBuildError: If an item fails model validation.
+    """
+    artefacts = [*release.get("processes", []), *release.get("objects", [])]
+    items: list[BPLinkedExposedItem] = []
+    for artefact in artefacts:
+        if artefact is main_process:
+            continue
+        for raw_page in artefact.get("pages", []):
+            for raw_stage in raw_page.get("stages", []):
+                for raw_item in raw_stage.get("data_items", []):
+                    exposure = raw_item.get("exposure")
+                    if not exposure:
+                        continue
+                    try:
+                        items.append(
+                            BPLinkedExposedItem(
+                                artefact_id=artefact.get("process_id", ""),
+                                artefact_name=artefact.get("name", ""),
+                                name=raw_item["name"],
+                                data_type=raw_item["data_type"],
+                                initial_value=raw_item.get("initial_value"),
+                                exposure=exposure,
+                            )
+                        )
+                    except PydanticValidationError as exc:
+                        raise ASTBuildError(
+                            f"Invalid exposed data item '{raw_item.get('name')}' in "
+                            f"'{artefact.get('name')}': {exc}"
+                        ) from exc
+    return items
+
+
 def build_ast(raw: RawProcess | MultiArtefactRelease, router: VBORouter | None = None) -> BPProcess:
     """Build a validated BPProcess AST from a raw parsed dict.
 
@@ -1341,6 +1395,12 @@ def build_ast(raw: RawProcess | MultiArtefactRelease, router: VBORouter | None =
                 )
             )
 
+    # Task 7e item 1: exposure capture for the release's other artefacts (the AST keeps
+    # only the first process, so their exposed items would otherwise be lost).
+    linked_exposed_items: list[BPLinkedExposedItem] = []
+    if isinstance(raw, dict) and "processes" in raw:
+        linked_exposed_items = _collect_linked_exposed_items(raw, process_dict)  # type: ignore[arg-type]
+
     try:
         return BPProcess(
             process_id=process_dict["process_id"],
@@ -1348,6 +1408,7 @@ def build_ast(raw: RawProcess | MultiArtefactRelease, router: VBORouter | None =
             version=process_dict["version"],
             pages=pages,
             environment_variables=environment_variables,
+            linked_exposed_items=linked_exposed_items,
             source_file=process_dict["source_file"],
         )
     except PydanticValidationError as exc:

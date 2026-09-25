@@ -516,6 +516,121 @@ def test_data_item_always_init_defaults_true_when_key_absent() -> None:
     assert stage.data_items[0].always_init is True
 
 
+def test_data_item_exposure_reaches_ast() -> None:
+    """Task 7e item 1: a Data item's raw <exposure> string reaches BPDataItem.exposure."""
+    raw = single_page_process(
+        make_raw_stage(
+            stage_type="Data",
+            name="Generic_SupportTeam_EmailID",
+            data_items=[
+                RawDataItem(
+                    name="Generic_SupportTeam_EmailID",
+                    data_type="text",
+                    initial_value=None,
+                    is_input=False,
+                    is_output=False,
+                    exposure="Environment",
+                )
+            ],
+        )
+    )
+    stage = build_ast(raw).pages[0].stages[0]
+    assert stage.data_items[0].exposure == "Environment"
+
+
+def test_data_item_exposure_defaults_none_when_key_absent() -> None:
+    """Task 7e item 1: no 'exposure' key (no <exposure> element) -> exposure None."""
+    raw = single_page_process(make_raw_stage(stage_type="Data", name="Plain"))
+    stage = build_ast(raw).pages[0].stages[0]
+    assert all(item.exposure is None for item in stage.data_items)
+
+
+def test_linked_exposed_items_captured_from_other_artefacts() -> None:
+    """Task 7e item 1: exposed items of the release's other processes/objects are kept.
+
+    The AST is built from the first process only; exposed items declared in a second
+    process (e.g. PID_0171's 'RPA_Sharepoint_API_ConfigFile_Download') or an object
+    land in BPProcess.linked_exposed_items. Non-exposed items and the main process's
+    own items are not duplicated there.
+    """
+    main = make_raw_process()
+    sub = make_raw_process(
+        process_id="sub-proc-id",
+        name="SubProcess",
+        pages=[
+            RawPage(
+                page_id="sub_pg",
+                name="Sub",
+                is_main=True,
+                published=True,
+                stages=[
+                    make_raw_stage(
+                        stage_id="sub_s1",
+                        stage_type="Data",
+                        name="RPA_Sharepoint_URL",
+                        data_items=[
+                            RawDataItem(
+                                name="RPA_Sharepoint_URL",
+                                data_type="text",
+                                initial_value=None,
+                                is_input=False,
+                                is_output=False,
+                                exposure="Environment",
+                            )
+                        ],
+                    ),
+                    make_raw_stage(stage_id="sub_s2", stage_type="Data", name="Local"),
+                ],
+            )
+        ],
+    )
+    release = {"processes": [main, sub], "objects": [], "environment_variables": []}
+    process = build_ast(release)  # type: ignore[arg-type]
+    captured = [
+        (i.artefact_id, i.artefact_name, i.name, i.exposure) for i in process.linked_exposed_items
+    ]
+    assert captured == [("sub-proc-id", "SubProcess", "RPA_Sharepoint_URL", "Environment")]
+
+
+def test_linked_exposed_items_empty_for_single_raw_process() -> None:
+    """Task 7e item 1: a single RawProcess has no other artefacts -> empty list."""
+    assert build_ast(make_raw_process()).linked_exposed_items == []
+
+
+@pytest.mark.skipif(
+    not Path("samples/blueprism/PID_0171.bprelease").exists(),
+    reason="Real sample not available",
+)
+def test_pid0171_environment_exposure_counts() -> None:
+    """Task 7e item 1: PID_0171's Environment-exposed items, counted from the real sample.
+
+    The task text expected 11 Environment items, 9 without an initial value. The real
+    release has 11 Environment items: 3 on the main process (all without an initial
+    value) and 8 on the called process 'RPA_Sharepoint_API_ConfigFile_Download' (4 with
+    an initial value) — so 7 without an initial value, not 9. Asserted as found.
+    """
+    process = build_ast(parse_process(Path("samples/blueprism/PID_0171.bprelease")))
+    own = [
+        item
+        for page in process.pages
+        for stage in page.stages
+        for item in stage.data_items
+        if item.exposure == "Environment"
+    ]
+    linked = [i for i in process.linked_exposed_items if i.exposure == "Environment"]
+    assert {i.name for i in own} == {
+        "PID_171_US_EV_LIMS_Prelude_ConfigFile",
+        "Generic_SupportTeam_EmailID",
+        "Generic_RPA_Sharepoint_API_Config_File_Folder_Path",
+    }
+    assert {i.artefact_name for i in linked} == {"RPA_Sharepoint_API_ConfigFile_Download"}
+    assert len(own) + len(linked) == 11
+    no_initial = [i for i in own if not i.initial_value] + [
+        i for i in linked if not i.initial_value
+    ]
+    assert len(no_initial) == 7
+
+
 def test_exception_type_preserved() -> None:
     raw = single_page_process(
         make_raw_stage(

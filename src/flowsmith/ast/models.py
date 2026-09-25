@@ -212,6 +212,17 @@ class BPDataItem(BaseModel):
             "End stage inputs/outputs), where <alwaysinit/> does not apply."
         ),
     )
+    exposure: str | None = Field(
+        default=None,
+        description=(
+            "Raw text of the BP Data/Collection stage's <exposure> element (Task 7e item 1) "
+            "— e.g. 'Environment' or 'Session' (the two values present in "
+            "samples/blueprism/PID_0171.bprelease; BP also defines 'None'/'Statistic'). "
+            "Stored verbatim, not as an enum. None when the element is absent. Per "
+            "architecture doc §B12 (L730) an 'Environment'-exposed DATA item is read from "
+            "obj_Config in 'Load Config Data' instead of being initialised locally."
+        ),
+    )
 
 
 class BPStage(BaseModel):
@@ -462,6 +473,26 @@ class BPEnvironmentVariable(BaseModel):
     )
 
 
+class BPLinkedExposedItem(BaseModel):
+    """An exposed Data/Collection item declared in another artefact of the same release.
+
+    Task 7e item 1: ``build_ast`` keeps only the release's first process as the AST, so the
+    exposure of data items declared in the release's other processes/objects (e.g.
+    PID_0171's called process 'RPA_Sharepoint_API_ConfigFile_Download', 8 of whose Data
+    items are exposure=Environment) would otherwise be lost. Captured so the generator can
+    account for every Environment-exposed item (architecture doc §B12, L730).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    artefact_id: str = Field(description="process_id of the declaring process/object.")
+    artefact_name: str = Field(description="Name of the declaring process/object.")
+    name: str = Field(description="Data-item (stage) name as it appears in the BP XML.")
+    data_type: str = Field(description="Raw BP type string (e.g. 'text', 'number', 'flag').")
+    initial_value: str | None = Field(default=None, description="Initial value, or None.")
+    exposure: str = Field(description="Raw BP <exposure> text, e.g. 'Environment'.")
+
+
 class BPProcess(BaseModel):
     """The root node of the Flowsmith AST, representing one Blue Prism process."""
 
@@ -477,6 +508,13 @@ class BPProcess(BaseModel):
     environment_variables: list[BPEnvironmentVariable] = Field(
         default_factory=list,
         description="Environment variables declared on the release (not yet parser-populated).",
+    )
+    linked_exposed_items: list[BPLinkedExposedItem] = Field(
+        default_factory=list,
+        description=(
+            "Exposed Data/Collection items declared in the release's other processes and "
+            "objects (Task 7e item 1) — empty when built from a single RawProcess."
+        ),
     )
     source_file: str = Field(description="Absolute or relative path to the source .bprelease file.")
 

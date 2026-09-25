@@ -747,6 +747,39 @@ def data_alwaysinit_bprelease(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
+def data_exposure_bprelease(tmp_path: Path) -> Path:
+    """Data/Collection stages with and without <exposure> (Task 7e item 1).
+
+    Shape cited from samples/blueprism/PID_0171.bprelease stage c5e4ade5
+    'Generic_SupportTeam_EmailID': ``<datatype>text</datatype><initialvalue />
+    <exposure>Environment</exposure><private /><alwaysinit />``.
+    """
+    xml_content = """<?xml version="1.0" encoding="utf-8"?>
+<process id="proc_exposure" name="ExposureTest" version="1.0">
+  <subsheet subsheetid="pg_001" name="ExposureTest" type="0">
+    <stage stageid="s_001" type="Data" name="Generic_SupportTeam_EmailID">
+      <datatype>text</datatype>
+      <initialvalue />
+      <exposure>Environment</exposure>
+      <private />
+      <alwaysinit />
+    </stage>
+    <stage stageid="s_002" type="Data" name="Plain">
+      <datatype>text</datatype>
+      <initialvalue />
+    </stage>
+    <stage stageid="s_003" type="Collection" name="Session Coll">
+      <exposure>Session</exposure>
+    </stage>
+  </subsheet>
+</process>
+"""
+    filepath = tmp_path / "test_data_exposure.bprelease"
+    filepath.write_text(xml_content, encoding="utf-8")
+    return filepath
+
+
+@pytest.fixture
 def wait_loop_bprelease(tmp_path: Path) -> Path:
     """Blue Prism .bprelease with WaitStart/LoopStart stages carrying timeout/groupid."""
     xml_content = """\
@@ -915,6 +948,54 @@ def test_collection_stage_alwaysinit_present_is_true(data_alwaysinit_bprelease: 
     collection_stage = result["processes"][0]["pages"][0]["stages"][2]
     assert collection_stage["name"] == "Result Collection"
     assert collection_stage["data_items"][0]["always_init"] is True
+
+
+def test_data_stage_exposure_extracted(data_exposure_bprelease: Path) -> None:
+    """Task 7e item 1: a Data stage's <exposure> text is stored raw on its data item."""
+    result = parse_process(data_exposure_bprelease)
+    stage = result["processes"][0]["pages"][0]["stages"][0]
+    assert stage["data_items"][0]["exposure"] == "Environment"
+
+
+def test_data_stage_without_exposure_is_none(data_exposure_bprelease: Path) -> None:
+    """Task 7e item 1: no <exposure> element -> exposure None."""
+    result = parse_process(data_exposure_bprelease)
+    stage = result["processes"][0]["pages"][0]["stages"][1]
+    assert stage["data_items"][0]["exposure"] is None
+
+
+def test_collection_stage_exposure_extracted(data_exposure_bprelease: Path) -> None:
+    """Task 7e item 1: <exposure> is also captured on Collection stages."""
+    result = parse_process(data_exposure_bprelease)
+    stage = result["processes"][0]["pages"][0]["stages"][2]
+    assert stage["data_items"][0]["exposure"] == "Session"
+
+
+@pytest.mark.skipif(
+    not Path("samples/blueprism/PID_0171.bprelease").exists(),
+    reason="Real sample not available",
+)
+def test_pid0171_environment_exposed_item_count() -> None:
+    """Task 7e item 1: Environment-exposed items across the whole PID_0171 release.
+
+    The task text expected 11 Environment items with 9 lacking an initial value; the
+    real release has 11 Environment items (plus 2 'Session' ones) of which 7 have no
+    initial value (4 in 'RPA_Sharepoint_API_ConfigFile_Download' carry one, e.g.
+    'RPA_Sharepoint_Credential_Name' = 'Sharepoint_API_Credential'). Asserted as found.
+    """
+    result = parse_process(Path("samples/blueprism/PID_0171.bprelease"))
+    items = [
+        item
+        for artefact in [*result["processes"], *result["objects"]]
+        for page in artefact["pages"]
+        for stage in page["stages"]
+        for item in stage["data_items"]
+        if item.get("exposure")
+    ]
+    environment = [i for i in items if i["exposure"] == "Environment"]
+    assert len(environment) == 11
+    assert len([i for i in environment if not i["initial_value"]]) == 7
+    assert {i["exposure"] for i in items} == {"Environment", "Session"}
 
 
 def test_waitstart_timeout_and_groupid_extracted(wait_loop_bprelease: Path) -> None:

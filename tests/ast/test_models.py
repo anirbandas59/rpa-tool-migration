@@ -17,6 +17,7 @@ from flowsmith.ast import (
     Runtime,
     StageType,
 )
+from flowsmith.ast.models import BPLinkedExposedItem
 from flowsmith.exceptions import ASTBuildError
 
 # ── StageType ──────────────────────────────────────────────────────────────
@@ -192,6 +193,33 @@ def test_bp_data_item_always_init_false() -> None:
     """
     item = BPDataItem(name="Consecutive Exception Count", data_type="number", always_init=False)
     assert item.always_init is False
+
+
+def test_bp_data_item_exposure_defaults_none() -> None:
+    """Task 7e item 1: exposure is None when the BP stage has no <exposure> element."""
+    assert BPDataItem(name="x", data_type="text").exposure is None
+
+
+def test_bp_data_item_exposure_raw_string_kept() -> None:
+    """Task 7e item 1: exposure stores the raw BP string verbatim (no enum)."""
+    item = BPDataItem(name="Generic_SupportTeam_EmailID", data_type="text", exposure="Environment")
+    assert item.exposure == "Environment"
+    assert BPDataItem(name="y", data_type="text", exposure="Session").exposure == "Session"
+
+
+def test_bp_linked_exposed_item_construction_and_default() -> None:
+    """Task 7e item 1: BPLinkedExposedItem holds another artefact's exposed item;
+    BPProcess.linked_exposed_items defaults to empty."""
+    item = BPLinkedExposedItem(
+        artefact_id="d615d7c3",
+        artefact_name="RPA_Sharepoint_API_ConfigFile_Download",
+        name="RPA_Sharepoint_URL",
+        data_type="text",
+        exposure="Environment",
+    )
+    assert item.initial_value is None
+    process = BPProcess(process_id="p", name="P", version="1", source_file="f")
+    assert process.linked_exposed_items == []
 
 
 def test_bp_data_item_with_all_fields() -> None:

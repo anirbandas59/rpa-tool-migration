@@ -22,6 +22,11 @@ PID_171_US_Process_LIMS_Prelude:
   # Task 7d item 3: Process-level config collection name (not a page entry)
   # ConfigFileData is the BP collection; PAD reads it via obj_Config parsing
   config_collection: ConfigFileData
+  # Task 7e item 3: the BP stages/pages that only load config_collection (or its
+  # path/sheet-name inputs) are found from the data and replaced by one
+  # "# Replaced by Load Config Data: ..." comment each (generator/pad.py
+  # _plan_config_read_retirement). Optional per-process override, not needed for PID_171:
+  #   config_read_keep: ["<BP stage name>", ...]  # never retire these; each gets a TODO
 
   # Main Page - special case: split across both Loader and Performer
   # Pre-Get-Next-Item stages route to their target's role; post-Get-Next-Item to Performer

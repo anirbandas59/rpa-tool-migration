@@ -283,3 +283,84 @@ class TestDefinitionContent:
             w.findtext("{*}JsonFileName").lstrip("/") for w in cust.findall(".//{*}Workflow")
         }
         assert files == referenced
+
+
+@pytest.fixture(scope="module")
+def robin_flows(annotated_process: BPProcess, tmp_path_factory: pytest.TempPathFactory) -> dict:
+    """The generated Loader/Performer .robin text, keyed by role."""
+    out = tmp_path_factory.mktemp("pid171_7e")
+    files = PADGenerator().generate_process(annotated_process, out)
+    return {
+        role: next(f for f in files if f.name.endswith(f"_{role.capitalize()}.robin")).read_text(
+            encoding="utf-8"
+        )
+        for role in ("loader", "performer")
+    }
+
+
+def _load_config_body(text: str) -> list[str]:
+    """Lines of FUNCTION 'Load Config Data' (header to END FUNCTION)."""
+    lines = text.splitlines()
+    start = lines.index("FUNCTION 'Load Config Data' GLOBAL")
+    end = next(i for i in range(start, len(lines)) if lines[i] == "END FUNCTION")
+    return lines[start : end + 1]
+
+
+@pytest.mark.parametrize("role", ["loader", "performer"])
+class TestTask7eConfigFollowUp:
+    """Task 7e done condition on the real PID_0171 output, both flows."""
+
+    def test_environment_items_accounted_for(self, robin_flows: dict, role: str) -> None:
+        """§B12: the 3 process-level Environment items (no initial value) are read in Load
+        Config Data by BP name; the 8 of the called process are each named in a TODO."""
+        body = _load_config_body(robin_flows[role])
+        for bp_name, var in (
+            ("PID_171_US_EV_LIMS_Prelude_ConfigFile", "txt_PID171USEVLIMSPreludeConfigFile"),
+            ("Generic_SupportTeam_EmailID", "txt_GenericSupportTeamEmailID"),
+            (
+                "Generic_RPA_Sharepoint_API_Config_File_Folder_Path",
+                "txt_GenericRPASharepointAPIConfigFileFolderPath",
+            ),
+        ):
+            assert f"SET {var} TO obj_Config['{bp_name}']" in body
+        linked = [ln for ln in body if "belongs to 'RPA_Sharepoint_API_ConfigFile_Download'" in ln]
+        assert len(linked) == 8
+
+    def test_config_read_stages_replaced_not_live(self, robin_flows: dict, role: str) -> None:
+        """Item 3: the BP config-read machinery leaves only its comments."""
+        text = robin_flows[role]
+        assert (
+            "# Replaced by Load Config Data: BP 'ConvertConfigFile As Collection' loaded "
+            "ConfigFileData from the config file"
+        ) in text
+        assert "# BEGIN fold: 'ConvertConfigFile As Collection - Copy'" not in text
+        assert "# BEGIN fold: 'Read Excel As Collection'" not in text
+        assert "SET dtb_ConfigFileData TO" not in text
+        assert "SET txt_ConfigFileSheetName TO" not in text
+        assert "TODO: complete Download Config File from SharePoint" not in text
+
+    def test_generic_support_email_assigned_and_no_unflagged_unassigned_read(
+        self, robin_flows: dict, role: str
+    ) -> None:
+        """Item 4: txt_GenericSupportTeamEmailID (BP Environment item
+        'Generic_SupportTeam_EmailID') is now assigned in Load Config Data, so it is never
+        TODO-flagged as unassigned."""
+        text = robin_flows[role]
+        assert "txt_GenericSupportTeamEmailID is read here" not in text
+
+    def test_handler_flags_initialised(self, robin_flows: dict, role: str) -> None:
+        """Item 5: both flags initialised before CALL 'Load Config Data'."""
+        lines = robin_flows[role].splitlines()
+        call_idx = lines.index("CALL 'Load Config Data'")
+        assert lines.index("SET flg_Screenshot TO True") < call_idx
+        assert lines.index("SET flg_ConfigError TO False") < call_idx
+
+    def test_7d_invariants_hold(self, robin_flows: dict, role: str) -> None:
+        """Task 7d invariants still hold after Task 7e."""
+        text = robin_flows[role]
+        parse = "Variables.ConvertJsonToCustomObject Json: In_txt_Config CustomObject=> obj_Config"
+        assert text.count(parse) == 1
+        assert text.splitlines().count("CALL 'Load Config Data'") == 1
+        assert text.count("FUNCTION 'Load Config Data' GLOBAL") == 1
+        assert "dtb_ConfigFileData." not in text
+        assert "%SomeVar%" not in text

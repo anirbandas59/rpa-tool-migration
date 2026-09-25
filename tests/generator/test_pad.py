@@ -1709,12 +1709,18 @@ def test_fold_and_inline_block_targets_are_never_silently_dropped(
     # Known fold pages from mapping/page_target_map.yaml (PID_171)
     fold_pages = {
         "Save Attachments",
-        "Read Excel As Collection",
-        "ConvertConfigFile As Collection - Copy",
         "Input File Management",
         "Reset Global Data",
         "Sample Manager - Explorer",
     }
+    # Task 7e item 3: these two fold pages only load ConfigFileData from the config file,
+    # so they are retired with their call — each leaves its 'Replaced by' comment instead.
+    config_read_fold_pages = {"Read Excel As Collection", "ConvertConfigFile As Collection - Copy"}
+    for page_name in config_read_fold_pages:
+        assert (
+            f"# Replaced by Load Config Data: BP '{page_name}' loaded ConfigFileData from the "
+            "config file"
+        ) in full_content, f"Retired fold page '{page_name}' left no comment"
 
     # Check that fold pages appear in fold markers
     for page_name in fold_pages:
@@ -6039,3 +6045,596 @@ def test_7d_config_reference_scan_covers_exception_code_and_binding_text() -> No
     refs = gen._extract_config_references(process, "ConfigFileData")
 
     assert refs == ["Error Detail", "Code Col", "Input Col"]
+
+
+# ── Task 7e item 2: Environment-exposed DATA items read in Load Config Data ─────
+
+
+def _env_data_stage(
+    stage_id: str,
+    name: str,
+    data_type: str = "text",
+    initial_value: str | None = None,
+    exposure: str | None = "Environment",
+) -> BPStage:
+    """A DATA stage whose BPDataItem carries BP ``<exposure>`` (Task 7e item 1).
+
+    Annotation shape mirrors ``engine/annotator.py::_annotate_data`` (``params_map`` with
+    ``variable_name``/``variable_type``/``initial_value``).
+    """
+    return BPStage(
+        stage_id=stage_id,
+        stage_type=StageType.DATA,
+        name=name,
+        data_items=[
+            BPDataItem(
+                name=name, data_type=data_type, initial_value=initial_value, exposure=exposure
+            )
+        ],
+        pa_annotation=PAAnnotation(
+            target_type="SetVariable",
+            target_module="Variables",
+            runtime=Runtime.DESKTOP,
+            params_map={
+                "variable_name": name,
+                "variable_type": data_type,
+                "initial_value": initial_value or "",
+            },
+            confidence=0.85,
+            band=ConfidenceBand.SPOT_CHECK,
+        ),
+    )
+
+
+def _load_config_sets(fn: str) -> list[str]:
+    """The ``SET`` lines of a rendered ``Load Config Data`` FUNCTION."""
+    return [ln for ln in fn.splitlines() if ln.startswith("SET ") and "obj_Config[" in ln]
+
+
+def test_7e_environment_item_read_from_obj_config_by_bp_name() -> None:
+    """§B12 L730: an Environment-exposed DATA item with no initial value is read in
+    Load Config Data as ``SET <§A4 name> TO obj_Config['<BP name verbatim>']``; its
+    declaration emits nothing, and the body read resolves to the same variable."""
+    gen = PADGenerator()
+    process = _config_main_process(["[ConfigFileData.Sub Folder] & [Support_Team EmailID]"])
+    process.pages[0].stages.append(_env_data_stage("e1", "Support_Team EmailID"))
+    gen.page_target_map["CfgFlow"] = {"config_collection": "ConfigFileData"}
+
+    rendered = gen._generate_consolidated_flow(process, role="performer")
+    fn = gen._render_load_config_function(process)
+
+    assert _load_config_sets(fn) == [
+        "SET txt_SubFolder TO obj_Config['Sub Folder']",
+        "SET txt_SupportTeamEmailID TO obj_Config['Support_Team EmailID']",
+    ]
+    assert "SET Target0 TO txt_SubFolder + txt_SupportTeamEmailID" in rendered
+    # Declaration site: nothing (the only SET of the variable is the obj_Config read).
+    assert rendered.count("SET txt_SupportTeamEmailID TO") == 1
+
+
+def test_7e_non_environment_exposure_not_read_from_config() -> None:
+    """Only exposure 'Environment' qualifies — a 'Session'/unexposed item is not read."""
+    gen = PADGenerator()
+    process = _config_main_process(["[ConfigFileData.Sub Folder]"])
+    process.pages[0].stages.extend(
+        [
+            _env_data_stage("e1", "Session Item", exposure="Session"),
+            _env_data_stage("e2", "Plain Item", exposure=None),
+        ]
+    )
+    gen.page_target_map["CfgFlow"] = {"config_collection": "ConfigFileData"}
+
+    fn = gen._render_load_config_function(process)
+
+    assert _load_config_sets(fn) == ["SET txt_SubFolder TO obj_Config['Sub Folder']"]
+    assert "§B12" not in fn
+
+
+def test_7e_environment_item_colliding_with_config_column_gets_one_set_and_todo() -> None:
+    """An Environment item whose variable equals a config-column variable: one SET (the
+    column's) and a TODO naming both sources — never two conflicting SETs."""
+    gen = PADGenerator()
+    process = _config_main_process(["[ConfigFileData.Sub Folder]"])
+    process.pages[0].stages.append(_env_data_stage("e1", "Sub_Folder"))
+    gen.page_target_map["CfgFlow"] = {"config_collection": "ConfigFileData"}
+
+    fn = gen._render_load_config_function(process)
+
+    assert _load_config_sets(fn) == ["SET txt_SubFolder TO obj_Config['Sub Folder']"]
+    todo = next(ln for ln in fn.splitlines() if "both map to txt_SubFolder" in ln)
+    assert todo.startswith("# TODO:")
+    assert "'Sub_Folder'" in todo and "'Sub Folder'" in todo
+
+
+def test_7e_environment_item_with_initial_value_keeps_declaration_init_and_todo() -> None:
+    """§B12: an item with a BP initial value keeps its declaration-site SET; Load Config
+    Data names it in a TODO rather than reading it (nothing silently absent)."""
+    gen = PADGenerator()
+    process = _config_main_process(["[ConfigFileData.Sub Folder]"])
+    process.pages[0].stages.append(
+        _env_data_stage("e1", "Cred Name", initial_value='"Sharepoint_API_Credential"')
+    )
+    gen.page_target_map["CfgFlow"] = {"config_collection": "ConfigFileData"}
+
+    rendered = gen._generate_consolidated_flow(process, role="performer")
+    fn = gen._render_load_config_function(process)
+
+    assert _load_config_sets(fn) == ["SET txt_SubFolder TO obj_Config['Sub Folder']"]
+    assert any(
+        ln.startswith("# TODO: Environment-exposed BP data item 'Cred Name' has a BP initial")
+        for ln in fn.splitlines()
+    )
+    assert 'SET txt_CredName TO "Sharepoint_API_Credential"' in rendered
+
+
+def test_7e_numeric_environment_item_read_gets_verify() -> None:
+    """A non-text Environment item is still read by its BP name, with a # VERIFY naming the
+    needed conversion (reference Loader L228) instead of a guessed Text.ToNumber."""
+    gen = PADGenerator()
+    process = _config_main_process(["[ConfigFileData.Sub Folder]"])
+    process.pages[0].stages.append(_env_data_stage("e1", "Random Wait", data_type="number"))
+    gen.page_target_map["CfgFlow"] = {"config_collection": "ConfigFileData"}
+
+    fn = gen._render_load_config_function(process)
+
+    line = next(ln for ln in fn.splitlines() if "obj_Config['Random Wait']" in ln)
+    assert line.startswith("SET num_RandomWait TO obj_Config['Random Wait'] # VERIFY:")
+    assert "L228" in line
+
+
+def test_7e_linked_artefact_environment_items_named_in_todos() -> None:
+    """Environment items declared in another release artefact (not generated) each get a
+    TODO in Load Config Data — none silently absent."""
+    from flowsmith.ast.models import BPLinkedExposedItem
+
+    gen = PADGenerator()
+    base = _config_main_process(["[ConfigFileData.Sub Folder]"])
+    process = base.model_copy(
+        update={
+            "linked_exposed_items": [
+                BPLinkedExposedItem(
+                    artefact_id="d615",
+                    artefact_name="Download Proc",
+                    name="RPA_URL",
+                    data_type="text",
+                    exposure="Environment",
+                ),
+                BPLinkedExposedItem(
+                    artefact_id="d615",
+                    artefact_name="Download Proc",
+                    name="URL - SubSite",
+                    data_type="text",
+                    exposure="Session",
+                ),
+            ]
+        }
+    )
+    gen.page_target_map["CfgFlow"] = {"config_collection": "ConfigFileData"}
+
+    fn = gen._render_load_config_function(process)
+
+    todos = [ln for ln in fn.splitlines() if "another artefact of this release" in ln]
+    assert len(todos) == 1
+    assert "'RPA_URL'" in todos[0] and "'Download Proc'" in todos[0]
+
+
+# ── Task 7e item 3: redundant BP config-read stages retired (data-driven) ───────
+
+
+def _plain_action(
+    stage_id: str,
+    name: str,
+    params_map: dict[str, str] | None = None,
+    outputs_stage_map: dict[str, str] | None = None,
+    processid: str | None = None,
+) -> BPStage:
+    """A non-subsheet ACTION (e.g. a VBO call or an external-process call) rendering as a
+    CALL line, with the given BP input expressions / ``stage=``-bound outputs."""
+    return BPStage(
+        stage_id=stage_id,
+        stage_type=StageType.ACTION,
+        name=name,
+        processid=processid,
+        params_map=params_map or {},
+        outputs_stage_map=outputs_stage_map or {},
+        pa_annotation=PAAnnotation(
+            target_type="RunDesktopFlow",
+            target_module="System",
+            runtime=Runtime.DESKTOP,
+            params_map={},
+            confidence=0.95,
+            band=ConfidenceBand.AUTO,
+        ),
+    )
+
+
+def _settings_loader_page(page_id: str = "P_LOAD", extra: list[BPStage] | None = None) -> BPPage:
+    """A page loading the config collection: reads the path it is passed and the global
+    sheet-name item [Sheet], writes only its own locally declared items."""
+    return BPPage(
+        page_id=page_id,
+        name="Loader Page",
+        role="performer",
+        stages=[
+            _annotated_start("L0", [("Path", "text", "Local Path")]),
+            _data_stage("L1", "Local Path"),
+            _collection_stage("L2", "Local Rows"),
+            _plain_action(
+                "L3",
+                "Read Sheet",
+                params_map={"File": "[Local Path]", "Sheet": "[Sheet]"},
+                outputs_stage_map={"Rows": "Local Rows"},
+            ),
+            _annotated_end("L4", [("Settings", "collection", "Local Rows")]),
+            *(extra or []),
+        ],
+    )
+
+
+def _settings_process(
+    loader_page: BPPage | None = None, main_extra: list[BPStage] | None = None
+) -> BPProcess:
+    """Synthetic (non-PID_171) process whose config collection is 'Settings'.
+
+    Main: 'Fetch Cfg' (external call writing [Cfg Path] and the never-read [Fetched]),
+    'Load Settings' (calls the loader page with [Cfg Path], writes [Settings]),
+    'Remove Cfg' (reads [Cfg Path], writes [Removed], which a CALCULATION reads along
+    with [Settings.Col A]); declarations for Settings, Sheet and Cfg Path.
+    """
+    main_stages = [
+        _collection_stage("M1", "Settings"),
+        _env_data_stage("M2", "Sheet", initial_value='"Cfg"', exposure=None),
+        _env_data_stage("M3", "Cfg Path", exposure=None),
+        _plain_action(
+            "M4",
+            "Fetch Cfg",
+            params_map={"Folder": '"cfg"'},
+            outputs_stage_map={"Path": "Cfg Path", "Ok": "Fetched"},
+            processid="EXTERNAL-PROC",
+        ),
+        _call_stage(
+            "M5",
+            "Load Settings",
+            processid="P_LOAD",
+            params_map={"Path": "[Cfg Path]"},
+            outputs_stage_map={"Settings": "Settings"},
+        ),
+        _plain_action(
+            "M6",
+            "Remove Cfg",
+            params_map={"File": "[Cfg Path]"},
+            outputs_stage_map={"R": "Removed"},
+        ),
+        _set_var_stage("M7", "Target", "[Settings.Col A] & [Removed]", None),
+        *(main_extra or []),
+    ]
+    main = BPPage(page_id="P_MAIN", name="Main Page", is_main=True, stages=main_stages)
+    return make_process(pages=[main, loader_page or _settings_loader_page()], name="CfgFlow")
+
+
+def _settings_generator() -> PADGenerator:
+    """A generator whose page_target_map declares ``config_collection: Settings``."""
+    gen = PADGenerator()
+    gen.page_target_map["CfgFlow"] = {"config_collection": "Settings"}
+    return gen
+
+
+_RETIRED = "# Replaced by Load Config Data: BP '{}' loaded Settings from the config file"
+
+
+def test_7e_config_read_stages_retired_with_single_comment_each() -> None:
+    """The collection-writing call, its page, the path-writing stage and the collection /
+    sheet-name declarations each leave exactly one 'Replaced by' comment and render nothing
+    live; a kept stage reading the now-unassigned path gets a TODO; column reads remain."""
+    gen = _settings_generator()
+    process = _settings_process()
+
+    rendered = gen._generate_consolidated_flow(process, role="performer")
+    lines = rendered.splitlines()
+
+    for name in ("Settings", "Sheet", "Fetch Cfg", "Load Settings", "Loader Page"):
+        assert lines.count(_RETIRED.format(name)) == 1, name
+    assert "CALL 'Fetch Cfg'" not in rendered
+    assert "CALL 'Load Settings'" not in rendered and "CALL 'Loader Page'" not in rendered
+    assert "FUNCTION 'Loader Page'" not in rendered
+    assert "CALL 'Read Sheet'" not in rendered
+    assert "SET dtb_Settings TO DataTable.Create()" not in rendered
+    assert 'SET txt_Sheet TO "Cfg"' not in rendered
+    # Kept, with a TODO naming the item only a retired stage assigned.
+    remove_idx = lines.index("CALL 'Remove Cfg'")
+    assert lines[remove_idx - 1].startswith("# TODO: BP stage 'Remove Cfg' reads 'Cfg Path'")
+    assert "'Fetch Cfg'" in lines[remove_idx - 1]
+    # The column read still resolves to its Load Config Data variable.
+    assert any(ln.startswith("SET Target TO txt_ColA") for ln in lines)
+
+
+def test_7e_config_read_stage_with_other_effect_is_kept_with_todo() -> None:
+    """A stage writing a config input *and* another item that something reads is not
+    retired — it keeps rendering, preceded by a TODO naming the extra effect."""
+    gen = _settings_generator()
+    extra = [
+        _plain_action(
+            "M8", "Fetch And Log", outputs_stage_map={"Path": "Cfg Path", "Log": "Log Line"}
+        ),
+        _set_var_stage("M9", "Echo", "[Log Line]", None),
+    ]
+    process = _settings_process(main_extra=extra)
+
+    lines = gen._generate_consolidated_flow(process, role="performer").splitlines()
+
+    idx = lines.index("CALL 'Fetch And Log'")
+    assert lines[idx - 1].startswith("# TODO: BP stage 'Fetch And Log' writes Settings")
+    assert "also writes log line" in lines[idx - 1]
+    assert _RETIRED.format("Fetch And Log") not in lines
+
+
+def test_7e_config_read_call_whose_page_writes_shared_items_is_kept() -> None:
+    """A collection-writing call whose page also writes a data item it does not declare
+    (a global side effect) is kept with a TODO, and its page still renders."""
+    gen = _settings_generator()
+    leaky = _settings_loader_page(extra=[_set_var_stage("L5", "Global Counter", "1", None)])
+    process = _settings_process(loader_page=leaky)
+
+    rendered = gen._generate_consolidated_flow(process, role="performer")
+
+    assert _RETIRED.format("Load Settings") not in rendered
+    assert "# TODO: BP stage 'Load Settings' writes Settings" in rendered
+    assert "FUNCTION 'Loader Page' GLOBAL" in rendered
+
+
+def test_7e_config_read_fold_page_comment_at_call_site() -> None:
+    """A retired call's inline/fold-shaped page renders at the call site, so its comment
+    goes there, right after the call stage's own — nothing inlined."""
+    gen = _settings_generator()
+    gen.page_target_map["CfgFlow"]["Loader Page"] = {"shape": "fold", "citation": "§B14 test"}
+    process = _settings_process()
+
+    lines = gen._generate_consolidated_flow(process, role="performer").splitlines()
+
+    idx = lines.index(_RETIRED.format("Load Settings"))
+    assert lines[idx + 1] == _RETIRED.format("Loader Page")
+    assert not any(ln.startswith("# BEGIN fold: 'Loader Page'") for ln in lines)
+
+
+def test_7e_config_read_keep_override_in_page_target_map() -> None:
+    """config_read_keep (page_target_map.yaml, per process) keeps a stage the data would
+    retire, with a TODO saying so."""
+    gen = _settings_generator()
+    gen.page_target_map["CfgFlow"]["config_read_keep"] = ["Fetch Cfg"]
+    process = _settings_process()
+
+    lines = gen._generate_consolidated_flow(process, role="performer").splitlines()
+
+    idx = lines.index("CALL 'Fetch Cfg'")
+    assert "kept by config_read_keep" in lines[idx - 1]
+    assert _RETIRED.format("Fetch Cfg") not in lines
+
+
+def test_7e_no_config_collection_retires_nothing() -> None:
+    """Without config_collection nothing is retired (no plan, no comments)."""
+    gen = PADGenerator()
+    process = _settings_process()
+
+    assert gen._plan_config_read_retirement(process) == ({}, {}, set())
+    rendered = gen._generate_consolidated_flow(process, role="performer")
+    assert "Replaced by Load Config Data" not in rendered
+    assert "CALL 'Fetch Cfg'" in rendered
+
+
+# ── Task 7e item 4: read-but-never-assigned PAD variables ───────────────────────
+
+_UNASSIGNED_FLOW = "\n".join(
+    [
+        "@INPUT In_txt_Config : { 'Type': 'String' }",
+        "# TODO: txt_InComment is only mentioned in a comment",
+        "Variables.ConvertJsonToCustomObject Json: In_txt_Config CustomObject=> obj_Config",
+        "SET txt_Assigned TO 'x'",
+        "SET txt_Copy TO txt_Assigned + txt_Missing # VERIFY: trailing txt_InVerify",
+        "LOOP num_Index FROM 0 TO 3 STEP 1",
+        "    SET txt_Loop TO num_Index",
+        "END",
+        "LOOP FOREACH dtr_Row IN dtb_Assigned",
+        "    SET txt_Row TO dtr_Row['A']",
+        "END",
+        "SET dtb_Assigned TO DataTable.Create()",
+        "Text.Trim Text: txt_Assigned TrimOption: Text.TrimOption.Both TrimmedText=> txt_Trimmed",
+        "CALL 'Worker' In_txt_Name: txt_Trimmed Out_txt_Result=> txt_Result",
+        'SET txt_Body TO "<p>Hi txt_InString',
+        '<p>" + txt_Missing2 + "</p>"',
+        "# VERIFY: marker belonging to the IF below",
+        "IF txt_Result = '' THEN",
+        "END",
+        "FUNCTION 'Worker' GLOBAL In_txt_Name, OUTPUT Out_txt_Result",
+        "    SET Out_txt_Result TO In_txt_Name",
+        "END FUNCTION",
+    ]
+)
+
+
+def test_7e_unassigned_read_gets_todo_before_its_statement() -> None:
+    """Item 4: a read of a variable nothing assigns gets a TODO before its statement (with
+    the statement's own indentation) naming the BP data item it came from."""
+    gen = PADGenerator()
+    process = make_process(
+        pages=[BPPage(page_id="P", name="Main Page", is_main=True, stages=[])], name="U"
+    )
+
+    out = gen._flag_unassigned_reads(
+        _UNASSIGNED_FLOW, process, {"missing item": "txt_Missing"}
+    ).splitlines()
+
+    idx = out.index("SET txt_Copy TO txt_Assigned + txt_Missing # VERIFY: trailing txt_InVerify")
+    assert out[idx - 1].startswith("# TODO: txt_Missing is read here but never assigned")
+    assert "BP data item 'missing item'" in out[idx - 1]
+    # A read inside a multi-line string's continuation: the TODO precedes the statement's
+    # first line, never lands inside the string literal.
+    body_idx = out.index('SET txt_Body TO "<p>Hi txt_InString')
+    assert out[body_idx - 1].startswith("# TODO: txt_Missing2 is read here")
+    assert "no BP data item maps to it" in out[body_idx - 1]
+    assert out[body_idx + 1] == '<p>" + txt_Missing2 + "</p>"'
+
+
+def test_7e_unassigned_read_check_ignores_params_loops_outputs_strings_comments() -> None:
+    """Item 4: FUNCTION In_/Out_ parameters, loop variables, action/CALL outputs, the
+    @INPUT, parameter labels, string contents and comment text are never flagged."""
+    gen = PADGenerator()
+    process = make_process(
+        pages=[BPPage(page_id="P", name="Main Page", is_main=True, stages=[])], name="U"
+    )
+
+    out = gen._flag_unassigned_reads(_UNASSIGNED_FLOW, process, {})
+    flagged = re.findall(r"# TODO: (\w+) is read here", out)
+
+    assert sorted(flagged) == ["txt_Missing", "txt_Missing2"]
+
+
+def test_7e_unassigned_read_check_skips_config_and_env_variables_set_in_load_config() -> None:
+    """Item 4 wiring: a read of a Load Config Data variable (config column or Environment
+    item) is not flagged; a read of an unassigned data item in the same flow is."""
+    gen = PADGenerator()
+    process = _config_main_process(["[ConfigFileData.Sub Folder] & [Support Id] & [Nobody]"])
+    process.pages[0].stages.extend(
+        [_env_data_stage("e1", "Support Id"), _env_data_stage("e2", "Nobody", exposure=None)]
+    )
+    gen.page_target_map["CfgFlow"] = {"config_collection": "ConfigFileData"}
+
+    rendered = gen._generate_consolidated_flow(process, role="performer")
+    flagged = re.findall(r"# TODO: (\w+) is read here", rendered)
+
+    assert flagged == ["txt_Nobody"]
+    assert "BP data item 'Nobody'" in rendered
+
+
+# ── Task 7e item 5: Load Config Data handler flags initialised ──────────────────
+
+
+@pytest.mark.parametrize("role", ["loader", "performer"])
+def test_7e_handler_flags_initialised_in_main_prologue(role: str) -> None:
+    """Item 5: SET flg_Screenshot TO True (reference Loader L16) and SET flg_ConfigError TO
+    False sit in the Main prologue right before the parse and CALL 'Load Config Data'; the
+    FUNCTION's TODO no longer claims they are uninitialised but keeps the 'Get Error' part."""
+    gen = PADGenerator()
+    process = _config_main_process(["[ConfigFileData.Sub Folder]"])
+    gen.page_target_map["CfgFlow"] = {"config_collection": "ConfigFileData"}
+
+    lines = gen._generate_consolidated_flow(process, role=role).splitlines()
+
+    parse_line = "Variables.ConvertJsonToCustomObject Json: In_txt_Config CustomObject=> obj_Config"
+    parse_idx = lines.index(parse_line)
+    assert lines[parse_idx - 2 : parse_idx + 2] == [
+        "SET flg_Screenshot TO True",
+        "SET flg_ConfigError TO False",
+        parse_line,
+        "CALL 'Load Config Data'",
+    ]
+    fn_idx = lines.index("FUNCTION 'Load Config Data' GLOBAL")
+    todo = lines[fn_idx + 1]
+    assert todo.startswith("# TODO: flg_Screenshot and flg_ConfigError")
+    assert "not initialised" not in todo
+    assert "'Get Error'" in todo and "stub" in todo
+    # The flags are assigned before any reader, so no unassigned-read TODO names them.
+    assert not any("flg_Screenshot is read here" in ln for ln in lines)
+
+
+# ── Task 7e item 6: config-variable collision check covers action outputs ───────
+
+
+def test_7e_action_output_writing_config_variable_is_flagged() -> None:
+    """Item 6: `=> txt_X` and `Name=> txt_X` outputs writing a config variable are flagged
+    like a SET; outputs to other variables, comments, and pre-CALL Main-prologue outputs
+    are not."""
+    gen = PADGenerator()
+    gen._current_config_variables = {"txt_MailSubject", "txt_SubFolder"}
+    main = "\n".join(
+        [
+            "Text.Trim Text: txt_A TrimOption: Text.TrimOption.Both TrimmedText=> txt_SubFolder",
+            "CALL 'Load Config Data'",
+            "Text.Trim Text: txt_A TrimOption: Text.TrimOption.Both TrimmedText=> txt_SubFolder",
+            "CALL 'Worker' In_txt_A: txt_A Out_txt_Subject=> txt_MailSubject",
+            "Text.Trim Text: txt_A TrimmedText=> txt_Other",
+            "# comment mentioning => txt_MailSubject",
+        ]
+    )
+    fn = "\n".join(
+        [
+            "FUNCTION 'F' GLOBAL",
+            "    CALL 'Worker' Out_txt_Subject=> txt_MailSubject",
+            "END FUNCTION",
+        ]
+    )
+
+    main_lines = gen._flag_config_variable_writes(main, skip_until_config_call=True).splitlines()
+    fn_lines = gen._flag_config_variable_writes(fn, skip_until_config_call=False).splitlines()
+
+    flagged = [ln for ln in main_lines if ln.startswith("# TODO: this action output overwrites")]
+    assert len(flagged) == 2
+    assert "txt_SubFolder" in flagged[0] and "txt_MailSubject" in flagged[1]
+    assert main_lines[0].startswith("Text.Trim")  # pre-CALL output: not flagged
+    assert main_lines[2].startswith("# TODO: this action output overwrites txt_SubFolder")
+    assert main_lines[3].startswith("Text.Trim")
+    assert fn_lines[1].startswith("    # TODO: this action output overwrites txt_MailSubject")
+
+
+def test_7e_page_call_output_into_config_variable_flagged_in_flow() -> None:
+    """Item 6 end to end: a CALL whose Out_ binding lands in a config variable, rendered
+    after CALL 'Load Config Data', gets the TODO directly before it."""
+    gen = PADGenerator()
+    worker = BPPage(
+        page_id="P_WORK",
+        name="Worker",
+        role="performer",
+        stages=[
+            _annotated_start("w0", []),
+            _annotated_end("w1", [("Folder", "text", "Folder")]),
+            _data_stage("w2", "Folder"),
+        ],
+    )
+    main = BPPage(
+        page_id="P_MAIN",
+        name="Main Page",
+        is_main=True,
+        stages=[
+            _set_var_stage("c0", "Target0", "[ConfigFileData.Sub Folder]", None),
+            _call_stage(
+                "c1", "Call Worker", "P_WORK", {}, outputs_stage_map={"Folder": "Sub Folder"}
+            ),
+            _data_stage("c2", "Sub Folder"),
+        ],
+    )
+    process = make_process(pages=[main, worker], name="CfgFlow")
+    gen.page_target_map["CfgFlow"] = {"config_collection": "ConfigFileData"}
+
+    lines = gen._generate_consolidated_flow(process, role="performer").splitlines()
+
+    call_idx = next(i for i, ln in enumerate(lines) if ln.startswith("CALL 'Worker'"))
+    assert "=> txt_SubFolder" in lines[call_idx]
+    assert lines[call_idx - 1].startswith("# TODO: this action output overwrites txt_SubFolder")
+
+
+# ── Task 7e item 7: Main-body wiring of the collision check ─────────────────────
+
+
+def test_7e_main_body_config_write_before_load_not_flagged_after_is() -> None:
+    """Item 7 (7d fix-pass2 gap 3): through _generate_consolidated_flow, a Main-body write
+    of a config variable *before* CALL 'Load Config Data' (a hoisted Initialise Values
+    init) is not flagged, one *after* it is. Fails if the Main call site's
+    skip_until_config_call=True is flipped (the pre-CALL init would then be flagged too)."""
+    gen = PADGenerator()
+    process = _config_main_process(["[ConfigFileData.Sub Folder]"])
+    # A Main DATA item whose PAD name is the config variable: its init is hoisted to the
+    # top of the Main body, i.e. before CALL 'Load Config Data'.
+    process.pages[0].stages.append(
+        _env_data_stage("d1", "Sub Folder", initial_value='"init"', exposure=None)
+    )
+    process.pages[0].stages.append(_set_var_stage("c9", "txt_SubFolder", '"override"', None))
+    gen.page_target_map["CfgFlow"] = {"config_collection": "ConfigFileData"}
+
+    lines = gen._generate_consolidated_flow(process, role="performer").splitlines()
+
+    call_idx = lines.index("CALL 'Load Config Data'")
+    init_idx = next(i for i, ln in enumerate(lines) if ln.startswith('SET txt_SubFolder TO "init"'))
+    after_idx = lines.index('SET txt_SubFolder TO "override"')
+    assert init_idx < call_idx < after_idx
+    assert not lines[init_idx - 1].startswith("# TODO: this SET overwrites")
+    assert lines[after_idx - 1].startswith("# TODO: this SET overwrites txt_SubFolder")
+    assert sum(ln.startswith("# TODO: this SET overwrites") for ln in lines) == 1

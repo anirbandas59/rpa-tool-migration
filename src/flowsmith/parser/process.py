@@ -194,6 +194,18 @@ def _parse_stage(stage_elem: Any) -> RawStage:
                 always_init_elem = stage_elem.find("alwaysinit")
             always_init = always_init_elem is not None
 
+            # Task 7e item 1: a Data/Collection stage's <exposure> element (values seen
+            # in samples/blueprism/PID_0171.bprelease: "Environment", "Session"; BP also
+            # defines "None"/"Statistic"). Stored as the raw string — §B12 (architecture
+            # doc L730) reads exposure=Environment items from obj_Config. Absent element
+            # (the common case) -> None.
+            exposure_elem = stage_elem.find(_ns("exposure"))
+            if exposure_elem is None:
+                exposure_elem = stage_elem.find("exposure")
+            exposure: str | None = None
+            if exposure_elem is not None and exposure_elem.text and exposure_elem.text.strip():
+                exposure = exposure_elem.text.strip()
+
             data_items.append(
                 RawDataItem(
                     name=name,  # variable name = stage name
@@ -202,6 +214,7 @@ def _parse_stage(stage_elem: Any) -> RawStage:
                     is_input=False,
                     is_output=False,
                     always_init=always_init,
+                    exposure=exposure,
                 )
             )
 

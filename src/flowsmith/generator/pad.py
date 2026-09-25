@@ -99,6 +99,31 @@ CONFIG_INPUT_VAR = "In_txt_Config"
 LOAD_CONFIG_BLOCK_NAME = "Assign values from config"
 LOAD_CONFIG_SCREENSHOT_FLAG = "flg_Screenshot"
 LOAD_CONFIG_ERROR_FLAG = "flg_ConfigError"
+# Task 7e item 2: the BP <exposure> value §B12 (architecture doc L730) reads from
+# obj_Config in 'Load Config Data' (raw string, as stored on BPDataItem.exposure).
+ENVIRONMENT_EXPOSURE = "Environment"
+# Task 7e item 3: a BP data-item reference in an expression — `[Name]` or `[Name.Field]`.
+BP_ITEM_REF_RE = re.compile(r"\[([^\].]+)(\.[^\]]*)?\]")
+# Task 7e item 4: patterns for the read-but-never-assigned check over rendered PAD text.
+# A §A4-prefixed variable (architecture doc §A4 prefix table), optionally as a FUNCTION
+# In_/Out_ parameter name.
+PAD_VARIABLE_RE = re.compile(r"\b(?:In_|Out_)?(?:txt|num|flg|obj|lst|dtb|dtr|dt|ins)_\w+\b")
+PAD_WORD_RE = re.compile(r"\w+")
+# String literals: $'''...''' (may span lines), "..." (may span lines — e.g. the BP mail
+# bodies), '...' (single line).
+PAD_STRING_LITERAL_RE = re.compile(r"\$'''.*?'''|\"[^\"]*\"|'[^'\n]*'", re.DOTALL)
+# The generator's trailing comments (set_variable.robin.j2's `# VERIFY:`, inline TODOs).
+PAD_TRAILING_COMMENT_RE = re.compile(r"\s+# (?:VERIFY|TODO):.*$")
+# FUNCTION header; the name is either '...' or, once masked, "".
+PAD_FUNCTION_HEADER_RE = re.compile(r"^FUNCTION\s+(?:\"\"|'[^']*')\s*(?:GLOBAL)?(.*)$")
+PAD_WRITE_RE = re.compile(r"^SET\s+(\w+)")
+PAD_OUTPUT_RE = re.compile(r"=>\s*(\w+)")
+PAD_OUTPUT_BINDING_RE = re.compile(r"\w*\s*=>\s*\w+")
+PAD_SET_TARGET_RE = re.compile(r"^SET\s+\S+\s+TO\b")
+PAD_PARAM_LABEL_RE = re.compile(r"\b\w+:(?=\s)")
+PAD_LOOP_VAR_RE = re.compile(r"^LOOP\s+(?:FOREACH\s+)?(\w+)\s+(?:IN|FROM)\b")
+PAD_LOOP_HEAD_RE = re.compile(r"^LOOP\s+(?:FOREACH\s+)?\w+\s+(?:IN|FROM)\b")
+PAD_INPUT_DECL_RE = re.compile(r"^@INPUT\s+(\w+)")
 # PAD parameter prefix whose value the reference converts from text before use
 # (Loader L228 `Text.ToNumber Text: obj_Config['App_WaitTime'] Number=> ...`).
 NUMERIC_PARAMETER_PREFIX = "In_num_"
@@ -254,6 +279,12 @@ class PADGenerator:
         # that clobbers one, or a text config value passed into an In_num_ parameter, can
         # be flagged where it is rendered.
         self._current_config_variables: set[str] = set()
+        # Task 7e item 3: the current process's config-read retirement plan (set per role by
+        # _generate_consolidated_flow, see _plan_config_read_retirement) — stage_id ->
+        # replacement text, stage_id -> TODO lines for a kept stage, retired page ids.
+        self._current_config_replacements: dict[str, str] = {}
+        self._current_config_stage_todos: dict[str, list[str]] = {}
+        self._current_retired_config_pages: set[str] = set()
 
     def _get_config_collection_name(self, process: BPProcess) -> str | None:
         """Task 7d item 3: Read the process-level config_collection name from page_target_map.yaml.
@@ -408,6 +439,490 @@ class PADGenerator:
                 )
         return column_map, collision_todos
 
+    @staticmethod
+    def _environment_exposed_items(process: BPProcess) -> list[tuple[BPStage, Any]]:
+        """Task 7e item 2: the process's Environment-exposed DATA items, first-seen order.
+
+        One entry per distinct BP data-item name (case-insensitive) — a name declared on
+        several pages is one BP data item under Task 7b0's all-GLOBAL output.
+
+        Args:
+            process: The BPProcess to scan.
+
+        Returns:
+            (declaring DATA stage, its BPDataItem) pairs whose ``exposure`` is
+            ``"Environment"`` (architecture doc §B12, L730).
+        """
+        seen: set[str] = set()
+        items: list[tuple[BPStage, Any]] = []
+        for page in process.pages:
+            for stage in page.stages:
+                if stage.stage_type != StageType.DATA:
+                    continue
+                for item in stage.data_items:
+                    if item.exposure != ENVIRONMENT_EXPOSURE:
+                        continue
+                    if item.name.lower() in seen:
+                        continue
+                    seen.add(item.name.lower())
+                    items.append((stage, item))
+        return items
+
+    def _build_environment_config_map(
+        self, process: BPProcess, column_map: dict[str, str]
+    ) -> tuple[dict[str, str], list[str]]:
+        """Task 7e item 2: map each Environment-exposed DATA item to its obj_Config read.
+
+        §B12 (architecture doc L730): an ``exposure=Environment`` DATA item emits nothing at
+        its declaration and is read from ``obj_Config['<Key>']`` in ``Load Config Data``.
+        Key rule: the BP data-item name verbatim (the same rule as the config columns, Task
+        7d amendment 1 item 3 — §B12's "§B13's config row" does not exist). The variable is
+        the §A4-prefixed name the body already resolves the item to
+        (``_build_variable_name_mapping``). An item that has a BP initial value keeps its
+        declaration-site init (§B12's "unless it has a BP initial_value") and gets a TODO
+        instead of a read; a variable that collides with a config-column variable (or with
+        another Environment item's) gets one SET plus a TODO naming both sources.
+
+        Args:
+            process: The BPProcess.
+            column_map: The config-column map from ``_build_config_variable_map``.
+
+        Returns:
+            Tuple of (BP data-item name -> PAD variable, for the items to read; TODO lines).
+        """
+        mapping = self._build_variable_name_mapping(process)
+        column_by_var = {var: column for column, var in column_map.items()}
+        env_map: dict[str, str] = {}
+        env_by_var: dict[str, str] = {}
+        todos: list[str] = []
+        for _stage, item in self._environment_exposed_items(process):
+            var_name = mapping.get(item.name.lower()) or self._apply_type_prefix(
+                item.name, self._type_mapper.map_type(item.data_type).pad_type
+            )
+            if item.initial_value:
+                todos.append(
+                    f"# TODO: Environment-exposed BP data item '{item.name}' has a BP initial "
+                    f"value ('{item.initial_value}'), so it is initialised at its declaration "
+                    f"(§B12) and not read from {CONFIG_OBJECT_VAR} — confirm whether "
+                    f"{CONFIG_OBJECT_VAR}['{item.name}'] should override it"
+                )
+                continue
+            if var_name in column_by_var:
+                todos.append(
+                    f"# TODO: Environment-exposed BP data item '{item.name}' and config column "
+                    f"'{column_by_var[var_name]}' both map to {var_name} — only the config "
+                    f"column is assigned above; rename one of them and read "
+                    f"{CONFIG_OBJECT_VAR}['{item.name}'] manually"
+                )
+                continue
+            if var_name in env_by_var:
+                todos.append(
+                    f"# TODO: Environment-exposed BP data items '{env_by_var[var_name]}' and "
+                    f"'{item.name}' both map to {var_name} — only '{env_by_var[var_name]}' is "
+                    "assigned; rename one of them and read the other manually"
+                )
+                continue
+            env_map[item.name] = var_name
+            env_by_var[var_name] = item.name
+        return env_map, todos
+
+    def _render_environment_config_lines(self, process: BPProcess) -> list[str]:
+        """Task 7e item 2: the ``Load Config Data`` lines for Environment-exposed items.
+
+        One ``SET <var> TO obj_Config['<BP name>']`` per readable item (syntax: reference
+        Loader L223/L236), the ``_build_environment_config_map`` TODOs, and one TODO per
+        Environment-exposed item declared in another artefact of the release
+        (``BPProcess.linked_exposed_items``) — those artefacts are not generated, so no read
+        is emitted, but none is dropped silently.
+
+        Args:
+            process: The BPProcess.
+
+        Returns:
+            The lines, in emission order (empty when there is nothing to account for).
+        """
+        column_map, _collision_todos = self._build_config_variable_map(process)
+        env_map, todos = self._build_environment_config_map(process, column_map)
+        set_template = self.env.get_template("actions/set_variable.robin.j2")
+        lines: list[str] = []
+        for bp_name, var_name in env_map.items():
+            if "'" in bp_name:
+                lines.append(
+                    f"# TODO: Environment-exposed BP data item '{bp_name}' contains a single "
+                    f"quote — no confirmed PAD escape for {CONFIG_OBJECT_VAR}['...']; assign "
+                    f"{var_name} manually"
+                )
+                continue
+            verify = (
+                None
+                if var_name.startswith("txt_")
+                else f"{var_name} is read as text from {CONFIG_OBJECT_VAR} — needs a "
+                "conversion first (reference Loader L228 Text.ToNumber)"
+            )
+            lines.append(
+                set_template.render(
+                    var_name=var_name,
+                    value=f"{CONFIG_OBJECT_VAR}['{bp_name}']",
+                    verify_comment=verify,
+                )
+            )
+        lines.extend(todos)
+        for linked in process.linked_exposed_items:
+            if linked.exposure != ENVIRONMENT_EXPOSURE:
+                continue
+            initial = (
+                f" (BP initial value '{linked.initial_value}')" if linked.initial_value else ""
+            )
+            callers = sorted(
+                {
+                    f"'{stage.name}'"
+                    for page in process.pages
+                    for stage in page.stages
+                    if stage.processid == linked.artefact_id
+                    and self._current_config_replacements.get(stage.stage_id)
+                }
+            )
+            called_by = (
+                f" (called by the retired config-read stage {', '.join(callers)})"
+                if callers
+                else ""
+            )
+            lines.append(
+                f"# TODO: Environment-exposed BP data item '{linked.name}'{initial} belongs to "
+                f"'{linked.artefact_name}', another artefact of this release that is not "
+                f"generated here{called_by} — no {CONFIG_OBJECT_VAR} read is emitted for it"
+            )
+        if lines:
+            lines.insert(
+                0,
+                "# §B12 (architecture doc L730): Environment-exposed BP data items, keyed by "
+                "their BP name",
+            )
+        return lines
+
+    @staticmethod
+    def _bp_item_refs(text: str | None) -> set[tuple[str, bool]]:
+        """Task 7e item 3: the BP data items a BP expression references.
+
+        BP references a data item as ``[Name]`` or ``[Name.Field]``.
+
+        Args:
+            text: A BP expression (may be None/empty).
+
+        Returns:
+            ``(lowercase item name, is_field_reference)`` pairs.
+        """
+        if not text:
+            return set()
+        return {
+            (match.group(1).strip().lower(), match.group(2) is not None)
+            for match in BP_ITEM_REF_RE.finditer(text)
+        }
+
+    def _stage_item_reads(self, stage: BPStage) -> set[tuple[str, bool]]:
+        """Task 7e item 3: the BP data items a stage reads (see ``_bp_item_refs``).
+
+        Scans the expression-bearing fields (``params_map`` values except the parser's
+        ``_``-prefixed metadata, decision condition, exception detail, code text) plus
+        ``stage=``-bound input names of non-START stages.
+
+        Args:
+            stage: Any BPStage.
+
+        Returns:
+            ``(lowercase item name, is_field_reference)`` pairs.
+        """
+        reads: set[tuple[str, bool]] = set()
+        texts = [
+            *(value for key, value in stage.params_map.items() if not key.startswith("_")),
+            stage.decision_expression,
+            stage.exception_detail,
+            stage.code_text,
+        ]
+        for text in texts:
+            reads |= self._bp_item_refs(text)
+        if stage.stage_type != StageType.START:
+            reads |= {(name.strip().lower(), False) for name in stage.inputs_stage_map.values()}
+        return {ref for ref in reads if ref[0]}
+
+    @staticmethod
+    def _stage_item_writes(stage: BPStage) -> set[str]:
+        """Task 7e item 3: the BP data items a (non-END) stage writes, lowercase.
+
+        ``stage=``-bound outputs (``outputs_stage_map`` values) and, for a CALCULATION,
+        its assignment targets (``params_map`` keys, collection base name for a dotted one).
+
+        Args:
+            stage: Any BPStage.
+
+        Returns:
+            Lowercase data-item names.
+        """
+        if stage.stage_type == StageType.END:
+            return set()
+        writes = {name.strip().lower() for name in stage.outputs_stage_map.values() if name}
+        if stage.stage_type == StageType.CALCULATION:
+            writes |= {
+                key.split(".", 1)[0].strip().lower()
+                for key in stage.params_map
+                if key and not key.startswith("_")
+            }
+        return writes
+
+    def _config_read_comment(self, name: str, collection: str) -> str:
+        """Task 7e item 3: the one comment a retired config-read stage/page leaves behind.
+
+        Args:
+            name: The BP stage or page name.
+            collection: The declared ``config_collection``.
+
+        Returns:
+            ``# Replaced by Load Config Data: BP '<name>' loaded <collection> from the
+            config file`` (text fixed by the Task 7e spec, item 3).
+        """
+        return (
+            f"# Replaced by {LOAD_CONFIG_FUNCTION_NAME}: BP '{name}' loaded {collection} "
+            "from the config file"
+        )
+
+    def _plan_config_read_retirement(
+        self, process: BPProcess
+    ) -> tuple[dict[str, str], dict[str, list[str]], set[str]]:
+        """Task 7e item 3: find the BP stages/pages made redundant by ``Load Config Data``.
+
+        Data-driven, never by page name. With ``C`` = the declared ``config_collection``
+        plus its path/sheet-name inputs (the items the collection-writing stages read, and
+        the items a collection-writing page tree reads without declaring them):
+
+        - a stage is retired when every item it writes is in ``C`` or never read anywhere
+          else, it writes at least one item of ``C``, and — for a call to a page of this
+          process — the called page tree writes only its own locally declared items and is
+          called from nowhere else;
+        - the called page tree of a retired call is retired with it;
+        - a DATA/COLLECTION declaration (outside a retired page) that would render an init
+          is retired when it declares the collection itself, or an item of ``C`` read only
+          by retired stages/pages.
+
+        Each retired stage/page renders only ``_config_read_comment`` (its own, plus one
+        per inline_block/fold page of its tree, since those render at the call site).
+        Conservative fallbacks, each a ``# TODO`` before the stage rather than a silent
+        change: a stage that writes an item of ``C`` but has another effect is kept; a kept
+        stage that reads an item of ``C`` only retired stages assigned is kept; a stage
+        listed under the process's ``config_read_keep`` in page_target_map.yaml is kept.
+
+        Args:
+            process: The BPProcess.
+
+        Returns:
+            Tuple of (stage_id -> replacement text, ``""`` for a stage on a retired page;
+            stage_id -> TODO lines to emit before a kept stage; retired page ids). All
+            empty when no ``config_collection`` is declared.
+        """
+        collection = self._get_config_collection_name(process)
+        if not collection:
+            return {}, {}, set()
+        coll = collection.lower()
+        process_map = self.page_target_map.get(process.name, {})
+        keep_names = {
+            str(name).lower()
+            for name in (
+                process_map.get("config_read_keep", []) if isinstance(process_map, dict) else []
+            )
+        }
+        pages_by_id = {page.page_id: page for page in process.pages}
+        non_flow = {
+            StageType.DATA,
+            StageType.COLLECTION,
+            StageType.START,
+            StageType.END,
+            *STRUCTURAL_STAGE_TYPES,
+        }
+        located = [(page, stage) for page in process.pages for stage in page.stages]
+        readers: dict[str, list[BPStage]] = {}
+        bare_readers: dict[str, list[BPStage]] = {}
+        writers: dict[str, list[BPStage]] = {}
+        for _page, stage in located:
+            for name, is_field in self._stage_item_reads(stage):
+                readers.setdefault(name, []).append(stage)
+                if not is_field:
+                    bare_readers.setdefault(name, []).append(stage)
+            for name in self._stage_item_writes(stage):
+                writers.setdefault(name, []).append(stage)
+
+        def page_tree(stage: BPStage) -> set[str] | None:
+            """Page ids reachable through ``stage``'s call (None: not an in-process call)."""
+            if not (stage.is_subsheet_call and stage.processid in pages_by_id):
+                return None
+            tree: set[str] = set()
+            pending = [stage.processid]
+            while pending:
+                page_id = pending.pop()
+                if page_id in tree:
+                    continue
+                tree.add(page_id)
+                for inner in pages_by_id[page_id].stages:
+                    if inner.is_subsheet_call and inner.processid in pages_by_id:
+                        pending.append(inner.processid)
+            return tree
+
+        def tree_declared(tree: set[str]) -> set[str]:
+            names: set[str] = set()
+            for page_id in tree:
+                for inner in pages_by_id[page_id].stages:
+                    target = self._data_collection_target_name(inner)
+                    if target:
+                        names.add(target.lower())
+            return names
+
+        def tree_is_self_contained(stage: BPStage, tree: set[str]) -> bool:
+            declared = tree_declared(tree)
+            for page_id in tree:
+                for inner in pages_by_id[page_id].stages:
+                    if not self._stage_item_writes(inner) <= declared:
+                        return False
+            for page, other in located:
+                if (
+                    other is not stage
+                    and other.is_subsheet_call
+                    and other.processid in tree
+                    and page.page_id not in tree
+                ):
+                    return False
+            return True
+
+        # C: the collection plus its path/sheet-name inputs.
+        config_items = {coll}
+        for _page, stage in located:
+            if stage.stage_type in non_flow or coll not in self._stage_item_writes(stage):
+                continue
+            config_items |= {name for name, _field in self._stage_item_reads(stage)}
+            tree = page_tree(stage)
+            if tree:
+                declared = tree_declared(tree)
+                for page_id in tree:
+                    for inner in pages_by_id[page_id].stages:
+                        config_items |= {
+                            name
+                            for name, _field in self._stage_item_reads(inner)
+                            if name not in declared
+                        }
+
+        # A MULTIPLECALCULATION fans out into several BPStages sharing one stage_id; the
+        # retirement decision is taken once per stage_id, on the union of their writes.
+        groups: dict[str, list[BPStage]] = {}
+        for _page, stage in located:
+            if stage.stage_type not in non_flow:
+                groups.setdefault(stage.stage_id, []).append(stage)
+
+        replacements: dict[str, str] = {}
+        todos: dict[str, list[str]] = {}
+        retired_pages: set[str] = set()
+        retired_stages: list[BPStage] = []
+        for stage_id, group in groups.items():
+            stage = group[0]
+            writes = set().union(*(self._stage_item_writes(member) for member in group))
+            touched = writes & config_items
+            if not touched:
+                continue
+            effective = {
+                name
+                for name in writes
+                if any(r.stage_id != stage_id for r in readers.get(name, []))
+            }
+            other = sorted(effective - config_items)
+            tree = page_tree(stage)
+            contained = tree is None or tree_is_self_contained(stage, tree)
+            if stage.name.lower() in keep_names:
+                todos.setdefault(stage.stage_id, []).append(
+                    f"# TODO: BP stage '{stage.name}' writes {collection}/its config inputs "
+                    f"({', '.join(sorted(touched))}) but is kept by config_read_keep in "
+                    f"page_target_map.yaml — confirm it is still needed next to "
+                    f"'{LOAD_CONFIG_FUNCTION_NAME}'"
+                )
+                continue
+            if other or not contained:
+                why = (
+                    f"also writes {', '.join(other)}"
+                    if other
+                    else "calls pages that write shared data items or are called elsewhere"
+                )
+                todos.setdefault(stage.stage_id, []).append(
+                    f"# TODO: BP stage '{stage.name}' writes {collection}/its config inputs "
+                    f"({', '.join(sorted(touched))}) but {why} — kept; review it against "
+                    f"'{LOAD_CONFIG_FUNCTION_NAME}'"
+                )
+                continue
+            retired_stages.extend(group)
+            lines = [self._config_read_comment(stage.name, collection)]
+            for page_id in sorted(tree or set(), key=lambda pid: pages_by_id[pid].name):
+                retired_pages.add(page_id)
+                shape = self._get_page_shape(pages_by_id[page_id].name, process_map).get(
+                    "shape", "function"
+                )
+                if shape in ("inline_block", "fold"):
+                    lines.append(self._config_read_comment(pages_by_id[page_id].name, collection))
+            replacements[stage.stage_id] = "\n".join(lines)
+
+        # Stages on a retired page render nothing of their own: the page is accounted for
+        # by its call site's comment (inline_block/fold) or its FUNCTION-position comment.
+        retired_page_stage_ids = {
+            inner.stage_id for page_id in retired_pages for inner in pages_by_id[page_id].stages
+        }
+        for inner_id in retired_page_stage_ids:
+            replacements[inner_id] = ""
+            todos.pop(inner_id, None)
+        retired_ids = {stage.stage_id for stage in retired_stages} | retired_page_stage_ids
+
+        def only_retired(stages: list[BPStage]) -> bool:
+            return all(s.stage_id in retired_ids for s in stages)
+
+        display = {
+            target.lower(): target
+            for _page, stage in located
+            if (target := self._data_collection_target_name(stage))
+        }
+
+        for page, stage in located:
+            if page.page_id in retired_pages:
+                continue
+            target = self._data_collection_target_name(stage)
+            if not target or target.lower() not in config_items:
+                continue
+            name = target.lower()
+            renders_init = stage.stage_type == StageType.COLLECTION or bool(
+                stage.pa_annotation and stage.pa_annotation.params_map.get("initial_value")
+            )
+            if not renders_init:
+                continue
+            # The collection's own declaration goes once every writer of it is retired
+            # (its column reads are all served by Load Config Data); a path/sheet-name
+            # item's once every reader of it is.
+            if (name == coll and only_retired(writers.get(name, []))) or (
+                name != coll and only_retired(readers.get(name, []))
+            ):
+                replacements[stage.stage_id] = self._config_read_comment(target, collection)
+
+        # A kept stage reading an item that only retired stages assigned.
+        for name in sorted(config_items):
+            item_writers = writers.get(name, [])
+            if not item_writers or not only_retired(item_writers):
+                continue
+            item_readers = bare_readers.get(name, []) if name == coll else readers.get(name, [])
+            for reader in item_readers:
+                if reader.stage_id in replacements:
+                    continue
+                assigned_by = ", ".join(
+                    sorted({f"'{w.name}'" for w in item_writers if w.stage_id in retired_ids})
+                )
+                todos.setdefault(reader.stage_id, []).append(
+                    f"# TODO: BP stage '{reader.name}' reads '{display.get(name, name)}', "
+                    "which only the retired "
+                    f"config-read stage(s) {assigned_by} assigned (replaced by "
+                    f"'{LOAD_CONFIG_FUNCTION_NAME}') — it has no value now; review whether "
+                    "this stage is still needed"
+                )
+        return replacements, todos, retired_pages
+
     def _config_reference_mapping(self, process: BPProcess) -> dict[str, str]:
         """Task 7d item 3: variable-name-mapping entries for BP config-column reads.
 
@@ -435,13 +950,16 @@ class PADGenerator:
         """Task 7d item 3: the Initialise Values config parse + ``CALL 'Load Config Data'``.
 
         Emitted at the top of each role's Main body — reference Loader L24 + L32,
-        Main L35 + L42.
+        Main L35 + L42. Task 7e item 5: preceded by the init of the two flags the
+        ``Load Config Data`` handler sets — ``SET flg_Screenshot TO True`` (reference Loader
+        L16 / Main L23) and ``SET flg_ConfigError TO False`` alongside it (the reference
+        never initialises flg_ConfigError; False is the Task 7e item 5 directive).
 
         Args:
             process: The BPProcess (its config_collection declaration gates emission).
 
         Returns:
-            The two lines joined by a newline, or ``""`` when the process declares no
+            The four lines joined by newlines, or ``""`` when the process declares no
             ``config_collection`` in page_target_map.yaml.
 
         Raises:
@@ -456,9 +974,18 @@ class PADGenerator:
             call_line = self.env.get_template("actions/call_subflow.robin.j2").render(
                 subflow_name=LOAD_CONFIG_FUNCTION_NAME
             )
+            set_template = self.env.get_template("actions/set_variable.robin.j2")
+            flag_inits = [
+                set_template.render(
+                    var_name=LOAD_CONFIG_SCREENSHOT_FLAG, value="True", verify_comment=None
+                ),
+                set_template.render(
+                    var_name=LOAD_CONFIG_ERROR_FLAG, value="False", verify_comment=None
+                ),
+            ]
         except Exception as e:
             raise GenerationError(f"Failed to render the Load Config Data prologue: {e}") from e
-        return f"{parse_line}\n{call_line}"
+        return "\n".join([*flag_inits, parse_line, call_line])
 
     def _render_load_config_function(self, process: BPProcess) -> str:
         """Task 7d item 3: synthesise ``FUNCTION 'Load Config Data' GLOBAL``.
@@ -507,9 +1034,8 @@ class PADGenerator:
                     f"# TODO: no [{collection}.<column>] references found in the BP process "
                     "— nothing to load"
                 )
-            # §B12 (architecture doc L730) Environment-exposed DATA items are not emitted
-            # here: the AST does not carry BP <exposure> yet, so which items qualify is
-            # unknowable — deferred to the Task 7d follow-up (amendment 2 item 6).
+            # Task 7e item 2: §B12 (architecture doc L730) Environment-exposed DATA items.
+            body.extend(self._render_environment_config_lines(process))
 
             # Reference Loader L214-L220: the handler flags a config error, logs through
             # 'Get Error' and re-throws.
@@ -530,17 +1056,16 @@ class PADGenerator:
                 typed_handlers=[],
                 catchall_actions=catchall_actions,
             )
-            # Neither flag is otherwise generated: the reference initialises
-            # flg_Screenshot in Initialise Values (Loader L16 / Main L23) and reads it in
-            # its real 'Get Error' (Loader L163); flg_ConfigError is only ever set, here,
-            # in both reference files. The generated 'Get Error' is the §A3 stub.
+            # Task 7e item 5: both flags are initialised in the Main prologue
+            # (_render_config_prologue, reference Loader L16). What stays open is their
+            # reader: the reference's real 'Get Error' (Loader L163) reads flg_Screenshot,
+            # but the generated 'Get Error' is the §A3 stub.
             flags_todo = (
                 f"# TODO: {LOAD_CONFIG_SCREENSHOT_FLAG} and {LOAD_CONFIG_ERROR_FLAG} (set by "
-                "the handler below, reference Loader L216-L217) are not initialised in this "
-                f"generated flow — the reference initialises {LOAD_CONFIG_SCREENSHOT_FLAG} in "
-                "Initialise Values (Loader L16) and reads it in its real 'Get Error' (Loader "
-                "L163), which is generated only as a stub here; wire both when 'Get Error' "
-                "is implemented"
+                "the handler below, reference Loader L216-L217) are read by nothing yet — the "
+                f"reference's real 'Get Error' reads {LOAD_CONFIG_SCREENSHOT_FLAG} (Loader "
+                "L163), but 'Get Error' is generated only as a stub here; wire both when "
+                "'Get Error' is implemented"
             )
             # Reference shape: handler section closed by END, then the protected body,
             # then the BLOCK's own END (Loader L220 / L272) — same layout as the coarse
@@ -556,12 +1081,13 @@ class PADGenerator:
             raise GenerationError(f"Failed to render FUNCTION 'Load Config Data': {e}") from e
 
     def _flag_config_variable_writes(self, content: str, skip_until_config_call: bool) -> str:
-        """Task 7d amendment 2 item 4: flag a SET that would clobber a config value.
+        """Task 7d amendment 2 item 4: flag a write that would clobber a config value.
 
-        A ``SET`` outside ``FUNCTION 'Load Config Data'`` whose target is also one of its
-        ``txt_`` variables overwrites the global config value for every later reader, so a
-        ``# TODO`` is inserted directly before it (same indentation). Other name overlaps —
-        reads, or SETs that run before the config is loaded — are not flagged.
+        A ``SET`` — or (Task 7e item 6) an action/CALL output ``=> <var>`` — outside
+        ``FUNCTION 'Load Config Data'`` whose target is also one of its variables overwrites
+        the global config value for every later reader, so a ``# TODO`` is inserted directly
+        before it (same indentation). Other name overlaps — reads, or writes that run before
+        the config is loaded — are not flagged.
 
         Args:
             content: Rendered PAD text of a Main body or a FUNCTION (never the
@@ -586,15 +1112,152 @@ class PADGenerator:
                     armed = True
                 out.append(line)
                 continue
+            indent = line[: len(line) - len(line.lstrip())]
             match = re.match(r"SET (\S+) TO ", stripped)
             if match and match.group(1) in config_vars:
-                indent = line[: len(line) - len(line.lstrip())]
                 out.append(
                     f"{indent}# TODO: this SET overwrites {match.group(1)}, which "
                     f"'{LOAD_CONFIG_FUNCTION_NAME}' assigns from {CONFIG_OBJECT_VAR} — every "
                     "later reader gets this value instead of the config value; rename one of "
                     "them or confirm the overwrite is intended"
                 )
+            # Task 7e item 6: an action/CALL output bound to a config variable
+            # (`=> txt_X`, `Name=> txt_X`) overwrites it just the same.
+            if not stripped.startswith("#"):
+                for target in dict.fromkeys(PAD_OUTPUT_RE.findall(stripped)):
+                    if target in config_vars:
+                        out.append(
+                            f"{indent}# TODO: this action output overwrites {target}, which "
+                            f"'{LOAD_CONFIG_FUNCTION_NAME}' assigns from {CONFIG_OBJECT_VAR} — "
+                            "every later reader gets this value instead of the config value; "
+                            "rename one of them or confirm the overwrite is intended"
+                        )
+            out.append(line)
+        return "\n".join(out)
+
+    @staticmethod
+    def _mask_pad_strings(text: str) -> tuple[str, list[bool]]:
+        """Task 7e item 4: blank out comments and string literals in rendered PAD text.
+
+        Whole-line comments and the generator's trailing ``# VERIFY:``/``# TODO:`` comments
+        are removed, then every string literal (``PAD_STRING_LITERAL_RE``, possibly spanning
+        lines) is replaced by ``""`` plus the newlines it contained, so line numbers hold.
+
+        Args:
+            text: Rendered PAD text.
+
+        Returns:
+            Tuple of (masked text, per line: True when the line starts inside a string that
+            began on an earlier line, i.e. it continues the previous statement).
+        """
+        stripped_lines = [
+            "" if line.strip().startswith("#") else PAD_TRAILING_COMMENT_RE.sub("", line)
+            for line in text.split("\n")
+        ]
+        joined = "\n".join(stripped_lines)
+        continuation = [False] * len(stripped_lines)
+        pieces: list[str] = []
+        last = 0
+        for match in PAD_STRING_LITERAL_RE.finditer(joined):
+            pieces.append(joined[last : match.start()])
+            newline_count = match.group(0).count("\n")
+            first_line = joined.count("\n", 0, match.start())
+            for offset in range(1, newline_count + 1):
+                continuation[first_line + offset] = True
+            pieces.append('""' + "\n" * newline_count)
+            last = match.end()
+        pieces.append(joined[last:])
+        return "".join(pieces), continuation
+
+    def _flag_unassigned_reads(
+        self, content: str, process: BPProcess, variable_name_mapping: dict[str, str]
+    ) -> str:
+        """Task 7e item 4: TODO every PAD variable that is read but never given a value.
+
+        A §A4-prefixed variable has a value anywhere in the flow when it is a ``SET``
+        target, an action/CALL output (``=> var``), a ``LOOP`` variable, a FUNCTION
+        parameter (every ``In_``/``Out_`` name in a FUNCTION header) or the flow's
+        ``@INPUT`` — FUNCTIONs are all GLOBAL (Task 7b0), so this is one flow-wide set, and
+        ``Load Config Data``'s SETs count like any other. Every other read (outside comments
+        and string literals; ``Name:`` parameter labels and ``Name=> var`` output bindings
+        are not reads) gets a ``# TODO`` before its statement naming the BP data item the
+        variable came from. Names compare case-insensitively.
+
+        Args:
+            content: The complete rendered flow.
+            process: The BPProcess (for the BP data items' original-case names).
+            variable_name_mapping: Lowercase BP data-item name -> PAD variable name.
+
+        Returns:
+            ``content`` with the TODO lines inserted.
+        """
+        masked, continuation = self._mask_pad_strings(content)
+        masked_lines = masked.split("\n")
+        content_lines = content.split("\n")
+        assigned: set[str] = set()
+        for line in masked_lines:
+            code = line.strip()
+            header = PAD_FUNCTION_HEADER_RE.match(code)
+            if header:
+                assigned |= {name.lower() for name in PAD_WORD_RE.findall(header.group(1))}
+                continue
+            assigned |= {name.lower() for name in PAD_WRITE_RE.findall(code)}
+            assigned |= {name.lower() for name in PAD_OUTPUT_RE.findall(code)}
+            assigned |= {name.lower() for name in PAD_LOOP_VAR_RE.findall(code)}
+            assigned |= {name.lower() for name in PAD_INPUT_DECL_RE.findall(code)}
+
+        declared = {
+            target.lower(): target
+            for page in process.pages
+            for stage in page.stages
+            if (target := self._data_collection_target_name(stage))
+        }
+        bp_names: dict[str, str] = {}
+        for bp_name, pad_name in variable_name_mapping.items():
+            bp_names.setdefault(pad_name.lower(), declared.get(bp_name, bp_name))
+
+        todos_before: dict[int, list[str]] = {}
+        for index, line in enumerate(masked_lines):
+            code = line.strip()
+            if not code or code.startswith("@") or PAD_FUNCTION_HEADER_RE.match(code):
+                continue
+            for pattern in (
+                PAD_OUTPUT_BINDING_RE,
+                PAD_SET_TARGET_RE,
+                PAD_PARAM_LABEL_RE,
+                PAD_LOOP_HEAD_RE,
+            ):
+                code = pattern.sub(" ", code)
+            unassigned = sorted(
+                {name for name in PAD_VARIABLE_RE.findall(code) if name.lower() not in assigned},
+                key=str.lower,
+            )
+            if not unassigned:
+                continue
+            start = index
+            while start > 0 and continuation[start]:
+                start -= 1
+            # Above the statement's own comment block (e.g. its # VERIFY marker), which must
+            # stay directly adjacent to it.
+            while start > 0 and content_lines[start - 1].strip().startswith("#"):
+                start -= 1
+            for name in unassigned:
+                bp_name = bp_names.get(name.lower())
+                source = f"BP data item '{bp_name}'" if bp_name else "no BP data item maps to it"
+                todo = (
+                    f"# TODO: {name} is read here but never assigned, initialised, passed in "
+                    f"or set by '{LOAD_CONFIG_FUNCTION_NAME}' in this flow ({source}) — it has "
+                    "no value; assign it or remove the read"
+                )
+                if todo not in todos_before.setdefault(start, []):
+                    todos_before[start].append(todo)
+        if not todos_before:
+            return content
+        out: list[str] = []
+        for index, line in enumerate(content_lines):
+            if index in todos_before:
+                indent = line[: len(line) - len(line.lstrip())]
+                out.extend(f"{indent}{todo}" for todo in todos_before[index])
             out.append(line)
         return "\n".join(out)
 
@@ -823,6 +1486,20 @@ class PADGenerator:
             # this role's ownership before rendering anything (Main's own body can
             # itself inline a page that declares one), so
             # self._current_role_once_only_names is in effect for the whole role.
+            #
+            # Task 7e item 3: the config-read retirement plan is in effect for the whole
+            # role too (set before the once-only hoist below, which renders stages) —
+            # restored in the finally at the end of this method.
+            previous_retirement = (
+                self._current_config_replacements,
+                self._current_config_stage_todos,
+                self._current_retired_config_pages,
+            )
+            (
+                self._current_config_replacements,
+                self._current_config_stage_todos,
+                self._current_retired_config_pages,
+            ) = self._plan_config_read_retirement(process)
             role_by_name = self._build_non_alwaysinit_role_map(process)
             once_only_sources, once_only_conflict_todos = self._collect_role_once_only_sources(
                 pages_for_role, process_map, variable_name_mapping, role_by_name
@@ -841,7 +1518,12 @@ class PADGenerator:
                     once_only_names.add(target_name.lower())
             self._current_role_once_only_names = once_only_names
             previous_config_variables = self._current_config_variables
-            self._current_config_variables = set(config_column_map.values())
+            env_config_map, _env_todos = self._build_environment_config_map(
+                process, config_column_map
+            )
+            self._current_config_variables = set(config_column_map.values()) | (
+                set(env_config_map.values()) if self._get_config_collection_name(process) else set()
+            )
             try:
                 # Render main page content (split by role)
                 if main_page:
@@ -913,6 +1595,15 @@ class PADGenerator:
                         # parameterization)
                         continue
 
+                    # Task 7e item 3: a page retired with its config-read call leaves only
+                    # its comment where its FUNCTION would have been.
+                    if page.page_id in self._current_retired_config_pages:
+                        collection = self._get_config_collection_name(process) or ""
+                        lines.append(self._config_read_comment(page.name, collection))
+                        lines.append("")
+                        seen_function_names.add(resolved_target_name)
+                        continue
+
                     page_content = self._render_page_in_consolidated_flow(
                         page, process, process_map, variable_name_mapping
                     )
@@ -948,10 +1639,19 @@ class PADGenerator:
             finally:
                 self._current_role_once_only_names = previous_role_once_only
                 self._current_config_variables = previous_config_variables
+                (
+                    self._current_config_replacements,
+                    self._current_config_stage_todos,
+                    self._current_retired_config_pages,
+                ) = previous_retirement
 
             # Only return if we have content beyond the header
             if len(lines) > 3:  # header + banner lines + empty line
-                return "\n".join(lines).rstrip("\n") + "\n"
+                # Task 7e item 4: a variable read but never given a value gets a TODO.
+                content = self._flag_unassigned_reads(
+                    "\n".join(lines), process, variable_name_mapping
+                )
+                return content.rstrip("\n") + "\n"
 
             return ""
 
@@ -1135,6 +1835,11 @@ class PADGenerator:
         Returns:
             Rendered Robin content, or empty string if not applicable to this role.
         """
+        # Task 7e item 3: a retired config-read stage leaves its comment in every role's
+        # Main body (its call target's role no longer matters — nothing is called).
+        if self._current_config_replacements.get(stage.stage_id):
+            return self._render_stage(stage, process, process_map, variable_name_mapping)
+
         # Check if this is a SubSheet/Process call that targets a different role
         if stage.is_subsheet_call:
             # Look up the target page to determine its role
@@ -1145,7 +1850,17 @@ class PADGenerator:
                 return ""
 
             # Call targets the same role, render it
-            return self._render_call_or_inline(stage, process, process_map, variable_name_mapping)
+            rendered = self._render_call_or_inline(
+                stage, process, process_map, variable_name_mapping
+            )
+            # Task 7e item 3: a kept config-read call's TODO (non-call stages get theirs
+            # from _render_stage).
+            stage_todos = self._current_config_stage_todos.get(stage.stage_id)
+            if stage_todos:
+                rendered = (
+                    "\n".join([*stage_todos, rendered]) if rendered else "\n".join(stage_todos)
+                )
+            return rendered
 
         # Non-call stages are rendered normally
         # Pass process and process_map for SubSheet call resolution
@@ -3308,6 +4023,44 @@ class PADGenerator:
         process_map: dict[str, Any] | None = None,
         variable_name_mapping: dict[str, str] | None = None,
     ) -> str:
+        """Render a single stage, applying the Task 7e config-read retirement plan first.
+
+        A stage retired by ``_plan_config_read_retirement`` renders only its replacement
+        comment (``""`` for a stage on a retired page, or for a retired declaration already
+        hoisted elsewhere); a kept stage the plan flagged gets its ``# TODO`` lines before
+        its normal rendering (``_render_stage_core``).
+
+        Args:
+            stage: An annotated BPStage.
+            process: Optional BPProcess (used for SubSheet call resolution).
+            process_map: Optional process entry from page_target_map.yaml.
+            variable_name_mapping: Optional dict mapping lowercase BP names to PAD names.
+
+        Returns:
+            One or more Robin lines as a string.
+
+        Raises:
+            GenerationError: If pa_annotation is None (see ``_render_stage_core``).
+        """
+        replacement = self._current_config_replacements.get(stage.stage_id)
+        if replacement is not None:
+            target = self._data_collection_target_name(stage)
+            if target and target.lower() in self._current_suppress_init_names:
+                return ""  # hoisted: the comment renders once, at the hoisted position
+            return replacement
+        rendered = self._render_stage_core(stage, process, process_map, variable_name_mapping)
+        stage_todos = self._current_config_stage_todos.get(stage.stage_id)
+        if stage_todos:
+            return "\n".join([*stage_todos, rendered]) if rendered else "\n".join(stage_todos)
+        return rendered
+
+    def _render_stage_core(
+        self,
+        stage: BPStage,
+        process: BPProcess | None = None,
+        process_map: dict[str, Any] | None = None,
+        variable_name_mapping: dict[str, str] | None = None,
+    ) -> str:
         """Render a single stage to Robin action line(s).
 
         Dispatches on pa_annotation.band and target_type for every stage that
@@ -3503,8 +4256,8 @@ class PADGenerator:
             elif stage.stage_type in (StageType.DATA, StageType.COLLECTION):
                 # No bp_expr and this is a DATA/COLLECTION stage with no initial_value
                 # Per §B12 L730: emit nothing at declaration time. (An
-                # Environment-exposed one belongs in 'Load Config Data' instead; the AST
-                # does not carry BP <exposure> yet — deferred to the Task 7d follow-up.)
+                # Environment-exposed one is read in 'Load Config Data' instead — Task 7e
+                # item 2, _render_environment_config_lines.)
                 return ""
             else:
                 # CALCULATION stage with no BP expression at all: nothing to translate,
