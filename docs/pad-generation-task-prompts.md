@@ -1710,6 +1710,74 @@ User-approved decisions for the final pass:
 
 ---
 
+## Task 7e — config follow-up: Environment exposure, redundant config-read stages, `Load Config Data` hardening
+
+**Depends on:** Task 7d (`Load Config Data`, `obj_Config` parse and `config_collection` mapping exist)
+**Files in scope:** `src/flowsmith/parser/process.py`, `src/flowsmith/ast/models.py`,
+`src/flowsmith/ast/builder.py` (exposure capture only), `src/flowsmith/generator/pad.py`,
+`mapping/page_target_map.yaml`, and the matching tests (`tests/parser/test_process.py`,
+`tests/ast/test_models.py`, `tests/ast/test_builder.py`, `tests/generator/test_pad.py`,
+`tests/e2e/test_pid171_pipeline.py`)
+**Required reading:** `docs/bp-to-pad-architecture-PID171.md` §A4 and §B12's `COLLECTION`/`DATA`
+row (L730); the Task 7d section of this file including both amendments (the user's `Load Config Data`
+design); `docs/reviews/7d-2026-09-25-fixpass.md` and `docs/reviews/7d-2026-09-25-fixpass2.md` (the
+gaps this task closes); reference Loader L16 (`SET flg_Screenshot TO True`), L24/L32, L213–273.
+
+**Do (independent items — implement and test each separately):**
+1. **Capture BP data-item exposure.** The parser/AST currently drop `<exposure>` (7d fix-pass review:
+   `BPDataItem`/`BPStage` have no field for it). Add it to the model and parse it for DATA and
+   COLLECTION stages (values seen in BP: `None`, `Environment`, `Session`, `Statistic`; store the raw
+   string, don't invent an enum beyond what the sample contains). PID_0171 has 11 Environment-exposed
+   items (9 with no initial value) — assert that count in a test against the real sample.
+2. **Read Environment-exposed DATA items from `obj_Config` (§B12 L730).** Each one becomes one more
+   `SET <§A4-prefixed name> TO obj_Config['<key>']` inside `Load Config Data` instead of emitting
+   nothing. **Key rule:** the BP data-item name verbatim — the same rule as 7d amendment 1 item 3 for
+   config columns (§B12 cites "§B13's config row", which does not exist, so there is no other
+   documented rule). If an Environment item's variable name collides with a config-column variable,
+   emit one `SET` and a `# TODO` naming both sources rather than two conflicting `SET`s. Declaration
+   sites still emit nothing (§B12).
+3. **Retire the redundant BP config-read stages.** With `Load Config Data` supplying config, the BP
+   stages that load the config file into `config_collection` are dead weight in the generated
+   flows: Loader `ConvertConfigFile As Collection` (inlined as `… - Copy`, Excel read on a placeholder
+   path), Performer `Download Config File from SharePoint` (leftover template comment), and the
+   `SET dtb_ConfigFileData TO DataTable.Create()` / `SET txt_ConfigFileSheetName TO Input` inits.
+   Identify them *data-driven* — stages/pages whose only effect is writing the declared
+   `config_collection` (or its sheet-name/path inputs) — never by hardcoded page name; declare any
+   per-process override in `mapping/page_target_map.yaml`. Replace each with a single
+   `# Replaced by Load Config Data: BP '<page/stage name>' loaded <config_collection> from the config
+   file` comment, so nothing is dropped silently.
+4. **Unassigned config-shaped reads.** `txt_GenericSupportTeamEmailID` is read (Performer ~L316) but
+   never assigned. Trace its BP source: if it is a `config_collection` column or an Environment item
+   that 7d's scan missed, fix the scan so it lands in `Load Config Data`; otherwise emit a `# TODO`
+   at the read naming the BP data item and why it has no value. Generalise: report (as a `# TODO`)
+   any PAD variable that is read but never assigned, initialised, passed in, or set by
+   `Load Config Data`.
+5. **Initialise the `Load Config Data` handler flags.** `flg_Screenshot` (reference Loader L16
+   `SET flg_Screenshot TO True`) and `flg_ConfigError` are set in the handler but never initialised.
+   Emit their init in the Main prologue per the reference (L16 for `flg_Screenshot`; `flg_ConfigError`
+   to `False` alongside it) and drop the corresponding part of 7d's `# TODO`. Leave the `Get Error`
+   stub's `# TODO` in place (its real body is out of scope — see below).
+6. **Collision check covers action outputs (7d fix-pass2 gap 2).** `_flag_config_variable_writes`
+   only matches `SET` lines. Extend it to any action output that writes a `Load Config Data` variable
+   (`=> txt_<X>` / `Name=> txt_<X>`), with the same Main-prologue exemption.
+7. **Test the Main-body wiring of the collision check (7d fix-pass2 gap 3).** Add an integration test
+   through `_generate_consolidated_flow`: a config-variable write *before* `CALL 'Load Config Data'`
+   is not flagged, one *after* it is. It must fail if `skip_until_config_call` is flipped (the one
+   revert the 7d reviewer found survived every existing test).
+
+**Done when:** regenerating `PID_0171.bprelease` shows the 11 Environment items handled per §B12
+(9 no-initial-value ones read in `Load Config Data`, none silently absent); none of the item-3
+config-read stages render as live actions, each leaves its `Replaced by Load Config Data` comment;
+no PAD variable is read without being assigned or TODO-flagged; `flg_Screenshot`/`flg_ConfigError`
+are initialised; items 6–7 have tests that fail when their fix is reverted.
+
+**Out of scope:** the real `Get Error` FUNCTION body (error-handling pipeline, Tasks 5c/7b territory);
+`Text.ToNumber` conversions for numeric config values (7d emits `# VERIFY` — keep it); the
+per-page-path Cloud Flow `<Definition>` loss from 7d fix-pass2 gap 1 (awaiting a user decision:
+raise, limit the omission to the orchestrator, or retire the per-page path).
+
+---
+
 ## Task 8 — `reporter/`: developer-facing AUTO/SPOT-CHECK/MANUAL coverage report
 
 **Why this task exists (context, not part of the PID_171 output itself):** PID_171 is the pilot
