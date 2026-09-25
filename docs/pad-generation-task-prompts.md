@@ -1728,7 +1728,7 @@ gaps this task closes); reference Loader L16 (`SET flg_Screenshot TO True`), L24
    `BPDataItem`/`BPStage` have no field for it). Add it to the model and parse it for DATA and
    COLLECTION stages (values seen in BP: `None`, `Environment`, `Session`, `Statistic`; store the raw
    string, don't invent an enum beyond what the sample contains). PID_0171 has 11 Environment-exposed
-   items (9 with no initial value) — assert that count in a test against the real sample.
+   items (7 with no initial value — corrected from 9 by the 7e review; 3 on the main process, 8 on the called RPA_Sharepoint_API_ConfigFile_Download) — assert that count in a test against the real sample.
 2. **Read Environment-exposed DATA items from `obj_Config` (§B12 L730).** Each one becomes one more
    `SET <§A4-prefixed name> TO obj_Config['<key>']` inside `Load Config Data` instead of emitting
    nothing. **Key rule:** the BP data-item name verbatim — the same rule as 7d amendment 1 item 3 for
@@ -1766,7 +1766,7 @@ gaps this task closes); reference Loader L16 (`SET flg_Screenshot TO True`), L24
    revert the 7d reviewer found survived every existing test).
 
 **Done when:** regenerating `PID_0171.bprelease` shows the 11 Environment items handled per §B12
-(9 no-initial-value ones read in `Load Config Data`, none silently absent); none of the item-3
+(main-process ones read in `Load Config Data`, linked-process ones TODO-flagged, none silently absent); none of the item-3
 config-read stages render as live actions, each leaves its `Replaced by Load Config Data` comment;
 no PAD variable is read without being assigned or TODO-flagged; `flg_Screenshot`/`flg_ConfigError`
 are initialised; items 6–7 have tests that fail when their fix is reverted.
