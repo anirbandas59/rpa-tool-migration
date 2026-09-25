@@ -1631,6 +1631,83 @@ unfilled template skeleton.
 Task 5b's/7a's/7b's job depending on which construct) — this task only fixes how the *failure* is
 reported when it does happen.
 
+### Task 7d amendment (2026-09-25) — decisions after first review (`docs/reviews/7d-2026-09-25.md`, 58%)
+
+**Item 3 redesigned (user decision).** `Load Config Data` is not a BP page, so a
+`page_target_map.yaml` page entry cannot produce it (the first pass's entry is never consulted —
+remove it). In BP, PID_171 reads the config file into the collection `ConfigFileData` and every
+config value is read by dot notation (`[ConfigFileData.MailBoxName]`,
+`[ConfigFileData.Sender_MailID]`, …). PAD follows the same pattern:
+1. Main body, Initialise Values region: `Variables.ConvertJsonToCustomObject Json: In_txt_Config
+   CustomObject=> obj_Config` (reference Loader L24 / Main L35), then `CALL 'Load Config Data'`
+   (Loader L32 / Main L42) — in both Loader and Performer.
+2. `FUNCTION 'Load Config Data' GLOBAL` (Loader L213 / Main L118) holds one
+   `SET txt_<Name> TO obj_Config['<BP column>']` per config column (syntax: Loader L223, L236).
+3. **Never invent variables.** The column set is exactly the distinct `[ConfigFileData.<X>]`
+   references in the BP release (the collection declares no fields — they're loaded at runtime;
+   37 on PID_0171). The JSON key is the BP column name verbatim; the variable name is the §A4 `txt_`
+   prefix + the column name with non-alphanumerics removed (e.g. `Sender_MailID` →
+   `txt_SenderMailID`). All `txt_` — the BP columns are untyped, so no numeric conversion is guessed.
+4. Every body read of `[ConfigFileData.<X>]` resolves to that same variable (not
+   `dtb_ConfigFileData.<X>`).
+5. Which BP collection is the config source is declared per process in `mapping/page_target_map.yaml`
+   (e.g. `config_collection: ConfigFileData`) — not hardcoded in Python — so the other ~199
+   automations can name theirs.
+6. The Task 7c header TODO ("that parse is not generated yet") must be updated to match.
+
+**Item 2 scope widened:** `templates/report/customizations_workflows.xml.j2` (the only place that
+writes `<Definition>`) so Cloud Flow (Category 5) entries carry no inline `<Definition>`, per §A1.
+
+**Items 1 and 4 fix pass (no design change):** item 1 — no silent discard of Cloud Flow files in
+`packager.py` (raise a typed error if the consolidated path is handed any), drop the stale
+`generate_process()` call in `tests/e2e/test_pid171_pipeline.py`, add a regression test. Item 4 —
+the `# TODO: could not translate BP expression '<raw>' on stage '<name>' — needs manual
+completion` line *replaces* the placeholder/skeleton (no `%SomeVar%` left); a DATA item with no
+initial value follows §B12 (architecture doc L730), not a translation-failure TODO; test the real
+translator-failure branches.
+
+**Files in scope (amended):** the original four, plus `templates/report/customizations_workflows.xml.j2`,
+`templates/pad/flow_header.robin.j2`, and the matching test files (`tests/cli/test_app.py`,
+`tests/generator/test_packager.py`, `tests/generator/test_pad.py`, `tests/e2e/test_pid171_pipeline.py`).
+
+**Done when (amended item 3):** both generated flows contain the parse, `CALL 'Load Config Data'`,
+and a `FUNCTION 'Load Config Data'` with exactly one `SET` per referenced BP config column, and no
+body line still reads `dtb_ConfigFileData.`.
+
+### Task 7d amendment 2 (2026-09-25) — decisions after fix-pass review (`docs/reviews/7d-2026-09-25-fixpass.md`, 84%)
+
+User-approved decisions for the final pass:
+1. **Tests for items 1 and 2 (gap 1):** packager raises the typed error when the consolidated path
+   is handed Cloud Flow files; Category 5 entries carry no `<Definition>`; the Cloud Flow
+   `<JsonFileName>` payload is the real Logic App definition (e.g. has a `definition` key with
+   `triggers`/`actions`), not the hollow `{"package": ""}` stub. Each test must fail if its fix is
+   reverted.
+2. **Error wrapper (gap 2):** wrap the `Load Config Data` body in
+   `BLOCK 'Assign values from config'` / `ON BLOCK ERROR` exactly as reference Loader L214–220
+   (set `flg_Screenshot`/`flg_ConfigError`, `CALL 'Get Error'`, `THROW ERROR`), rendered via the
+   existing `templates/pad/actions/error_block.robin.j2` (extend it only if it cannot express this).
+3. **Parse line as a template (gap 4):** move `CONFIG_PARSE_LINE` out of Python into a new
+   `templates/pad/actions/convert_json.robin.j2` (CLAUDE.md: templates live in `templates/`).
+4. **Name-collision policy (gap 5):** emit a `# TODO` only where a rendered FUNCTION/page `SET`s a
+   variable that is also a `Load Config Data` variable (it would clobber the global config value) —
+   not for every name overlap.
+5. **Minor items:** the packager must raise a typed error (not silently write the raw string) when
+   the Cloud Flow JSON does not decode; remove the stale `packager.py` comment and the empty
+   `cloudflow/` output folder the CLI creates; a text config value passed into an `In_num_`
+   parameter gets a `# VERIFY` comment naming the needed conversion (`Text.ToNumber`, reference
+   Loader L228); remove the redundant `import re`; the `[<collection>.<X>]` scan also covers
+   exception-detail and code-stage text; the generic `# TODO: §B12` line is emitted only when the
+   process actually has Environment-exposed DATA items (if exposure isn't knowable yet, drop the
+   generic line and leave that to the follow-up task).
+6. **Deferred to a new follow-up task (gap 3):** capturing BP `<exposure>` in the parser/AST and
+   reading Environment-exposed DATA items from `obj_Config` per §B12; retiring the now-redundant BP
+   config-read stages (Loader `ConvertConfigFile As Collection`, Performer `Download Config File from
+   SharePoint`, `SET txt_ConfigFileSheetName TO Input`); `txt_GenericSupportTeamEmailID` read but
+   never assigned. Not part of 7d.
+
+**Files in scope (amended 2):** the amendment-1 list plus
+`templates/pad/actions/convert_json.robin.j2` (new) and `templates/pad/actions/error_block.robin.j2`.
+
 ---
 
 ## Task 8 — `reporter/`: developer-facing AUTO/SPOT-CHECK/MANUAL coverage report
