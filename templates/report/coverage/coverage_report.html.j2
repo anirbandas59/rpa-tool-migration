@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+{#
+  Flowsmith developer-facing coverage report (Task 8).
+  Rendered by flowsmith.reporter.html_report.CoverageHtmlRenderer from a
+  flowsmith.reporter.models.CoverageReport. Every number here comes from
+  engine.scorer / engine.flag_index; this template only presents it.
+  Band meanings are CLAUDE.md's "Confidence band reference" table, verbatim.
+#}
+{% set band_meaning = {
+  "AUTO": {"range": ">= 0.90", "label": "AUTO", "output": "Full code, no TODO markers", "action": "Trust"},
+  "SPOT_CHECK": {"range": "0.70-0.89", "label": "SPOT-CHECK", "output": "Full code + inline comment to verify", "action": "Quick check"},
+  "PARTIAL": {"range": "0.50-0.69", "label": "PARTIAL", "output": "Scaffold + TODO: complete this block", "action": "Complete by hand"},
+  "MANUAL": {"range": "< 0.50", "label": "MANUAL", "output": "Stub only + ReviewFlag(severity=error)", "action": "Build by hand"},
+} %}
+{% macro band_badge(band) -%}
+<span class="badge band-{{ band }}">{{ band_meaning[band].label if band in band_meaning else band }}</span>
+{%- endmacro %}
+{% macro stage_context(s) %}
+<table class="kv">
+  <tr><th>Page</th><td>{{ s.page_name }}{% if s.is_main_page %} <em>(main page)</em>{% endif %}{% if s.page_role %} &middot; role: {{ s.page_role }}{% endif %}</td></tr>
+  <tr><th>Stage</th><td><strong>{{ s.stage_name }}</strong> &middot; {{ s.stage_type }} &middot; <code>{{ s.stage_id }}</code></td></tr>
+  <tr><th>Narrative</th><td>{{ s.narrative if s.narrative else "(none in BP)" }}</td></tr>
+  {% if s.vbo_object %}
+  <tr><th>VBO / method</th><td><code>{{ s.vbo_object }}</code> &rarr; <code>{{ s.vbo_action if s.vbo_action else "(no action)" }}</code></td></tr>
+  {% endif %}
+  {% if s.called_page %}
+  <tr><th>Calls</th><td>{{ s.called_page }}</td></tr>
+  {% endif %}
+  {% if s.exception_type %}
+  <tr><th>Exception type</th><td>{{ s.exception_type }}</td></tr>
+  {% endif %}
+  {% if s.expression %}
+  <tr><th>Expression</th><td><code>{{ s.expression }}</code></td></tr>
+  {% endif %}
+  <tr><th>Mapped to</th><td><code>{{ s.target_type if s.target_type else "(no target)" }}</code> &middot; module <code>{{ s.target_module if s.target_module else "(none)" }}</code> &middot; {{ s.runtime }}</td></tr>
+  <tr><th>Confidence</th><td>{{ "%.2f"|format(s.confidence) }} {{ band_badge(s.band) }}</td></tr>
+  {% if s.fused_with or s.fusion_action or s.is_vestigial %}
+  <tr><th>Fusion</th><td>{% if s.fusion_action %}fused action <code>{{ s.fusion_action }}</code>{% endif %}{% if s.fused_with %} with {{ s.fused_with|join(", ") }}{% endif %}{% if s.is_vestigial %} &middot; vestigial (no standalone output){% endif %}</td></tr>
+  {% endif %}
+  {% if s.pending_flag_reasons %}
+  <tr><th>Untransferred AST flags</th><td><ul>{% for r in s.pending_flag_reasons %}<li>{{ r }}</li>{% endfor %}</ul></td></tr>
+  {% endif %}
+</table>
+{% if s.params %}
+<table class="params">
+  <thead><tr><th>Direction</th><th>Name</th><th>Type</th><th>Bound to</th></tr></thead>
+  <tbody>
+  {% for p in s.params %}
+    <tr><td>{{ p.direction }}</td><td>{{ p.name }}</td><td>{{ p.data_type }}</td><td><code>{{ p.binding }}</code></td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">No inputs/outputs.</p>
+{% endif %}
+{% if s.code_text %}
+<details><summary>Code body ({{ s.code_text|length }} chars)</summary><pre>{{ s.code_text }}</pre></details>
+{% endif %}
+{% endmacro %}
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Coverage report — {{ report.process_name }}</title>
+<style>
+  body { font-family: Segoe UI, Arial, sans-serif; margin: 2em; color: #222; }
+  h1 { margin-bottom: 0.2em; }
+  h2 { border-bottom: 2px solid #ddd; padding-bottom: 0.2em; margin-top: 2em; }
+  table { border-collapse: collapse; margin: 0.5em 0; }
+  th, td { border: 1px solid #ccc; padding: 4px 8px; text-align: left; vertical-align: top; }
+  table.kv th { background: #f5f5f5; width: 12em; }
+  table.params { font-size: 0.9em; }
+  .badge { display: inline-block; padding: 1px 8px; border-radius: 8px; font-size: 0.85em; font-weight: bold; }
+  .band-AUTO { background: #d4edda; } .band-SPOT_CHECK { background: #fff3cd; }
+  .band-PARTIAL { background: #ffe0b2; } .band-MANUAL { background: #f8d7da; }
+  .sev-error { background: #f8d7da; } .sev-warn { background: #fff3cd; } .sev-info { background: #d1ecf1; }
+  .flag { border: 1px solid #ccc; border-left: 6px solid #999; padding: 0.5em 1em; margin: 1em 0; }
+  .flag.error { border-left-color: #c0392b; } .flag.warn { border-left-color: #e67e22; }
+  .flag.info { border-left-color: #2980b9; } .flag.unflagged { border-left-color: #8e44ad; }
+  .muted { color: #777; }
+  pre { background: #f7f7f7; padding: 0.5em; overflow-x: auto; }
+  td.num { text-align: right; }
+</style>
+</head>
+<body>
+<h1>Migration coverage report — {{ report.process_name }}</h1>
+<p class="muted">Process ID <code>{{ report.process_id }}</code> &middot; source <code>{{ report.source_file }}</code> &middot; built from <code>{{ report.input_path }}</code></p>
+<p><strong>{{ report.page_count }}</strong> pages &middot; <strong>{{ report.stage_count }}</strong> stages &middot;
+mean confidence <strong>{{ "%.2f"|format(report.mean_confidence) }}</strong> {{ band_badge(report.overall_band) }} &middot;
+readiness: <strong>{{ report.readiness }}</strong></p>
+
+<h2>Coverage by confidence band</h2>
+<table>
+  <thead><tr><th>Band</th><th>Score</th><th>Generated output</th><th>What you do</th><th>Stages</th><th>%</th></tr></thead>
+  <tbody>
+  {% for b in report.bands %}
+    <tr><td>{{ band_badge(b.band) }}</td><td>{{ band_meaning[b.band].range }}</td><td>{{ band_meaning[b.band].output }}</td><td>{{ band_meaning[b.band].action }}</td><td class="num">{{ b.count }}</td><td class="num">{{ "%.1f"|format(b.percent) }}%</td></tr>
+  {% endfor %}
+    <tr><th colspan="4">Total</th><th class="num">{{ report.bands|sum(attribute="count") }}</th><th class="num">{{ "%.1f"|format(report.bands|sum(attribute="percent")) }}%</th></tr>
+  </tbody>
+</table>
+
+<h2>Review flags</h2>
+<p><strong>{{ report.flag_total }}</strong> ReviewFlag(s):
+{% for sev in ["error", "warn", "info"] %}
+<span class="badge sev-{{ sev }}">{{ sev }}: {{ report.flag_counts.get(sev, 0) }}</span>
+{% endfor %}
+&middot; <strong>{{ report.unflagged_attention|length }}</strong> PARTIAL/MANUAL stage(s) carry no flag (listed separately below).</p>
+
+<h2>Action checklist — flagged stages</h2>
+{% if not report.flags %}
+<p class="muted">No ReviewFlags.</p>
+{% endif %}
+{% for f in report.flags %}
+<div class="flag {{ f.severity }}">
+  <h3><span class="badge sev-{{ f.severity }}">{{ f.severity }}</span> {{ f.stage.page_name }} &rsaquo; {{ f.stage.stage_name }}</h3>
+  <p><strong>Why flagged:</strong> {{ f.reason }}</p>
+  <p><strong>Suggested fix:</strong> {{ f.suggested_fix if f.suggested_fix else "(none given by the engine)" }}</p>
+  {{ stage_context(f.stage) }}
+</div>
+{% endfor %}
+
+<h2>PARTIAL / MANUAL stages with no ReviewFlag</h2>
+<p class="muted">The engine scored these below 0.70 but attached no ReviewFlag. Per the band table they still need a developer.</p>
+{% if not report.unflagged_attention %}
+<p class="muted">None.</p>
+{% endif %}
+{% for s in report.unflagged_attention %}
+<div class="flag unflagged">
+  <h3>{{ band_badge(s.band) }} {{ s.page_name }} &rsaquo; {{ s.stage_name }}</h3>
+  <p><strong>Why listed:</strong> {{ band_meaning[s.band].label }} band (confidence {{ "%.2f"|format(s.confidence) }}) — generated output is "{{ band_meaning[s.band].output }}". No ReviewFlag reason or suggested fix was recorded by the engine.</p>
+  {{ stage_context(s) }}
+</div>
+{% endfor %}
+
+<h2>Pages</h2>
+<table>
+  <thead><tr><th>Page</th><th>Role</th><th>Reachable</th><th>Stages</th><th>Mean conf.</th>{% for b in report.bands %}<th>{{ band_meaning[b.band].label }}</th>{% endfor %}<th>Flags (error/warn/info)</th></tr></thead>
+  <tbody>
+  {% for p in report.pages %}
+    <tr><td>{{ p.page_name }}{% if p.is_main %} <em>(main)</em>{% endif %}</td><td>{{ p.role }}</td><td>{{ "yes" if p.reachable else "no" }}</td><td class="num">{{ p.stage_count }}</td><td class="num">{{ "%.2f"|format(p.mean_confidence) }}</td>{% for b in report.bands %}<td class="num">{{ p.band_counts.get(b.band, 0) }}</td>{% endfor %}<td>{{ p.flag_counts.get("error", 0) }}/{{ p.flag_counts.get("warn", 0) }}/{{ p.flag_counts.get("info", 0) }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h2>All stages by band</h2>
+{% for b in report.bands %}
+<details{% if b.band in ["PARTIAL", "MANUAL"] %} open{% endif %}>
+  <summary>{{ band_badge(b.band) }} {{ b.count }} stage(s) ({{ "%.1f"|format(b.percent) }}%)</summary>
+  {% if b.stages %}
+  <table>
+    <thead><tr><th>Page</th><th>Stage</th><th>Type</th><th>VBO / method</th><th>Mapped to</th><th>Conf.</th><th>Flags</th></tr></thead>
+    <tbody>
+    {% for s in b.stages %}
+      <tr><td>{{ s.page_name }}</td><td>{{ s.stage_name }}</td><td>{{ s.stage_type }}</td><td>{% if s.vbo_object %}{{ s.vbo_object }} &rarr; {{ s.vbo_action }}{% endif %}</td><td><code>{{ s.target_type }}</code></td><td class="num">{{ "%.2f"|format(s.confidence) }}</td><td class="num">{{ s.flag_count }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</details>
+{% endfor %}
+</body>
+</html>

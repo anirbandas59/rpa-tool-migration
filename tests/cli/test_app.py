@@ -86,3 +86,57 @@ def test_convert_creates_no_cloudflow_folder_and_packages(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     assert not (tmp_path / "cloudflow").exists()
     assert list(tmp_path.glob("*_solution.zip"))
+
+
+def _report_ast(tmp_path):
+    """Serialise the reporter tests' synthetic annotated process to tmp_path/ast.json."""
+    from flowsmith.ast.serialiser import serialise
+    from tests.reporter.conftest import make_process
+
+    path = tmp_path / "ast.json"
+    serialise(make_process(), path)
+    return path
+
+
+def test_report_writes_html_from_ast(tmp_path):
+    """Task 8: report --input <ast.json> --output <file.html> writes the coverage report."""
+    from typer.testing import CliRunner
+
+    from flowsmith.cli.app import app
+
+    out = tmp_path / "report.html"
+    result = CliRunner().invoke(
+        app, ["report", "--input", str(_report_ast(tmp_path)), "--output", str(out)]
+    )
+    assert result.exit_code == 0, result.output
+    assert out.is_file()
+    assert "ReviewFlags: 2" in result.output
+
+
+def test_report_terminal_format_writes_no_file(tmp_path):
+    """Task 8: --format terminal prints the summary only."""
+    from typer.testing import CliRunner
+
+    from flowsmith.cli.app import app
+
+    out = tmp_path / "report.html"
+    result = CliRunner().invoke(
+        app,
+        ["report", "-i", str(_report_ast(tmp_path)), "-o", str(out), "--format", "terminal"],
+    )
+    assert result.exit_code == 0, result.output
+    assert not out.exists()
+    assert "MANUAL" in result.output
+
+
+def test_report_rejects_zip_input(tmp_path):
+    """Task 8: a solution .zip carries no scores/flags, so report exits 1 with a message."""
+    from typer.testing import CliRunner
+
+    from flowsmith.cli.app import app
+
+    zip_path = tmp_path / "solution.zip"
+    zip_path.write_bytes(b"PK")
+    result = CliRunner().invoke(app, ["report", "-i", str(zip_path)])
+    assert result.exit_code == 1
+    assert "solution package" in result.output

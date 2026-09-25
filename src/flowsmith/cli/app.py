@@ -1,7 +1,9 @@
 """Flowsmith CLI - Automation migration tool to Power Automate solutions."""
 
 from collections import Counter
+from enum import StrEnum
 from pathlib import Path
+from typing import Annotated
 
 import typer
 from rich.console import Console
@@ -9,7 +11,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from flowsmith.ast.serialiser import deserialise
-from flowsmith.exceptions import ASTBuildError, ParseError
+from flowsmith.exceptions import ASTBuildError, FlowsmithError, ParseError
 
 app = typer.Typer(
     name="flowsmith", help="Migrate any RPA tool to Power Automate flows.", add_completion=False
@@ -65,15 +67,47 @@ def convert(
         raise typer.Exit(code=1) from None
 
 
+class ReportFormat(StrEnum):
+    """Output formats accepted by the report command."""
+
+    HTML = "html"
+    TERMINAL = "terminal"
+
+
 @app.command()
 def report(
-    input: str = typer.Option(..., "--input", "-i", help="Path to .bprelease file"),
-    output: str = typer.Option("output", "--output", "-o", help="Output directory for report"),
-    format: str = typer.Option("html", "--format", "-f", help="Report format: html or terminal"),
+    input: str = typer.Option(
+        ...,
+        "--input",
+        "-i",
+        help="ast.json written by 'flowsmith convert', or that convert output directory",
+    ),
+    output: str = typer.Option(
+        "output",
+        "--output",
+        "-o",
+        help="Report .html file, or a directory to write coverage_report.html into",
+    ),
+    format: Annotated[
+        ReportFormat,
+        typer.Option("--format", "-f", help="Report format: html or terminal"),
+    ] = ReportFormat.HTML,
 ) -> None:
-    """Generate a migration assessment report without producing output files."""
-    console.print(f"[bold]flowsmith report[/bold] — input: {input}")
-    console.print("[yellow]Not yet implemented — Phase 7[/yellow]")
+    """Generate the AUTO/SPOT-CHECK/PARTIAL/MANUAL coverage report from an annotated AST."""
+    from flowsmith.reporter import generate_report, load_report, render_terminal_summary
+
+    try:
+        if format is ReportFormat.TERMINAL:
+            coverage = load_report(Path(input))
+        else:
+            coverage, written = generate_report(Path(input), Path(output))
+    except FlowsmithError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from None
+
+    render_terminal_summary(coverage, console)
+    if format is ReportFormat.HTML:
+        console.print(f"[green]Report written[/green] -> {written}")
 
 
 @app.command()
