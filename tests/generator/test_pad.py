@@ -4623,8 +4623,8 @@ def test_7b0_main_hoisting_respects_loader_performer_role_filter() -> None:
 
 def test_7b0_main_hoisting_excludes_flow_input_bound_names() -> None:
     """Task 7b0 fix pass 4 gap 2: Main-page hoisting must never re-initialise a data
-    item bound to the flow's own ``@INPUT`` (Main's Start-stage input) — review
-    2026-09-24-fixpass3 gap 2: ``flg_SendDatatoDataGateways`` was clobbered at the
+    item bound to the Main's own Start-stage input (Task 7c, now expected via In_txt_Config)
+    — review 2026-09-24-fixpass3 gap 2: ``flg_SendDatatoDataGateways`` was clobbered at the
     top of the Performer Main."""
     gen = PADGenerator()
     main_page = BPPage(
@@ -4642,7 +4642,7 @@ def test_7b0_main_hoisting_excludes_flow_input_bound_names() -> None:
     rendered = gen._render_main_page_for_role(main_page, process, "performer", {})
 
     assert "SET send_flag TO" not in rendered, (
-        "A data item bound to Main's own @INPUT must never be re-initialised anywhere"
+        "A data item bound to a Main Start-stage input must never be re-initialised anywhere"
     )
 
 
@@ -5227,3 +5227,279 @@ def test_7b3_cross_role_non_alwaysinit_name_is_reported_not_guessed() -> None:
         "A cross-role non-alwaysinit name must be reported with a Task 7b3 TODO "
         "naming it, not silently assigned to either role"
     )
+
+
+# ── Task 7c tests: Single @INPUT contract matching reference ──────────────────
+
+
+def test_7c_generate_page_emits_exactly_one_input_matching_reference() -> None:
+    """Task 7c: generate_page must emit exactly one @INPUT line matching the
+    reference contract from docs/pad-reference/DF_PID_171_US_Loader.robin.txt L8
+    and DF_PID_171_US_LIMS_Prelude_Main.robin.txt L8, regardless of how many
+    data items the page declares.
+    """
+    gen = PADGenerator()
+    # Create a page with multiple data items of different types. Only the reference
+    # contract should appear, not individual @INPUT lines for each.
+    start_stage = make_annotated_stage(
+        stage_id="s0",
+        name="Start",
+        stage_type=StageType.START,
+        data_items=[
+            BPDataItem(name="flg_SendData", data_type="flag", is_input=True),
+            BPDataItem(name="config_value", data_type="text", is_input=True),
+        ],
+    )
+    other_stage = make_annotated_stage(
+        stage_id="s1",
+        name="SomeAction",
+        data_items=[
+            BPDataItem(name="Queue_Name", data_type="text", is_input=True),
+        ],
+    )
+    page = make_page(stages=[start_stage, other_stage], is_main=True)
+    result = gen.generate_page(page, "SyntheticProcess")
+
+    # Count @INPUT lines (should be exactly 1)
+    input_lines = [line for line in result.split("\n") if line.startswith("@INPUT")]
+    assert len(input_lines) == 1, f"Expected 1 @INPUT line, found {len(input_lines)}"
+
+    # Verify it matches the exact reference contract
+    expected_input = (
+        "@INPUT In_txt_Config : { 'Description': '', 'FriendlyName': 'In_txt_Config', "
+        "'Type': 'String', 'IsOptional': False, 'DefaultValue': '{}' }"
+    )
+    assert input_lines[0] == expected_input, (
+        f"@INPUT line does not match reference.\n"
+        f"Expected: {expected_input}\n"
+        f"Got:      {input_lines[0]}"
+    )
+
+
+def test_7c_main_start_input_produces_todo_comment() -> None:
+    """Task 7c: When a Main page has START-stage inputs, they must produce TODO
+    comments in the header area (after @INPUT/@OUTPUT lines) naming the BP input
+    and stating it must be supplied through In_txt_Config.
+    """
+    gen = PADGenerator()
+    start_stage = make_annotated_stage(
+        stage_id="s0",
+        name="Start",
+        stage_type=StageType.START,
+        data_items=[
+            BPDataItem(name="flg_SendDatatoDataGateways", data_type="flag", is_input=True),
+        ],
+    )
+    other_stage = make_annotated_stage(stage_id="s1", name="ProcessWork")
+    page = make_page(stages=[start_stage, other_stage], is_main=True)
+    result = gen.generate_page(page, "SyntheticProcess")
+
+    # Check for TODO comment naming the original BP input
+    assert "flg_SendDatatoDataGateways" in result, "START input name should appear in TODO comment"
+    assert "In_txt_Config" in result, "TODO should reference In_txt_Config as the new source"
+    assert "# TODO:" in result, "Header should contain TODO comments for moved inputs"
+
+
+def test_7c_non_start_data_items_produce_no_input() -> None:
+    """Task 7c: Data items that are NOT on the START stage should NOT produce
+    @INPUT declarations or TODO comments. Only START-stage inputs are genuine
+    process inputs; VBO-call parameters are internal to the flow.
+    """
+    gen = PADGenerator()
+    # A page with no START stage inputs, only VBO-call parameters on ACTION stages
+    start_stage = make_annotated_stage(
+        stage_id="s0",
+        name="Start",
+        stage_type=StageType.START,
+        data_items=[],  # No inputs on START
+    )
+    vbo_stage = make_annotated_stage(
+        stage_id="s1",
+        name="GetWorkQueueItem",
+        stage_type=StageType.ACTION,
+        data_items=[
+            BPDataItem(name="Queue_Name", data_type="text", is_input=True),
+            BPDataItem(name="Item_ID", data_type="number", is_input=False),
+        ],
+    )
+    page = make_page(stages=[start_stage, vbo_stage], is_main=True)
+    result = gen.generate_page(page, "SyntheticProcess")
+
+    # Should still have exactly 1 @INPUT (the reference contract)
+    input_lines = [line for line in result.split("\n") if line.startswith("@INPUT")]
+    assert len(input_lines) == 1, f"Expected 1 @INPUT line, found {len(input_lines)}"
+    assert "In_txt_Config" in input_lines[0], "@INPUT should be the reference contract"
+
+    # Should NOT have TODO comments mentioning VBO data items
+    assert "Queue_Name" not in result, "VBO parameters should not appear in header"
+    assert "Item_ID" not in result, "VBO parameters should not appear in header"
+
+
+def test_7c_consolidated_flow_path_main_start_input_produces_todo() -> None:
+    """Task 7c: Through the real shipped path (_generate_consolidated_flow), a Main page
+    with START-stage inputs must produce exactly one @INPUT (the reference contract) and
+    TODO comments naming both the BP input name and the PAD variable name.
+    """
+    gen = PADGenerator()
+    # Create a Main page with a START input that will be bound to a PAD variable
+    main_page = BPPage(
+        page_id="P_MAIN",
+        name="Main",
+        is_main=True,
+        stages=[
+            make_annotated_stage(
+                stage_id="s0",
+                name="Start",
+                stage_type=StageType.START,
+                data_items=[
+                    BPDataItem(name="SendFlag", data_type="flag", is_input=True),
+                ],
+            ),
+            make_annotated_stage(stage_id="s1", name="Work"),
+            make_annotated_stage(
+                stage_id="s2",
+                name="End",
+                stage_type=StageType.END,
+            ),
+        ],
+    )
+    process = make_process(pages=[main_page], name="TestProcess")
+
+    # Render via the shipped path
+    result = gen._generate_consolidated_flow(process, role="performer")
+
+    # Verify exactly one @INPUT line
+    input_lines = [line for line in result.split("\n") if line.startswith("@INPUT")]
+    assert len(input_lines) == 1, f"Expected 1 @INPUT line, got {len(input_lines)}"
+    assert "In_txt_Config" in input_lines[0]
+
+    # Verify TODO comment names both BP input and PAD variable
+    assert "# TODO:" in result, "Should have TODO comments for START-stage inputs"
+    assert "SendFlag" in result, "TODO should name the BP input"
+    assert "flg_SendFlag" in result, "TODO should name the PAD variable (flg_SendFlag)"
+
+
+def test_7c_consolidated_flow_path_subpage_start_input_excluded() -> None:
+    """Task 7c: Through the real shipped path (_generate_consolidated_flow), a sub-page
+    with START-stage inputs must NOT produce TODO comments (only the Main page's START
+    inputs are genuine process inputs).
+    """
+    gen = PADGenerator()
+    main_page = BPPage(
+        page_id="P_MAIN",
+        name="Main",
+        is_main=True,
+        stages=[
+            make_annotated_stage(
+                stage_id="s0",
+                name="Start",
+                stage_type=StageType.START,
+                data_items=[],  # No START inputs on main
+            ),
+            make_annotated_stage(stage_id="s1", name="Work"),
+            make_annotated_stage(stage_id="s2", name="End", stage_type=StageType.END),
+        ],
+    )
+    sub_page = BPPage(
+        page_id="P_SUB",
+        name="SubPage",
+        role="performer",
+        stages=[
+            make_annotated_stage(
+                stage_id="s0",
+                name="Start",
+                stage_type=StageType.START,
+                data_items=[
+                    BPDataItem(name="ItemID", data_type="number", is_input=True),
+                ],
+            ),
+            make_annotated_stage(stage_id="s1", name="Work"),
+            make_annotated_stage(stage_id="s2", name="End", stage_type=StageType.END),
+        ],
+    )
+    process = make_process(pages=[main_page, sub_page], name="TestProcess")
+
+    # Render via the shipped path
+    result = gen._generate_consolidated_flow(process, role="performer")
+
+    # Verify exactly one @INPUT (the reference contract only, no sub-page input)
+    input_lines = [line for line in result.split("\n") if line.startswith("@INPUT")]
+    assert len(input_lines) == 1, f"Expected 1 @INPUT line, got {len(input_lines)}"
+
+    # Verify no TODO for the sub-page input (ItemID should not appear in header area)
+    # The sub-page's Start input is not a process input, so no TODO
+    todo_section = result[: result.find("FUNCTION") if "FUNCTION" in result else len(result)]
+    assert "ItemID" not in todo_section, "Sub-page START input should not appear in header area"
+
+
+def test_7c_consolidated_flow_path_main_non_start_data_excluded() -> None:
+    """Task 7c: Through the real shipped path (_generate_consolidated_flow), a Main page
+    with non-START data items (VBO parameters) must NOT produce TODO comments.
+    """
+    gen = PADGenerator()
+    main_page = BPPage(
+        page_id="P_MAIN",
+        name="Main",
+        is_main=True,
+        stages=[
+            make_annotated_stage(
+                stage_id="s0",
+                name="Start",
+                stage_type=StageType.START,
+                data_items=[],  # No START inputs
+            ),
+            make_annotated_stage(
+                stage_id="s1",
+                name="GetNextItem",
+                stage_type=StageType.ACTION,
+                data_items=[
+                    BPDataItem(name="QueueName", data_type="text", is_input=True),
+                    BPDataItem(name="ItemData", data_type="text", is_input=False),
+                ],
+            ),
+            make_annotated_stage(stage_id="s2", name="End", stage_type=StageType.END),
+        ],
+    )
+    process = make_process(pages=[main_page], name="TestProcess")
+
+    # Render via the shipped path
+    result = gen._generate_consolidated_flow(process, role="performer")
+
+    # Verify exactly one @INPUT (the reference contract only)
+    input_lines = [line for line in result.split("\n") if line.startswith("@INPUT")]
+    assert len(input_lines) == 1, f"Expected 1 @INPUT line, got {len(input_lines)}"
+
+    # Verify no TODO for non-START data items
+    todo_section = result[: result.find("FUNCTION") if "FUNCTION" in result else len(result)]
+    assert "QueueName" not in todo_section, "VBO parameter should not appear in header TODO"
+    assert "ItemData" not in todo_section, "VBO parameter should not appear in header TODO"
+
+
+def test_7c_consolidated_flow_todo_names_bound_pad_variable_not_parameter() -> None:
+    """Task 7c review gap 5: when the BP input parameter (``Notify``) is bound via
+    ``stage=`` to a differently-named data item (``send_flag``), the header TODO must name
+    the PAD variable the body actually uses for that data item — resolved through
+    ``variable_name_mapping`` (typed by the DATA stage) — not a name derived from the
+    parameter or its own type (a ``text`` parameter bound to a ``Boolean`` item)."""
+    gen = PADGenerator()
+    main_page = BPPage(
+        page_id="P_MAIN",
+        name="Main Page",
+        is_main=True,
+        stages=[
+            _annotated_start("s0", [("Notify", "text", "send_flag")]),
+            _data_stage("s1", "send_flag", "Boolean"),
+            _annotated_end("s2", []),
+        ],
+    )
+    process = make_process(pages=[main_page], name="WidgetFlow")
+    expected_pad_name = gen._build_variable_name_mapping(process)["send_flag"]
+
+    result = gen._generate_consolidated_flow(process, role="performer")
+
+    header = result[: result.index("# Generated by Flowsmith")]
+    todo_lines = [line for line in header.splitlines() if "START-stage input 'Notify'" in line]
+    assert len(todo_lines) == 1, header
+    assert todo_lines[0].endswith(f"PAD variable {expected_pad_name}"), todo_lines[0]
+    assert "Notify" not in expected_pad_name, "fixture must make BP and PAD names differ"
+    assert expected_pad_name.startswith("flg_"), "name must carry the DATA stage's type"
