@@ -178,6 +178,20 @@ def test_bp_data_item_valid_construction() -> None:
     assert item.initial_value is None
     assert item.is_input is False
     assert item.is_output is False
+    # Task 7b3: defaults to True — see BPDataItem.always_init's docstring for the
+    # observed-majority-case citation (194/201 in PID_171_US_Process_LIMS_Prelude).
+    assert item.always_init is True
+
+
+def test_bp_data_item_always_init_false() -> None:
+    """Task 7b3: always_init=False is a first-class, settable value.
+
+    Mirrors samples/blueprism/PID_0171.bprelease's 'Mark Item As Exception'
+    subsheet stages 279f2417 'Consecutive Exception Count' and a08fa84e
+    'Previous Exception Detail', both lacking <alwaysinit/>.
+    """
+    item = BPDataItem(name="Consecutive Exception Count", data_type="number", always_init=False)
+    assert item.always_init is False
 
 
 def test_bp_data_item_with_all_fields() -> None:

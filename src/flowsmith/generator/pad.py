@@ -80,6 +80,32 @@ _COARSE_CATCHALL_ACTIONS: list[str] = [
 # Main Page split point (Get Next Item stage ID, per architecture doc §B11)
 GET_NEXT_ITEM_STAGE_ID = "85fbb578-f410-4f72-8ca9-58513939bc51"
 
+# Task 7b fix pass (gap 5): the exact literal values the Mark Item As Exception
+# page's "Retry Exception?" Decision compares [Exception Type] against —
+# `Lower([Exception Type])="system exception" OR Lower([Exception Type])=
+# "internal"` (outputs/report/PID_0171_html_report_20260904/data/
+# pid-171-us-process-lims-prelude.md, "## Page: Mark Item As Exception"). Used by
+# `_detect_exception_branch_contexts` for an exact-literal match (never a raw
+# substring test — that previously misfired on the unrelated literal
+# "login system exception", which merely *contains* the substring "system
+# exception" without being it; see docs/reviews/7b-2026-09-24-v2.md gap 5).
+_SYSTEM_EXCEPTION_BRANCH_LITERALS: frozenset[str] = frozenset({"system exception", "internal"})
+
+# Matches a quoted string literal on either side of an `=`/`<>` comparison, e.g.
+# `Lower([Exception Type])="system exception"` or `[Exception Type]<>"System
+# Exception"`. Deliberately *not* anchored to any particular BP data-item name
+# (e.g. `[Exception Type]`) — the governing Decision may compare a differently
+# named item that still carries the same exception-type literal (Task 7b fix pass
+# gap 5's hard constraint: derive from the comparison's literal/polarity, never a
+# stage/field name; proven generic by
+# test_status_variant_selected_from_synthetic_decision_branch_context, which uses
+# `[Widget Kind]`, not `[Exception Type]`). Two alternatives cover the literal
+# appearing after the operator (the common case) or before it.
+_EXCEPTION_TYPE_COMPARISON_RE = re.compile(
+    r"(=|<>)\s*[\"']([^\"']*)[\"']|[\"']([^\"']*)[\"']\s*(=|<>)",
+    re.IGNORECASE,
+)
+
 
 class PADGenerator:
     """Generate .robin files for annotated BP processes."""
@@ -169,6 +195,20 @@ class PADGenerator:
         # *full* BP page declarations, not just the current role/slice's rendered
         # subset — docs/reviews/7b0-2026-09-24-fixpass4.md gap 1(a)/(b).
         self._current_host_page: Any | None = None
+
+        # Task 7b3: the set of lowercase BP data-item names that are non-<alwaysinit/>
+        # and owned by the role currently being generated (_generate_consolidated_flow),
+        # computed once per role by _collect_role_once_only_sources and rendered exactly
+        # once, at the top of that role's Main body. BP keeps such an item's value
+        # across page runs within the same process run (no <alwaysinit/>), so — unlike
+        # Task 7b0 item 8's per-FUNCTION-body/per-inlined-copy placement for
+        # <alwaysinit/> items — it must never be (re-)initialised inside any FUNCTION
+        # body, split sub-FUNCTION or inlined copy. Every suppress-set assignment for
+        # the current role's render pass unions this set in, and
+        # _collect_hoistable_stage_sources/_hoist_data_inits_for_inline_copy skip any
+        # stage whose target name is in it, so it never renders anywhere but the one
+        # role-main-body hoisted line.
+        self._current_role_once_only_names: set[str] = set()
 
         # Task 7b: the exception-type branch ("system" | "business" | None) currently
         # being rendered, set by _render_decision_branch while walking a Decision's
@@ -390,67 +430,122 @@ class PADGenerator:
             lines.append(f"# Role: {role.capitalize()}")
             lines.append("")
 
-            # Render main page content (split by role)
-            if main_page:
-                main_content = self._render_main_page_for_role(
-                    main_page, process, role, variable_name_mapping
-                )
-                if main_content:
-                    lines.append(main_content)
-                    lines.append("")
-
             # Render sub-pages as FUNCTION blocks (or inline/fold if mapped)
             process_map = self.page_target_map.get(process.name, {})
             rendered_functions: list[str] = []
 
-            # Build the page name resolution mapping (handles collisions with disambiguation)
-            # This maps each page to its final resolved target name, distinguishing between
-            # intentional folds (explicit mapping) and accidental collisions (fallback names).
-            # Store in instance variable so it's accessible to _render_page_as_function and
-            # _render_call_or_inline without threading through every method signature.
-            self._current_page_name_map = self._build_page_name_resolution_map(
-                pages_for_role, process_map
+            # Task 7b3: a Data/Collection item without <alwaysinit/> keeps its value
+            # across page runs in BP — unlike an <alwaysinit/> item (Task 7b0 item 8,
+            # per-FUNCTION-body/per-inlined-copy placement, unchanged), it must be
+            # initialised exactly ONCE, at the top of this role's Main body, and never
+            # inside any FUNCTION body, split sub-FUNCTION or inlined copy. Compute
+            # this role's ownership before rendering anything (Main's own body can
+            # itself inline a page that declares one), so
+            # self._current_role_once_only_names is in effect for the whole role.
+            role_by_name = self._build_non_alwaysinit_role_map(process)
+            once_only_sources, once_only_conflict_todos = self._collect_role_once_only_sources(
+                pages_for_role, process_map, variable_name_mapping, role_by_name
             )
+            once_only_text, _once_only_suppress_unused = self._hoist_data_inits_from_sources(
+                once_only_sources, process, process_map, set()
+            )
+            previous_role_once_only = self._current_role_once_only_names
+            # Task 7b3: stays in effect for the rest of this role's generation (Main
+            # body AND every sub-page FUNCTION/split sub-FUNCTION/inlined copy below)
+            # — restored in the outer finally at the end of this method.
+            once_only_names: set[str] = set()
+            for stage, _mapping in once_only_sources:
+                target_name = self._data_collection_target_name(stage)
+                if target_name is not None:
+                    once_only_names.add(target_name.lower())
+            self._current_role_once_only_names = once_only_names
+            try:
+                # Render main page content (split by role)
+                if main_page:
+                    main_content = self._render_main_page_for_role(
+                        main_page, process, role, variable_name_mapping
+                    )
+                else:
+                    main_content = ""
 
-            seen_function_names: set[str] = set()
-            for page in pages_for_role:
-                # Skip pages that are shaped as inline_block/fold — they're rendered
-                # on-demand when called, not as top-level entities.
-                # BUT: split-shaped pages SHOULD be rendered (they emit multiple FUNCTIONs)
-                shape_info = self._get_page_shape(page.name, process_map)
-                shape = shape_info.get("shape", "function")
-                if shape in ("inline_block", "fold"):
-                    # These will be rendered when called from other pages
-                    continue
+                # Task 7b3: prepend this role's once-only inits (and any cross-role
+                # ownership-conflict TODOs) at the very top of the Main body — before
+                # Main's own <alwaysinit/> hoisted inits — so they run exactly once,
+                # before any FUNCTION/split sub-FUNCTION/inlined copy can reference
+                # them. Emitted even when there is no Main page content, so nothing is
+                # silently dropped.
+                once_only_prefix_parts = [p for p in (once_only_text,) if p]
+                once_only_prefix_parts = ["\n".join(once_only_conflict_todos)] * bool(
+                    once_only_conflict_todos
+                ) + once_only_prefix_parts
+                once_only_prefix = "\n".join(once_only_prefix_parts)
+                if once_only_prefix:
+                    main_content = (
+                        f"{once_only_prefix}\n{main_content}" if main_content else once_only_prefix
+                    )
 
-                # De-duplication: use resolved target name from the mapping built above
-                # This mapping distinguishes between:
-                # - Intentional folds: multiple pages map to same target_name via explicit
-                #   mapping entry — skip silently on collision (don't disambiguate)
-                # - Accidental collisions: pages fallback to their own name and happen to
-                #   collide — add disambiguation suffix (e.g., _2, _3)
-                resolved_target_name = self._current_page_name_map.get(page.page_id, page.name)
-                if resolved_target_name in seen_function_names:
-                    # FUNCTION with this name already emitted; skip the duplicate
-                    # (cite the first occurrence; the mapping file notes parameterization)
-                    continue
-
-                page_content = self._render_page_in_consolidated_flow(
-                    page, process, process_map, variable_name_mapping
-                )
-                if page_content:
-                    rendered_functions.append(page_content)
-                    lines.append(page_content)
+                if main_content:
+                    lines.append(main_content)
                     lines.append("")
-                    # Track this function name to prevent duplicates
-                    seen_function_names.add(resolved_target_name)
 
-            # Emit boilerplate "Get Error" FUNCTION if any page references it
-            full_content = "\n".join(lines)
-            if "CALL 'Get Error'" in full_content and "FUNCTION 'Get Error'" not in full_content:
-                get_error_fn = self._render_get_error_boilerplate()
-                lines.append(get_error_fn)
-                lines.append("")
+                # Build the page name resolution mapping (handles collisions with
+                # disambiguation). This maps each page to its final resolved target
+                # name, distinguishing between intentional folds (explicit mapping)
+                # and accidental collisions (fallback names). Store in instance
+                # variable so it's accessible to _render_page_as_function and
+                # _render_call_or_inline without threading through every method
+                # signature.
+                self._current_page_name_map = self._build_page_name_resolution_map(
+                    pages_for_role, process_map
+                )
+
+                seen_function_names: set[str] = set()
+                for page in pages_for_role:
+                    # Skip pages that are shaped as inline_block/fold — they're
+                    # rendered on-demand when called, not as top-level entities.
+                    # BUT: split-shaped pages SHOULD be rendered (they emit multiple
+                    # FUNCTIONs)
+                    shape_info = self._get_page_shape(page.name, process_map)
+                    shape = shape_info.get("shape", "function")
+                    if shape in ("inline_block", "fold"):
+                        # These will be rendered when called from other pages
+                        continue
+
+                    # De-duplication: use resolved target name from the mapping
+                    # built above. This mapping distinguishes between:
+                    # - Intentional folds: multiple pages map to same target_name via
+                    #   explicit mapping entry — skip silently on collision (don't
+                    #   disambiguate)
+                    # - Accidental collisions: pages fallback to their own name and
+                    #   happen to collide — add disambiguation suffix (e.g., _2, _3)
+                    resolved_target_name = self._current_page_name_map.get(page.page_id, page.name)
+                    if resolved_target_name in seen_function_names:
+                        # FUNCTION with this name already emitted; skip the duplicate
+                        # (cite the first occurrence; the mapping file notes
+                        # parameterization)
+                        continue
+
+                    page_content = self._render_page_in_consolidated_flow(
+                        page, process, process_map, variable_name_mapping
+                    )
+                    if page_content:
+                        rendered_functions.append(page_content)
+                        lines.append(page_content)
+                        lines.append("")
+                        # Track this function name to prevent duplicates
+                        seen_function_names.add(resolved_target_name)
+
+                # Emit boilerplate "Get Error" FUNCTION if any page references it
+                full_content = "\n".join(lines)
+                if (
+                    "CALL 'Get Error'" in full_content
+                    and "FUNCTION 'Get Error'" not in full_content
+                ):
+                    get_error_fn = self._render_get_error_boilerplate()
+                    lines.append(get_error_fn)
+                    lines.append("")
+            finally:
+                self._current_role_once_only_names = previous_role_once_only
 
             # Only return if we have content beyond the header
             if len(lines) > 3:  # header + banner lines + empty line
@@ -570,7 +665,12 @@ class PADGenerator:
 
             previous_suppress = self._current_suppress_init_names
             previous_host_page = self._current_host_page
-            self._current_suppress_init_names = suppress_names
+            # Task 7b3: union in this role's non-alwaysinit once-only names — they are
+            # hoisted/rendered exactly once by the caller (_generate_consolidated_flow)
+            # and must never also render at their in-place position here (e.g. an
+            # inline_block/fold call inside Main's own stages targeting a page that
+            # declares one).
+            self._current_suppress_init_names = suppress_names | self._current_role_once_only_names
             # Fix pass 5 gap 1: the host page for any inline_block/fold call rendered
             # inside this body is Main Page itself (its full declarations, not just
             # this role's rendered subset) — see _hoist_data_inits_for_inline_copy.
@@ -1190,6 +1290,129 @@ class PADGenerator:
             return stage.name
         return None
 
+    def _collect_role_once_only_sources(
+        self,
+        pages_for_role: list[Any],
+        process_map: dict[str, Any] | None,
+        variable_name_mapping: dict[str, str] | None,
+        role_by_name: dict[str, set[str]],
+    ) -> tuple[list[tuple[BPStage, dict[str, str] | None]], list[str]]:
+        """Collect this role's non-``<alwaysinit/>`` Data/Collection stages (Task 7b3).
+
+        BP resets a Data/Collection item to its initial value every time its page
+        *runs* only when the stage carries ``<alwaysinit/>``
+        (``BPDataItem.always_init`` — see that field's docstring for the confirmed
+        XML citation). Without it, BP keeps the item's value across page runs within
+        the same process run. Task 7b0 item 8 placed every item's init at its
+        FUNCTION body's top (or each inlined copy's top), which is correct only for
+        ``<alwaysinit/>`` items: a non-``<alwaysinit/>`` item must instead be
+        initialised exactly **once**, at the top of the owning role's Main body —
+        this method collects those sources so the caller can hoist them there
+        instead of at any FUNCTION/split sub-FUNCTION/inlined-copy position. The
+        Main page's own non-``<alwaysinit/>`` Data/Collection stages need no special
+        handling here: Task 7b0's existing Main-body hoisting
+        (``_render_main_page_for_role``) already renders the Main body exactly once
+        per role, which already satisfies the "once per flow run" rule for Main's
+        own declarations.
+
+        Args:
+            pages_for_role: This role's non-Main pages (``page.role == role``),
+                exactly as built by ``_generate_consolidated_flow``.
+            process_map: The process entry from ``page_target_map.yaml``, used to
+                skip ``stop``-shaped pages (never rendered, so nothing to hoist for).
+            variable_name_mapping: The flow's base variable-name mapping.
+            role_by_name: lowercase BP data-item name -> set of roles that declare
+                a non-``<alwaysinit/>`` Data/Collection stage with that name
+                (computed once per process by the caller across every role, so a
+                name split across both roles can be detected without a second scan).
+
+        Returns:
+            A 2-tuple: (sources, conflict_todos).
+            - sources: (stage, mapping) pairs ready for
+              ``_hoist_data_inits_from_sources``, one per uniquely-named
+              non-``<alwaysinit/>`` item this role owns unambiguously.
+            - conflict_todos: one ``# TODO`` per name declared by pages split across
+              both roles — per the task's "don't guess" instruction, these are left
+              at their Task 7b0 per-call/per-copy placement (not hoisted, not
+              suppressed) and reported here instead of auto-assigned to a role.
+        """
+        sources: list[tuple[BPStage, dict[str, str] | None]] = []
+        conflict_todos: list[str] = []
+        seen: set[str] = set()
+
+        for page in pages_for_role:
+            shape_info = self._get_page_shape(page.name, process_map or {})
+            if shape_info.get("shape") == "stop":
+                continue  # never rendered — nothing to hoist for
+
+            overrides, _both_bindings, _output_param_names = self._build_body_variable_overrides(
+                page
+            )
+            for stage in page.stages:
+                name = self._data_collection_target_name(stage)
+                if name is None:
+                    continue
+                name_lower = name.lower()
+                if name_lower in overrides:
+                    # Bound to an In_/Out_ FUNCTION parameter — never initialised by
+                    # this mechanism (Task 7b0 Do item 3).
+                    continue
+                data_item = next(
+                    (di for di in stage.data_items if not di.is_input and not di.is_output),
+                    None,
+                )
+                if data_item is None or data_item.always_init:
+                    continue
+                if name_lower in seen:
+                    continue
+                owning_roles = role_by_name.get(name_lower, {page.role})
+                if len(owning_roles) > 1:
+                    conflict_todos.append(
+                        f"# TODO: Task 7b3 — non-alwaysinit BP data item '{name}' is "
+                        f"declared on pages split across both roles "
+                        f"({', '.join(sorted(owning_roles))}); cannot determine a single "
+                        "owning role for its once-per-flow-run init, so it is left at "
+                        "its Task 7b0 per-call/per-copy placement instead"
+                    )
+                    continue
+                seen.add(name_lower)
+                sources.append((stage, variable_name_mapping))
+
+        return sources, conflict_todos
+
+    def _build_non_alwaysinit_role_map(self, process: BPProcess) -> dict[str, set[str]]:
+        """Map each non-``<alwaysinit/>`` Data/Collection name to its declaring role(s).
+
+        Scans every reachable non-Main page in ``process`` once, so
+        ``_collect_role_once_only_sources`` can detect (for each role in turn)
+        whether a name is declared only by pages of that role or split across both
+        roles, without re-scanning the whole process per role (Task 7b3).
+
+        Args:
+            process: The BPProcess.
+
+        Returns:
+            Dict mapping lowercase BP data-item name -> set of role strings
+            (``"loader"``/``"performer"``) whose pages declare a non-
+            ``<alwaysinit/>`` Data/Collection stage with that name.
+        """
+        role_by_name: dict[str, set[str]] = {}
+        for page in process.pages:
+            if not page.reachable or page.is_main or page.role is None:
+                continue
+            for stage in page.stages:
+                name = self._data_collection_target_name(stage)
+                if name is None:
+                    continue
+                data_item = next(
+                    (di for di in stage.data_items if not di.is_input and not di.is_output),
+                    None,
+                )
+                if data_item is None or data_item.always_init:
+                    continue
+                role_by_name.setdefault(name.lower(), set()).add(page.role)
+        return role_by_name
+
     def _get_page_declared_names(self, page: Any) -> set[str]:
         """Return the lowercase names of every DATA/COLLECTION stage a BP page declares.
 
@@ -1239,6 +1462,12 @@ class PADGenerator:
         already in ``self._current_suppress_init_names`` once the host's own version
         (collected here) has been hoisted.
 
+        Task 7b3: a non-``<alwaysinit/>`` item (``self._current_role_once_only_names``)
+        is excluded here too — it is hoisted exactly once, at the role's Main-body top
+        (``_generate_consolidated_flow``), never at this (possibly per-call) body's own
+        top. Its own original-flow-position rendering is separately suppressed via
+        ``_current_suppress_init_names`` (unioned in by ``_hoist_data_inits_from_sources``).
+
         Args:
             stages: The stage list to scan (a page's full ``page.stages``, a split
                 target's stage slice, or a Main-page role's rendered stage subset).
@@ -1251,11 +1480,15 @@ class PADGenerator:
             ``_hoist_data_inits_from_sources``.
         """
         del process, process_map  # unused: no recursion under option A — see docstring
-        return [
-            (stage, host_mapping)
-            for stage in stages
-            if self._data_collection_target_name(stage) is not None
-        ]
+        result: list[tuple[BPStage, dict[str, str] | None]] = []
+        for stage in stages:
+            name = self._data_collection_target_name(stage)
+            if name is None:
+                continue
+            if name.lower() in self._current_role_once_only_names:
+                continue
+            result.append((stage, host_mapping))
+        return result
 
     def _hoist_data_inits_for_inline_copy(
         self,
@@ -1323,6 +1556,12 @@ class PADGenerator:
             if name is None:
                 continue
             name_lower = name.lower()
+            if name_lower in self._current_role_once_only_names:
+                # Task 7b3: a non-alwaysinit item is hoisted exactly once, at the
+                # role's Main-body top — never re-initialised in any inlined copy.
+                # Not a collision (gap 1(a) below): no TODO, this is the Task 7b3
+                # lifetime rule, not two independent BP declarations colliding.
+                continue
             if name_lower in own_input_bound:
                 # This inlined page's own Start-stage input — the caller's argument
                 # applies over the initial value; never re-init it here (gap 1(b)).
@@ -1395,9 +1634,11 @@ class PADGenerator:
         Returns:
             A 2-tuple: (hoisted_inits_text, all_suppress_names). ``all_suppress_names``
             is ``param_suppress_names`` unioned with every DATA/COLLECTION stage's
-            target name found in ``stage_sources`` — pass this as the suppress set
+            target name found in ``stage_sources``, and (Task 7b3) with
+            ``self._current_role_once_only_names`` — pass this as the suppress set
             while rendering the body's (and any nested inline_block/fold's) normal
-            flow, so every hoisted stage renders as "" in place, wherever it lives.
+            flow, so every hoisted stage, and every non-alwaysinit once-only item,
+            renders as "" in place, wherever it lives.
         """
         hoist_targets: set[str] = set()
         for stage, _mapping in stage_sources:
@@ -1405,8 +1646,14 @@ class PADGenerator:
             if name is not None:
                 hoist_targets.add(name.lower())
 
+        # Task 7b3: a non-alwaysinit once-only name must never render at its
+        # in-place flow position anywhere in this role's output, including while
+        # rendering the hoisted lines themselves (a hoisted stage's expression could
+        # in principle reference one via a nested inline_block/fold — defensive).
+        effective_param_suppress = set(param_suppress_names) | self._current_role_once_only_names
+
         previous = self._current_suppress_init_names
-        self._current_suppress_init_names = set(param_suppress_names)
+        self._current_suppress_init_names = effective_param_suppress
         try:
             hoisted_lines: list[str] = []
             seen_lines: set[str] = set()
@@ -1418,7 +1665,7 @@ class PADGenerator:
         finally:
             self._current_suppress_init_names = previous
 
-        all_suppress = set(param_suppress_names) | hoist_targets
+        all_suppress = effective_param_suppress | hoist_targets
         return "\n".join(hoisted_lines), all_suppress
 
     def _collect_header_start_inputs(
@@ -2368,7 +2615,17 @@ class PADGenerator:
         # the whole literal substring already collapses both occurrences to the same
         # temp var name at the call site, so a second pass previously only added
         # dead output, never a second usable reference.
-        trim_pattern = r"Trim\s*\(\s*([^)]+)\s*\)"
+        # Task 7b fix pass (gap 4): `[^)]+` stops at the *first* `)`, so a nested
+        # call like `Lower(ExceptionType())` only captured `ExceptionType(` (missing
+        # its own closing paren), leaving a stray `)` behind and corrupting the
+        # rendered line (confirmed at the pre-fix regenerated output, e.g.
+        # `Text.ChangeCase 'ExceptionType(' ...` and a malformed
+        # `IF ... (txt_lowered_0)="system exception" OR txt_lowered_0)="internal")
+        # THEN`). This pattern instead allows the inner content to itself contain
+        # one level of balanced parens (`(?:[^()]|\([^()]*\))*`), so
+        # `ExceptionType()`'s own empty parens are consumed as part of the Lower/
+        # Trim call's argument instead of terminating it early.
+        trim_pattern = r"Trim\s*\(((?:[^()]|\([^()]*\))*)\)"
         seen_trim: dict[str, str] = {}
         for match in re.finditer(trim_pattern, result):
             inner_expr = match.group(1).strip()
@@ -2389,7 +2646,8 @@ class PADGenerator:
             seen_trim[inner_expr] = temp_var
             temp_var_counter += 1
 
-        lower_pattern = r"Lower\s*\(\s*([^)]+)\s*\)"
+        # Same nested-paren fix as trim_pattern above (gap 4).
+        lower_pattern = r"Lower\s*\(((?:[^()]|\([^()]*\))*)\)"
         seen_lower: dict[str, str] = {}
         for match in re.finditer(lower_pattern, result):
             inner_expr = match.group(1).strip()
@@ -2687,6 +2945,22 @@ class PADGenerator:
             for action in detail_actions:
                 lines.append(action)
             message_expr = translated_detail if translated_detail else "txt_ExceptionMessage"
+            # Task 7b fix pass (gap 8): `_translate_bp_expression` leaves BP's
+            # double-quoted string literals as double-quoted (`"..."`), but the
+            # reference's own throw-message *concatenations* use single-quoted PAD
+            # literals joined with `+`, e.g.
+            # `docs/pad-reference/DF_PID_171_US_LIMS_Prelude_Main.robin.txt` L1290
+            # (`GLOBAL.num_ConsecutiveExcLimit + ' consecutive incidents of ' + ...`)
+            # and L1272/L1297/L1316 (`'Unable to update work queue item status
+            # after ' + GLOBAL.num_MaxRetryLimit + ' attempts.'`). Scoped to
+            # concatenation expressions (``+`` present) — the reference uses a
+            # different convention, ``$'''...'''``, for a throw message that is a
+            # single bare literal with no concatenation (e.g. L1004, L1183), which
+            # is a separate, uncited-for-this-gap fix and stays untouched here to
+            # keep this change scoped to what gap 8 names (the two TERMINATE
+            # concatenated messages), not a general re-quoting pass.
+            if translated_detail and "+" in message_expr:
+                message_expr = re.sub(r'"([^"]*)"', r"'\1'", message_expr)
             rendered = throw_template.render(
                 custom=target_type == "ThrowCustomError",
                 error_code=annotation.params_map.get("exception_type", "%txt_ExceptionType%"),
@@ -2850,6 +3124,22 @@ class PADGenerator:
             # Add any separate Trim/Lower action lines
             for action in separate_actions:
                 lines.append(action)
+
+            # Task 7b fix pass (gap 3): this DECISION-stub path (empty IF/ELSE/END,
+            # no real nested branch content) lost its VERIFY marker when Task 7b's
+            # target_type dispatch fix started routing DECISION's real
+            # "IF <expr> THEN <true-branch> ELSE <false-branch> END" annotation
+            # here (previously it fell through, unmatched, to the generic
+            # target_module fallback below, which *does* append a VERIFY suffix for
+            # SPOT_CHECK band — see the `comment += f" # VERIFY: ..."` line further
+            # down). condition.robin.j2 itself is out of this task's file scope
+            # (Files in scope: pad.py/test_pad.py only — see this branch's own
+            # docstring comment above), so the marker is emitted as its own
+            # preceding line instead of inside the template, matching the existing
+            # convention used just above for the WorkQueues Get Next Item/Mark
+            # Exception VERIFY lines.
+            if band == ConfidenceBand.SPOT_CHECK:
+                lines.append(f"# VERIFY: {stage.name} (confidence {annotation.confidence:.2f})")
 
             rendered = cond_template.render(
                 condition=translated_cond if translated_cond else "%SomeVar% = True",
@@ -3339,6 +3629,7 @@ class PADGenerator:
                     start.stage_id,
                     stages_by_id,
                     visited,
+                    set(),
                     process,
                     process_map,
                     variable_name_mapping,
@@ -3358,15 +3649,80 @@ class PADGenerator:
 
         return "\n".join(line for line in lines if line)
 
+    def _reachable_stage_ids(
+        self,
+        start_id: str | None,
+        stages_by_id: dict[str, BPStage],
+        stop_ids: set[str],
+    ) -> list[str]:
+        """Breadth-first list of stage ids forward-reachable from ``start_id``.
+
+        Follows ``onsuccess_target``, and — for a nested branching ``DECISION``
+        (both ``ontrue_target``/``onfalse_target`` set) — both branch targets, so a
+        join point past a nested decision is still found. Traversal stops at (does
+        not expand past) any id already in ``stop_ids`` (stages already rendered
+        elsewhere, or stages on the current DFS path — passed in by the caller so a
+        cycle can't be walked forever) or already collected in this call (guards
+        against a cycle purely internal to the reachable set itself).
+
+        Used by ``_render_decision_branch`` (Task 7b fix pass, gap 2) to find the
+        nearest join stage between a DECISION's two branches *before* rendering
+        either one, so the shared continuation past the join can be emitted once,
+        after the ``IF``/``ELSE``/``END`` block, instead of only inside whichever
+        branch happens to reach it first (the bug documented in
+        ``docs/reviews/7b-2026-09-24-v2.md`` gap 2).
+
+        Args:
+            start_id: The stage to start from (``None`` returns an empty list).
+            stages_by_id: id → BPStage map for the whole stage list being rendered.
+            stop_ids: Ids to treat as boundaries — collected only if already inside,
+                never expanded past.
+
+        Returns:
+            Stage ids in BFS (closest-first) order, ``start_id`` included if valid.
+        """
+        if start_id is None or start_id not in stages_by_id:
+            return []
+
+        order: list[str] = []
+        seen: set[str] = set()
+        queue: list[str] = [start_id]
+        while queue:
+            sid = queue.pop(0)
+            if sid in seen or sid not in stages_by_id:
+                continue
+            seen.add(sid)
+            order.append(sid)
+            if sid in stop_ids:
+                continue
+            stage = stages_by_id[sid]
+            next_ids: list[str]
+            if (
+                stage.stage_type == StageType.DECISION
+                and stage.ontrue_target
+                and stage.onfalse_target
+            ):
+                next_ids = [t for t in (stage.ontrue_target, stage.onfalse_target) if t]
+            elif stage.onsuccess_target:
+                next_ids = [stage.onsuccess_target]
+            else:
+                next_ids = []
+            for nid in next_ids:
+                if nid not in seen:
+                    queue.append(nid)
+        return order
+
     def _render_chain(
         self,
         stage_id: str | None,
         stages_by_id: dict[str, BPStage],
         visited: set[str],
+        ancestors: set[str],
         process: BPProcess | None,
         process_map: dict[str, Any] | None,
         variable_name_mapping: dict[str, str] | None,
         render_stage_fn: Any,
+        stop_id: str | None = None,
     ) -> list[str]:
         """Render a straight-line control-flow chain starting at ``stage_id``.
 
@@ -3382,27 +3738,61 @@ class PADGenerator:
         chained to each other) is rendered as one contiguous group, in id order,
         before following their shared successor.
 
-        The walk stops at a stage with no further target (an ``EXCEPTION`` throw or an
-        ``END`` stage, both terminal per §B12), or at a stage already in ``visited``
-        (a join point already rendered by a sibling branch — see
-        ``_render_decision_branch``).
+        The walk stops, without rendering it, at ``stop_id`` (the join stage a
+        sibling branch or the caller will render — see ``_render_decision_branch``),
+        or at a stage with no further target (an ``EXCEPTION`` throw or an ``END``
+        stage, both terminal per §B12).
+
+        A back-edge — the next stage id already being on this same forward path
+        (``ancestors``) rather than merely already rendered elsewhere — is a genuine
+        BP loop this linear walk cannot unroll (Task 7b fix pass gap 2: previously
+        silently dropped with no marker). It is flagged with a ``# TODO`` naming the
+        looping stage and left unrendered rather than followed (which would recurse
+        forever) or silently skipped.
 
         Args:
             stage_id: The stage to start at (``None`` renders nothing).
             stages_by_id: id → BPStage map for the whole stage list being rendered.
             visited: Mutable set of already-rendered stage ids, shared across the
                 whole page render so a join point is emitted exactly once.
+            ancestors: Stage ids on the current forward path from the page START to
+                here (not shared between sibling branches — each branch walk gets
+                its own copy) — used only to detect back-edges/loops.
             process: The BPProcess (forwarded to per-stage renderers).
             process_map: Process map from page_target_map.yaml.
             variable_name_mapping: Optional BP-name→PAD-name dict from Task 5b.
             render_stage_fn: Callable(stage, process, process_map, variable_name_mapping) → str.
+            stop_id: If set, the walk halts (without rendering) as soon as it would
+                reach this stage id — used to hold back a shared join's rendering so
+                the caller can emit it once, after the branch structure.
 
         Returns:
             Rendered lines for this chain, in order.
         """
         lines: list[str] = []
+        local_ancestors = set(ancestors)
 
-        while stage_id is not None and stage_id in stages_by_id and stage_id not in visited:
+        while stage_id is not None and stage_id in stages_by_id and stage_id != stop_id:
+            if stage_id in local_ancestors:
+                # Genuine loop back-edge within this same forward path — never
+                # silently drop (CLAUDE.md); this generic walk cannot unroll BP
+                # loops, so name it and stop instead of recursing forever.
+                looping_stage = stages_by_id[stage_id]
+                lines.append(
+                    f"# TODO: loop back-edge to stage '{looping_stage.name}' "
+                    f"(id={stage_id}) — this control-flow walk renders "
+                    "straight-line/branching graphs only and cannot unroll BP "
+                    "loops here; needs manual translation"
+                )
+                return lines
+
+            if stage_id in visited:
+                # Already rendered by a sibling branch elsewhere in the walk (not
+                # on this path) — stop here without re-rendering; the caller is
+                # responsible for having pre-computed this as a join (stop_id)
+                # when it matters, this is just a defensive fallback.
+                return lines
+
             stage = stages_by_id[stage_id]
 
             base, sep, _suffix = stage.stage_id.partition("__calc_")
@@ -3414,6 +3804,7 @@ class PADGenerator:
                     if gid in visited:
                         continue
                     visited.add(gid)
+                    local_ancestors.add(gid)
                     gstage = stages_by_id[gid]
                     rendered = render_stage_fn(gstage, process, process_map, variable_name_mapping)
                     if rendered:
@@ -3423,6 +3814,7 @@ class PADGenerator:
                 continue
 
             visited.add(stage.stage_id)
+            local_ancestors.add(stage.stage_id)
 
             if (
                 stage.stage_type == StageType.DECISION
@@ -3433,6 +3825,7 @@ class PADGenerator:
                     stage,
                     stages_by_id,
                     visited,
+                    local_ancestors,
                     process,
                     process_map,
                     variable_name_mapping,
@@ -3454,11 +3847,53 @@ class PADGenerator:
 
         return lines
 
+    def _detect_exception_branch_contexts(self, bp_condition: str) -> tuple[str | None, str | None]:
+        """Derive the Mark Exception system/business branch tags from a real comparison.
+
+        Task 7b fix pass (gap 5): replaces a raw ``"system exception" in
+        expr_lower`` substring test, which misfired two ways — (a) it matched the
+        unrelated literal ``"login system exception"`` (the "System Unavailable?"
+        Decision, same page) purely because it *contains* the substring, wrongly
+        tagging that branch; (b) it ignored comparison polarity, so a negated test
+        like ``[Exception Type]<>"System Exception"`` still tagged the true arm
+        "system" when it actually means the opposite.
+
+        This instead looks for an *exact*-literal equality/inequality comparison
+        against one of ``_SYSTEM_EXCEPTION_BRANCH_LITERALS`` (the literals the real
+        "Retry Exception?" Decision compares against — see that constant's
+        citation) via ``_EXCEPTION_TYPE_COMPARISON_RE`` (deliberately not anchored
+        to the ``[Exception Type]`` field name — see that pattern's own comment),
+        and reads the operator to get the polarity right: ``=`` means the true arm
+        is the "system" branch; ``<>`` means the true arm is the "business"
+        (not-system) branch and the false arm is "system".
+
+        Args:
+            bp_condition: The DECISION stage's raw BP ``decision_expression``.
+
+        Returns:
+            ``(true_context, false_context)`` — each ``"system"``, ``"business"``,
+            or (if no recognised comparison is found) ``(None, None)``, meaning the
+            caller should inherit whatever context already applies.
+        """
+        if not bp_condition:
+            return None, None
+        for match in _EXCEPTION_TYPE_COMPARISON_RE.finditer(bp_condition):
+            if match.group(1) is not None:
+                operator, literal = match.group(1), match.group(2)
+            else:
+                literal, operator = match.group(3), match.group(4)
+            if literal.strip().lower() in _SYSTEM_EXCEPTION_BRANCH_LITERALS:
+                if operator == "<>":
+                    return "business", "system"
+                return "system", "business"
+        return None, None
+
     def _render_decision_branch(
         self,
         stage: BPStage,
         stages_by_id: dict[str, BPStage],
         visited: set[str],
+        ancestors: set[str],
         process: BPProcess | None,
         process_map: dict[str, Any] | None,
         variable_name_mapping: dict[str, str] | None,
@@ -3475,39 +3910,55 @@ class PADGenerator:
         it has no way to receive nested branch content (out of this task's file scope
         — ``templates/`` is not in Task 7b's Files in scope).
 
-        The true branch is walked first; the false branch's walk then stops as soon
-        as it reaches any stage the true branch already rendered — i.e. their first
-        common (join) stage — so a join point (e.g. the Mark Item As Exception page's
-        shared ``End2``) is emitted exactly once, nested wherever it was first
-        reached, never duplicated.
+        Task 7b fix pass (gap 2): the nearest join stage reachable from *both*
+        ``ontrue_target`` and ``onfalse_target`` is found first, via
+        ``_reachable_stage_ids``, before either branch is rendered. Each branch is
+        then rendered only up to (excluding) that join — never past it — and the
+        join's own chain is rendered exactly once, *after* the ``END`` line, not
+        nested inside either branch. This is what makes the shared continuation
+        past a merge point (e.g. the Mark Item As Exception page's shared ``End2``)
+        reachable from both branches: it runs unconditionally after the ``IF``/
+        ``ELSE``/``END`` regardless of which arm was taken, which is exactly BP's
+        real semantics for a rejoining branch — the previous version nested it only
+        inside whichever branch's walk reached it first, silently losing it from
+        the other arm (the bug this fix pass corrects).
 
-        Task 7b status-variant selection: while walking each branch, if this
-        DECISION's own ``decision_expression`` recognisably tests the BP
-        exception-type vocabulary (CLAUDE.md's canonical exception-type strings) for
-        "system exception" — the Mark Item As Exception page's "Retry Exception?"
-        stage (`Lower([Exception Type])="system exception" OR
-        Lower([Exception Type])="internal"`) — the true branch is tagged
-        ``self._current_exception_branch_context = "system"`` and the false branch
-        (the binary complement in this page's 3-way BE/SUE/SE dispatch, §A7) is
-        tagged ``"business"``, consulted by ``_render_stage``'s WorkQueues branch to
-        pick the "Mark Exception" catalogue variant. This is derived purely from the
-        governing Decision's own condition text and branch position — never from a
-        stage's own name or a Tag value (task hard constraint). A DECISION whose
-        expression doesn't recognisably match either keyword inherits the enclosing
-        context unchanged (usually ``None``, keeping the VERIFY marker).
+        Task 7b status-variant selection: while walking each branch, this
+        DECISION's own ``decision_expression`` is checked for an equality/inequality
+        comparison of ``[Exception Type]`` (optionally ``Lower(...)``-wrapped)
+        against the literal ``"system exception"`` or ``"internal"`` — the exact
+        literals the Mark Item As Exception page's "Retry Exception?" stage compares
+        (`Lower([Exception Type])="system exception" OR Lower([Exception Type])=
+        "internal"`). This is an exact-literal, polarity-aware match (Task 7b fix
+        pass gap 5: not a raw substring test, which previously misfired on
+        "login system exception" — a *different* literal that merely contains the
+        substring — and ignored inequality tests entirely). On a match, the branch
+        that is taken when the comparison is true is tagged
+        ``self._current_exception_branch_context = "system"`` and the other arm
+        ``"business"`` (§A7's binary complement in this page's 3-way BE/SUE/SE
+        dispatch); on ``<>`` the polarity is inverted. Consulted by
+        ``_render_stage``'s WorkQueues branch to pick the "Mark Exception" catalogue
+        variant. This is derived purely from the governing Decision's own condition
+        text and branch position — never from a stage's own name or a Tag value
+        (task hard constraint). A DECISION whose expression doesn't recognisably
+        match inherits the enclosing context unchanged (usually ``None``, keeping
+        the VERIFY marker).
 
         Args:
             stage: The DECISION stage (``ontrue_target``/``onfalse_target`` both set).
             stages_by_id: id → BPStage map for the whole stage list being rendered.
             visited: Mutable set of already-rendered stage ids (shared, see
                 ``_render_chain``).
+            ancestors: Stage ids on the current forward path up to and including
+                this DECISION (see ``_render_chain``'s back-edge detection).
             process: The BPProcess (forwarded to per-stage renderers).
             process_map: Process map from page_target_map.yaml.
             variable_name_mapping: Optional BP-name→PAD-name dict from Task 5b.
             render_stage_fn: Callable(stage, process, process_map, variable_name_mapping) → str.
 
         Returns:
-            The rendered ``IF``/``ELSE``/``END`` block as one string.
+            The rendered ``IF``/``ELSE``/``END`` block (plus any shared continuation
+            past a join, appended after ``END``) as one string.
         """
         bp_condition = stage.decision_expression or ""
         translated_cond, cond_actions = self._translate_bp_expression(
@@ -3515,12 +3966,27 @@ class PADGenerator:
         )
         condition_text = translated_cond if translated_cond else "%SomeVar% = True"
 
-        expr_lower = bp_condition.lower()
-        true_context = self._current_exception_branch_context
-        false_context = self._current_exception_branch_context
-        if "system exception" in expr_lower:
-            true_context = "system"
-            false_context = "business"
+        true_context, false_context = self._detect_exception_branch_contexts(bp_condition)
+        if true_context is None and false_context is None:
+            true_context = self._current_exception_branch_context
+            false_context = self._current_exception_branch_context
+
+        # Find the nearest stage reachable from both arms (a real merge point) so
+        # neither branch's walk consumes it — it is rendered once, after END.
+        stop_ids = visited | ancestors
+        true_reachable = self._reachable_stage_ids(stage.ontrue_target, stages_by_id, stop_ids)
+        false_reachable_set = set(
+            self._reachable_stage_ids(stage.onfalse_target, stages_by_id, stop_ids)
+        )
+        # A genuine join must be a *new* node, not one already inside stop_ids
+        # (visited elsewhere, or an ancestor on this same forward path) — a
+        # stop_ids member reachable from both arms is either a loop back-edge
+        # (ancestors) or already independently rendered (visited), neither of
+        # which should be hoisted as a fresh shared continuation.
+        join_id = next(
+            (sid for sid in true_reachable if sid in false_reachable_set and sid not in stop_ids),
+            None,
+        )
 
         previous_context = self._current_exception_branch_context
         try:
@@ -3529,20 +3995,24 @@ class PADGenerator:
                 stage.ontrue_target,
                 stages_by_id,
                 visited,
+                ancestors,
                 process,
                 process_map,
                 variable_name_mapping,
                 render_stage_fn,
+                stop_id=join_id,
             )
             self._current_exception_branch_context = false_context
             false_lines = self._render_chain(
                 stage.onfalse_target,
                 stages_by_id,
                 visited,
+                ancestors,
                 process,
                 process_map,
                 variable_name_mapping,
                 render_stage_fn,
+                stop_id=join_id,
             )
         finally:
             self._current_exception_branch_context = previous_context
@@ -3555,6 +4025,20 @@ class PADGenerator:
         for block in false_lines:
             out.extend(f"    {ln}" for ln in block.split("\n"))
         out.append("END")
+
+        if join_id is not None and join_id not in visited:
+            continuation_lines = self._render_chain(
+                join_id,
+                stages_by_id,
+                visited,
+                ancestors,
+                process,
+                process_map,
+                variable_name_mapping,
+                render_stage_fn,
+            )
+            out.extend(continuation_lines)
+
         return "\n".join(out)
 
     def _render_structural_stage(self, stage: BPStage) -> str:

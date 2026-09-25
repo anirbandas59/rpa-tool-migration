@@ -712,6 +712,41 @@ def data_initialvalue_bprelease(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
+def data_alwaysinit_bprelease(tmp_path: Path) -> Path:
+    """Blue Prism .bprelease with a Data stage carrying <alwaysinit/> and one without.
+
+    Shape cited from samples/blueprism/PID_0171.bprelease line 10 (single-line
+    minified <process> blob): stage 36455e9b 'Consecutive Exception Limit' carries
+    ``<private /><alwaysinit />`` after its ``<initialvalue>``; stages 279f2417
+    'Consecutive Exception Count' and a08fa84e 'Previous Exception Detail' have
+    neither element (Task 7b3).
+    """
+    xml_content = """\
+<?xml version="1.0" encoding="utf-8"?>
+<process id="proc_alwaysinit" name="AlwaysInitTest" version="1.0">
+  <subsheet subsheetid="pg_001" name="AlwaysInitTest" type="0">
+    <stage stageid="s_001" type="Data" name="Consecutive Exception Limit">
+      <datatype>number</datatype>
+      <initialvalue>3</initialvalue>
+      <private />
+      <alwaysinit />
+    </stage>
+    <stage stageid="s_002" type="Data" name="Consecutive Exception Count">
+      <datatype>number</datatype>
+      <initialvalue>0</initialvalue>
+    </stage>
+    <stage stageid="s_003" type="Collection" name="Result Collection">
+      <alwaysinit />
+    </stage>
+  </subsheet>
+</process>
+"""
+    filepath = tmp_path / "test_data_alwaysinit.bprelease"
+    filepath.write_text(xml_content, encoding="utf-8")
+    return filepath
+
+
+@pytest.fixture
 def wait_loop_bprelease(tmp_path: Path) -> Path:
     """Blue Prism .bprelease with WaitStart/LoopStart stages carrying timeout/groupid."""
     xml_content = """\
@@ -850,6 +885,36 @@ def test_data_stage_empty_initial_value_is_none(data_initialvalue_bprelease: Pat
     empty_stage = result["processes"][0]["pages"][0]["stages"][1]
     assert empty_stage["initial_value"] is None
     assert empty_stage["data_items"][0]["initial_value"] is None
+
+
+def test_data_stage_alwaysinit_present_is_true(data_alwaysinit_bprelease: Path) -> None:
+    """A Data stage with <alwaysinit/> yields always_init=True (Task 7b3)."""
+    result = parse_process(data_alwaysinit_bprelease)
+    limit_stage = result["processes"][0]["pages"][0]["stages"][0]
+    assert limit_stage["name"] == "Consecutive Exception Limit"
+    assert limit_stage["data_items"][0]["always_init"] is True
+
+
+def test_data_stage_alwaysinit_absent_is_false(data_alwaysinit_bprelease: Path) -> None:
+    """A Data stage without <alwaysinit/> yields always_init=False (Task 7b3).
+
+    BP's own runtime default when the element is absent is "does not reset" — the
+    item keeps its value across page runs within the same process run (confirmed
+    on samples/blueprism/PID_0171.bprelease's 'Consecutive Exception Count'/
+    'Previous Exception Detail' Data stages, which lack <alwaysinit/>).
+    """
+    result = parse_process(data_alwaysinit_bprelease)
+    count_stage = result["processes"][0]["pages"][0]["stages"][1]
+    assert count_stage["name"] == "Consecutive Exception Count"
+    assert count_stage["data_items"][0]["always_init"] is False
+
+
+def test_collection_stage_alwaysinit_present_is_true(data_alwaysinit_bprelease: Path) -> None:
+    """<alwaysinit/> is also honoured on Collection stages, not just Data."""
+    result = parse_process(data_alwaysinit_bprelease)
+    collection_stage = result["processes"][0]["pages"][0]["stages"][2]
+    assert collection_stage["name"] == "Result Collection"
+    assert collection_stage["data_items"][0]["always_init"] is True
 
 
 def test_waitstart_timeout_and_groupid_extracted(wait_loop_bprelease: Path) -> None:

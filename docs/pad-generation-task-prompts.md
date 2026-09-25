@@ -1420,9 +1420,71 @@ stage bodies (Task 5b).
 
 ---
 
-## Task 7b — `generator/pad.py`: consecutive-exception dispatch completion (BP behaviour)
+## Task 7b3 — parser/AST/generator: BP `alwaysinit` data-item lifetime → PAD init placement
 
 **Depends on:** Task 7b0
+**Files in scope:** `src/flowsmith/parser/process.py`, `src/flowsmith/ast/models.py`,
+`src/flowsmith/ast/builder.py`, `src/flowsmith/generator/pad.py` (the item-8 init-placement logic
+only), `tests/parser/test_process.py`, `tests/ast/test_builder.py`, `tests/ast/test_models.py`,
+`tests/generator/test_pad.py`
+**Required reading:** `docs/reviews/7b-2026-09-24-v2.md` (the finding that created this task);
+Task 7b0's Do item 8 and its clarifications (~line 1169); the BP `<alwaysinit/>` element on
+`samples/blueprism/PID_0171.bprelease`'s `Consecutive Exception Count`/`Previous Exception Detail`
+Data stages on the `Mark Item As Exception` subsheet (present: absent — quote the exact stage XML
+with a line reference) vs `Consecutive Exception Limit` (present: `<private/><alwaysinit/>`).
+
+**Why:** in Blue Prism, a Data/Collection stage's "reset to initial value whenever this page runs"
+setting is the `<alwaysinit/>` element; without it, the item keeps its value across page runs
+within the same process run. Task 7b0's item 8 assumed every data item resets per page run/per
+inlined copy, which is only true for `alwaysinit` items. In `PID_171_US_Process_LIMS_Prelude`, 7 of
+201 Data/Collection stages lack it — most consequentially `Consecutive Exception Count` and
+`Previous Exception Detail`, whose per-call reset makes Task 7b's consecutive-exception logic
+permanently unreachable (confirmed empirically: 6 identical exceptions simulated against the real
+generated body never breach).
+
+**Do:**
+1. Parse `<alwaysinit/>` presence on Data/Collection stages (`parser/process.py`) and carry it
+   through the AST (`BPDataItem`, e.g. `always_init: bool = True` — BP's own default when the
+   element is absent needs verifying against the schema/samples, don't assume; cite what you find).
+2. Correct Task 7b0 item 8's init-placement rule in `generator/pad.py`:
+   - an `alwaysinit` item keeps Task 7b0's existing placement (top of its `FUNCTION` body; top of
+     each inlined copy, or once at the host top for a name declared by both host and inlined page,
+     per 7b0's clarifications);
+   - a **non**-`alwaysinit` item is initialised **once**, at the top of its flow's main body
+     (Loader main body or Performer main body, matching which role's pages declare it), and
+     **never** inside a `FUNCTION` body or an inlined copy, however many times that page is called
+     or inlined. If the same non-`alwaysinit` name is declared on pages split across both flows'
+     roles, report it — don't guess which role owns the single init.
+3. Verify empirically against the regenerated output: `GLOBAL.`-free, bare `num_ConsecutiveExceptionCount`/`txt_PreviousExceptionDetail` now
+   initialise once (top of the Performer main body) and are never reset inside
+   `FUNCTION 'Mark Exception'`. Re-run the Task 7b consecutive-sequence test's own logic against the
+   **full regenerated body** (not a stripped/logic-only extract) and confirm a real breach on the
+   4th identical message at limit 3.
+4. Tests: parser test for `alwaysinit` presence/absence; builder test it reaches the AST; generator
+   tests on a synthetic process (non-PID_171 names) with one `alwaysinit` and one non-`alwaysinit`
+   item, each declared on a page called multiple times, asserting the non-`alwaysinit` item
+   initialises exactly once at the main-body top and the `alwaysinit` item keeps resetting per
+   call/copy. Mutation-check each test.
+
+**Done when:** regenerating `PID_0171.bprelease` shows `num_ConsecutiveExceptionCount` and
+`txt_PreviousExceptionDetail` initialised once, at the top of the Performer's main body, with no
+reset inside `FUNCTION 'Mark Exception'`; a behavioural test (against the full generated body, not
+a stripped extract) confirms a breach on the 4th identical consecutive System Exception at limit 3;
+no regression to Task 7b0's `alwaysinit`-item placement (`Reset Global Data`'s per-item resets,
+`Sample Manager - Explorer`'s per-copy `Retry Count` reset, etc. — diff the regenerated output
+against `outputs/generated/PID_0171_review7b0_fp5/` and account for every change); tests green with
+no new full-suite failures beyond the 10 known PID_0127 ones.
+
+**Out of scope:** the consecutive-exception dispatch logic itself and its remaining gaps 2-8
+(Task 7b's own fix pass); renaming colliding variables (Task 7b1); caller input/output binding for
+inlined pages (Task 7b2).
+
+---
+
+## Task 7b — `generator/pad.py`: consecutive-exception dispatch completion (BP behaviour)
+
+**Depends on:** Task 7b0, Task 7b3 (the counter/previous-message init placement must be fixed
+before this task's tests can validate a real breach against the full generated body)
 **Files in scope:** `src/flowsmith/generator/pad.py`, `tests/generator/test_pad.py`
 **Required reading:** `docs/bp-to-pad-architecture-PID171.md` §A7 (BP ground truth for the
 `Mark Item As Exception` page, traced from `PID_0171.bprelease`), §A5 (SUE re-throws and halts the

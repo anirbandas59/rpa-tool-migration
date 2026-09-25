@@ -178,6 +178,22 @@ def _parse_stage(stage_elem: Any) -> RawStage:
                 # default to "collection" which the type mapper handles
                 raw_type = "collection" if stage_type == "Collection" else "text"
 
+            # Task 7b3: a Data/Collection stage's <alwaysinit/> element controls
+            # whether BP resets it to its initial value every time its page runs.
+            # Confirmed on samples/blueprism/PID_0171.bprelease's 'Mark Item As
+            # Exception' subsheet: stage 279f2417 'Consecutive Exception Count' and
+            # stage a08fa84e 'Previous Exception Detail' both lack <alwaysinit/> (and
+            # keep their value across page runs), while stage 36455e9b 'Consecutive
+            # Exception Limit' has <private/><alwaysinit/>. BP's own default when the
+            # element is absent is "does not reset" — the majority-case default of
+            # True on the BPDataItem model reflects the observed majority (194/201
+            # Data/Collection stages in PID_171_US_Process_LIMS_Prelude carry it),
+            # not BP's runtime default, which is False (no reset) when absent.
+            always_init_elem = stage_elem.find(_ns("alwaysinit"))
+            if always_init_elem is None:
+                always_init_elem = stage_elem.find("alwaysinit")
+            always_init = always_init_elem is not None
+
             data_items.append(
                 RawDataItem(
                     name=name,  # variable name = stage name
@@ -185,6 +201,7 @@ def _parse_stage(stage_elem: Any) -> RawStage:
                     initial_value=initial_value,
                     is_input=False,
                     is_output=False,
+                    always_init=always_init,
                 )
             )
 
