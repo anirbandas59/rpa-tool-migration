@@ -88,6 +88,11 @@ class RawStage(TypedDict):
     ontrue_target: str | None
     onfalse_target: str | None
     processid: str | None  # SubSheet/Process cross-reference ID (Task 4a)
+    loop_type: NotRequired[str | None]
+    """Raw BP <looptype> text of a LoopStart stage (e.g. "ForEach"), Task 8b item 1."""
+    loop_data: NotRequired[str | None]
+    """Raw BP <loopdata> text of a LoopStart stage — the looped-over collection's
+    name (e.g. "InputMapping_Collection"), Task 8b item 1."""
 
 
 class RawPage(TypedDict):
@@ -166,6 +171,8 @@ def _extract_common_stage_fields(raw: RawStage) -> dict[str, object]:
         "ontrue_target": raw.get("ontrue_target"),
         "onfalse_target": raw.get("onfalse_target"),
         "processid": raw.get("processid"),  # SubSheet/Process cross-reference (Task 4a)
+        "loop_type": raw.get("loop_type"),  # Task 8b item 1 (LoopStart only)
+        "loop_data": raw.get("loop_data"),  # Task 8b item 1 (LoopStart only)
     }
 
 
@@ -267,6 +274,24 @@ def _normalise_stages(
                     name=raw["name"],
                     data_items=data_items,
                     is_process_call=True,
+                    **common_fields,
+                )
+            )
+            continue
+
+        if stage_type in ("Alert", "Skill"):
+            # Task 8b item 4 — CLAUDE.md "Normalised on parse": ALERT -> ACTION
+            # (is_alert=True), SKILL -> ACTION (is_skill=True, confidence forced to
+            # MANUAL; the forcing is the engine's job). mapping/stage_rules.yaml has an
+            # Alert and a Skill row (canonical_type ACTION, is_alert/is_skill true).
+            stages.append(
+                BPStage(
+                    stage_id=stage_id,
+                    stage_type=StageType.ACTION,
+                    name=raw["name"],
+                    data_items=data_items,
+                    is_alert=stage_type == "Alert",
+                    is_skill=stage_type == "Skill",
                     **common_fields,
                 )
             )

@@ -134,6 +134,32 @@ class TestStageContext:
         report = build_coverage_report(process)
         assert report.unflagged_attention[0].pending_flag_reasons == ["fusion candidate"]
 
+    def test_transferred_pending_flags_not_listed_as_untransferred(
+        self, process: BPProcess
+    ) -> None:
+        """Task 8b item 5: a fusion-candidate pending flag the engine already copied onto
+        pa_annotation.flags (Task 8a keeps pending_flags) is not 'untransferred'; one
+        that is missing from the annotation still is."""
+        stage = process.pages[0].stages[1]  # s-vbo, MANUAL VBO call
+        transferred = ReviewFlag(
+            stage_id="s-vbo",
+            reason="Fusion candidate: 'Create Instance' + 'Open Workbook' unmatched",
+            severity="warn",
+            suggested_fix="",
+        )
+        stage.pending_flags.append(transferred)
+        stage.pending_flags.append(
+            ReviewFlag(
+                stage_id="s-vbo", reason="not yet transferred", severity="info", suggested_fix=""
+            )
+        )
+        assert stage.pa_annotation is not None
+        stage.pa_annotation.flags.append(transferred)
+
+        report = build_coverage_report(process)
+        detail = next(s for b in report.bands for s in b.stages if s.stage_id == "s-vbo")
+        assert detail.pending_flag_reasons == ["not yet transferred"]
+
     def test_pages_roll_up(self, process: BPProcess) -> None:
         report = build_coverage_report(process)
         main, helper = report.pages

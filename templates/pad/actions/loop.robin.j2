@@ -1,3 +1,12 @@
+{# Task 8b item 2: BP ForEach LoopStart/LoopEnd pair -> §B12 LOOP row
+   "LOOP FOREACH <item> IN <collection> ... END" (reference Main L788
+   `LOOP FOREACH dtr_CurrentItem IN In_dtb_FinalProduct`). body_lines are the
+   already-rendered body statements, nested one level inside the loop. #}
+{% if verify_comment %}
+# VERIFY: {{ verify_comment }}
+{% endif %}
 LOOP FOREACH {{ var_name }} IN {{ collection }}
-    # TODO: implement loop body
+{% for line in body_lines %}
+{{ ("    " ~ line) if line else "" }}
+{% endfor %}
 END

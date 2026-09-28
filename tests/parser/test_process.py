@@ -1799,3 +1799,69 @@ def test_call_stage_output_captures_stage_attribute(
     assert call_stage["outputs_stage_map"]["Mail Items"] == "dtb_CallerItems"
     # The output binding must not leak into params_map (which holds inputs only).
     assert "Mail Items" not in call_stage["params_map"]
+
+
+# ── Task 8b item 1: LoopStart <looptype>/<loopdata> capture ─────────────────
+
+
+def _loop_bprelease(tmp_path: Path) -> Path:
+    """Namespaced LoopStart/LoopEnd pair, shaped like PID_0171's 'Loop Input' stages."""
+    xml_content = """<?xml version="1.0" encoding="utf-8"?>
+<process id="proc_loop" name="LoopProc" version="1.0"
+         xmlns="http://www.blueprism.co.uk/product/process">
+  <subsheet subsheetid="pg1" name="LoopProc" type="0">
+    <stage stageid="ls1" name="Loop Input" type="LoopStart">
+      <onsuccess>c1</onsuccess><groupid>g1</groupid>
+      <looptype>ForEach</looptype><loopdata>InputMapping_Collection</loopdata>
+    </stage>
+    <stage stageid="c1" name="Body" type="Calculation"><onsuccess>le1</onsuccess></stage>
+    <stage stageid="le1" name="Loop Input" type="LoopEnd"><groupid>g1</groupid></stage>
+  </subsheet>
+</process>
+"""
+    filepath = tmp_path / "loop.bprelease"
+    filepath.write_text(xml_content, encoding="utf-8")
+    return filepath
+
+
+def test_loopstart_looptype_and_loopdata_captured(tmp_path: Path) -> None:
+    """LoopStart carries raw <looptype>/<loopdata>; LoopEnd (which has only <groupid>)
+    leaves both None (Task 8b item 1)."""
+    result = parse_process(_loop_bprelease(tmp_path))
+    stages = {s["stage_id"]: s for page in result["processes"][0]["pages"] for s in page["stages"]}
+    assert stages["ls1"]["loop_type"] == "ForEach"
+    assert stages["ls1"]["loop_data"] == "InputMapping_Collection"
+    assert stages["le1"]["loop_type"] is None
+    assert stages["le1"]["loop_data"] is None
+    assert stages["c1"]["loop_type"] is None
+
+
+def _real_loopstart_stages(sample: Path) -> list[dict[str, object]]:
+    """All LoopStart RawStages across every process and object artefact of a sample."""
+    result = parse_process(sample)
+    return [
+        s
+        for artefact in [*result["processes"], *result["objects"]]
+        for page in artefact["pages"]
+        for s in page["stages"]
+        if s["stage_type"] == "LoopStart"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("sample", "expected"),
+    [
+        ("samples/blueprism/PID_0171.bprelease", 19),
+        ("samples/blueprism/PID_0127.bprelease", 20),
+    ],
+)
+def test_real_sample_loopstart_definitions_captured(sample: str, expected: int) -> None:
+    """Every LoopStart in the real samples is ForEach with a loopdata collection
+    (PID_0171: 19 LoopStarts, PID_0127: 20 — counted in the raw XML, Task 8b item 1)."""
+    path = Path(sample)
+    if not path.exists():
+        pytest.skip(f"{sample} not present")
+    loop_starts = _real_loopstart_stages(path)
+    assert len(loop_starts) == expected
+    assert all(s["loop_type"] == "ForEach" for s in loop_starts)
+    assert all(s["loop_data"] for s in loop_starts)

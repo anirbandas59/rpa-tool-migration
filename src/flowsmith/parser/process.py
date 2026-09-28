@@ -279,6 +279,23 @@ def _parse_stage(stage_elem: Any) -> RawStage:
         if groupid_elem is not None and groupid_elem.text:
             group_id = groupid_elem.text.strip()
 
+        # Parse <looptype>/<loopdata> (namespace-aware, like <groupid>) — Task 8b item 1.
+        # BP stores the loop definition on the LoopStart only
+        # (<looptype>ForEach</looptype><loopdata>InputMapping_Collection</loopdata>);
+        # the LoopEnd carries just <groupid>, so both stay None there.
+        loop_type: str | None = None
+        looptype_elem = stage_elem.find(_ns("looptype"))
+        if looptype_elem is None:
+            looptype_elem = stage_elem.find("looptype")
+        if looptype_elem is not None and looptype_elem.text and looptype_elem.text.strip():
+            loop_type = looptype_elem.text.strip()
+        loop_data: str | None = None
+        loopdata_elem = stage_elem.find(_ns("loopdata"))
+        if loopdata_elem is None:
+            loopdata_elem = stage_elem.find("loopdata")
+        if loopdata_elem is not None and loopdata_elem.text and loopdata_elem.text.strip():
+            loop_data = loopdata_elem.text.strip()
+
         # Parse <code> text content for Code stages (namespace-aware, CDATA)
         code_text: str | None = None
         code_elem = stage_elem.find(_ns("code"))
@@ -487,6 +504,8 @@ def _parse_stage(stage_elem: Any) -> RawStage:
             ontrue_target=ontrue_target,
             onfalse_target=onfalse_target,
             processid=processid,
+            loop_type=loop_type,  # Task 8b item 1
+            loop_data=loop_data,  # Task 8b item 1
         )
     except (ValueError, AttributeError) as exc:
         raise ParseError(f"Failed to parse stage: {exc}") from exc

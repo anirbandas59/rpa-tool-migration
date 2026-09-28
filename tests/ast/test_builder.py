@@ -335,6 +335,45 @@ def test_loop_pair_out_of_order() -> None:
     assert stages[1].pair_id == "ls1"
 
 
+def test_loop_definition_carried_onto_loop_start_only() -> None:
+    """LoopStart's raw looptype/loopdata land on its LOOP stage; LoopEnd keeps None
+    (Task 8b item 1)."""
+    ls = make_raw_stage(stage_id="ls1", stage_type="LoopStart", name="Loop", group_id="g1")
+    ls["loop_type"] = "ForEach"
+    ls["loop_data"] = "InputMapping_Collection"
+    raw = single_page_process(
+        ls,
+        make_raw_stage(stage_id="le1", stage_type="LoopEnd", name="Loop", group_id="g1"),
+    )
+    by_id = {s.stage_id: s for s in build_ast(raw).pages[0].stages}
+    assert by_id["ls1"].loop_type == "ForEach"
+    assert by_id["ls1"].loop_data == "InputMapping_Collection"
+    assert by_id["le1"].loop_type is None
+    assert by_id["le1"].loop_data is None
+
+
+@pytest.mark.parametrize(
+    ("bp_type", "is_alert", "is_skill"),
+    [("Alert", True, False), ("Skill", False, True)],
+)
+def test_alert_and_skill_normalise_to_action(bp_type: str, is_alert: bool, is_skill: bool) -> None:
+    """CLAUDE.md 'Normalised on parse': ALERT -> ACTION (is_alert=True), SKILL -> ACTION
+    (is_skill=True). Neither sample contains one, so the stages are synthetic; before
+    Task 8b item 4 both raised ASTBuildError('Unknown stage type')."""
+    raw = single_page_process(
+        make_raw_stage(
+            stage_id="a1", stage_type=bp_type, name=f"My {bp_type}", onsuccess_target="e1"
+        ),
+    )
+    stage = build_ast(raw).pages[0].stages[0]
+    assert stage.stage_type == StageType.ACTION
+    assert stage.name == f"My {bp_type}"
+    assert stage.is_alert is is_alert
+    assert stage.is_skill is is_skill
+    assert stage.onsuccess_target == "e1"
+    assert not stage.is_subsheet_call and not stage.is_process_call
+
+
 def test_unmatched_loop_raises() -> None:
     raw = single_page_process(
         make_raw_stage(stage_id="ls1", stage_type="LoopStart", name="Loop"),
@@ -842,6 +881,24 @@ def test_pid171_wait_or_loop_pairs_match_when_group_id_present(pid_0171_process)
             f"Stage {stage.stage_id} ({stage.stage_type}) with group_id "
             f"'{stage.group_id}' has no pair_id"
         )
+
+
+def test_pid171_loop_starts_carry_foreach_definition() -> None:
+    """Every LoopStart-derived LOOP stage across all PID_0171 artefacts (19, counted in
+    the raw XML) carries looptype 'ForEach' and a loopdata collection, and is the
+    pair's start (pair_id == stage_id) — Task 8b item 1."""
+    if not PID_0171.exists():
+        pytest.skip("PID_0171 sample not available")
+    release = parse_process(PID_0171)
+    loop_starts = []
+    for artefact in [*release["processes"], *release["objects"]]:
+        ast = build_ast(artefact)
+        loop_starts.extend(
+            s for p in ast.pages for s in p.stages if s.stage_type == StageType.LOOP and s.loop_type
+        )
+    assert len(loop_starts) == 19
+    assert all(s.loop_type == "ForEach" and s.loop_data for s in loop_starts)
+    assert all(s.pair_id == s.stage_id for s in loop_starts)
 
 
 # ── VBO call-fusion detection tests ────────────────────────────────────────

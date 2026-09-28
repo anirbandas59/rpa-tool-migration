@@ -2952,7 +2952,13 @@ class _MiniPadInterpreter:
                 i += 1
                 continue
             if line.startswith("Text.ChangeCase"):
-                match = re.match(r"Text\.ChangeCase '([^']+)' 'To lowercase' => (\S+)", line)
+                # Task 8b fix pass: a variable operand now uses the reference's syntax
+                # (Main L642/L872); an unresolved token keeps the old quoted shape.
+                match = re.match(
+                    r"Text\.ChangeCase Text: (\S+) NewCase: Text\.CaseOption\.LowerCase "
+                    r"Result=> (\S+)",
+                    line,
+                ) or re.match(r"Text\.ChangeCase '([^']+)' 'To lowercase' => (\S+)", line)
                 assert match is not None, f"Unparseable Text.ChangeCase line: {line!r}"
                 src, dst = match.group(1), match.group(2)
                 state[dst] = str(state.get(src, src)).lower()
@@ -6647,3 +6653,486 @@ def test_7e_main_body_config_write_before_load_not_flagged_after_is() -> None:
     assert not lines[init_idx - 1].startswith("# TODO: this SET overwrites")
     assert lines[after_idx - 1].startswith("# TODO: this SET overwrites txt_SubFolder")
     assert sum(ln.startswith("# TODO: this SET overwrites") for ln in lines) == 1
+
+
+# ── Task 8b item 2: LOOP rendering ─────────────────────────────────────────
+
+
+def _auto_annotation(target_type: str = "", confidence: float = 0.95) -> PAAnnotation:
+    """A minimal System annotation at the given confidence."""
+    return PAAnnotation(
+        target_type=target_type,
+        target_module="System",
+        runtime=Runtime.DESKTOP,
+        confidence=confidence,
+        band=ConfidenceBand.from_score(confidence),
+        params_map={},
+        flags=[],
+    )
+
+
+# stage_rules.yaml LoopStart row (0.80, SPOT-CHECK) — the annotation LOOP stages carry.
+_LOOP_TEMPLATE = "LOOP FOREACH <item> IN <collection> ... END | LOOP <var> FROM <start> TO <end> STEP <n> ... END"
+
+
+def _loop_start(
+    stage_id: str,
+    name: str,
+    collection: str,
+    onsuccess: str | None,
+    group_id: str | None = "G1",
+    loop_type: str = "ForEach",
+) -> BPStage:
+    """LoopStart-derived LOOP stage (pair_id == its own id, per the builder contract)."""
+    return BPStage(
+        stage_id=stage_id,
+        stage_type=StageType.LOOP,
+        name=name,
+        pair_id=stage_id,
+        group_id=group_id,
+        loop_type=loop_type,
+        loop_data=collection,
+        onsuccess_target=onsuccess,
+        pa_annotation=_auto_annotation(_LOOP_TEMPLATE, 0.80),
+    )
+
+
+def _loop_end(
+    stage_id: str, name: str, start_id: str, onsuccess: str | None, group_id: str | None = "G1"
+) -> BPStage:
+    """LoopEnd-derived LOOP stage (carries only the pairing, no loop definition)."""
+    return BPStage(
+        stage_id=stage_id,
+        stage_type=StageType.LOOP,
+        name=name,
+        pair_id=start_id,
+        group_id=group_id,
+        onsuccess_target=onsuccess,
+        pa_annotation=_auto_annotation(_LOOP_TEMPLATE, 0.80),
+    )
+
+
+def _flow_start(stage_id: str, onsuccess: str) -> BPStage:
+    """START stage with one onsuccess edge."""
+    return BPStage(
+        stage_id=stage_id,
+        stage_type=StageType.START,
+        name="Start",
+        onsuccess_target=onsuccess,
+        pa_annotation=_auto_annotation(),
+    )
+
+
+def _flow_decision(stage_id: str, expr: str, on_true: str, on_false: str) -> BPStage:
+    """Branching DECISION stage."""
+    return BPStage(
+        stage_id=stage_id,
+        stage_type=StageType.DECISION,
+        name=f"Decision {stage_id}",
+        decision_expression=expr,
+        ontrue_target=on_true,
+        onfalse_target=on_false,
+        pa_annotation=_auto_annotation("IF <expr> THEN <true-branch> ELSE <false-branch> END"),
+    )
+
+
+_LOOP_MAPPING = {"items": "dtb_Items", "out": "txt_Out", "flag": "flg_Flag"}
+
+
+def _indent_of(line: str) -> int:
+    """Leading-space count of a line."""
+    return len(line) - len(line.lstrip())
+
+
+def test_loop_row_variable_naming() -> None:
+    """§A4 dtr_: dtr_Current + collection name without _Collection/Collection suffix,
+    non-alphanumerics removed (Task 8b item 2)."""
+    assert PADGenerator._loop_row_variable("InputMapping_Collection") == "dtr_CurrentInputMapping"
+    assert PADGenerator._loop_row_variable("Mail Items") == "dtr_CurrentMailItems"
+    assert PADGenerator._loop_row_variable("Output Collection") == "dtr_CurrentOutput"
+    assert PADGenerator._loop_row_variable("coll_Exceptions") == "dtr_CurrentcollExceptions"
+
+
+def test_loop_renders_foreach_with_nested_body_and_scoped_row_reads() -> None:
+    """A LoopStart/LoopEnd pair renders as one LOOP FOREACH ... END with the body nested
+    inside (not flat after it), the LoopEnd emits nothing, row reads inside the body use
+    dtr_Current...['Field'] and the same reference after the loop keeps its dtb_ rendering.
+
+    The pair is declared adjacent (like the real PID_0171 'Loop Input'/'Mail Items'
+    stages) with the body declared after both, so a positional render would emit the body
+    flat after the loop markers. Revert check: without the loop plan the LoopStart/LoopEnd
+    render as TODO stubs and 'SET txt_Out TO dtb_Items.Name' is emitted flat.
+    """
+    gen = PADGenerator()
+    stages = [
+        _flow_start("S", "LS"),
+        _loop_start("LS", "Loop Items", "Items", "B1"),
+        _loop_end("LE", "Loop Items", "LS", "AFTER"),
+        _calc_stage("B1", "Read Name", "Out", "[Items.Name]"),
+        _calc_stage("AFTER", "After Loop", "Out", "[Items.Name]"),
+    ]
+    stages[3].onsuccess_target = "LE"
+    rendered = gen._render_stage_list_with_coarse_blocks(stages, None, None, dict(_LOOP_MAPPING))
+    lines = rendered.splitlines()
+
+    assert "# System.LOOP" not in rendered
+    assert "LOOP FOREACH <item>" not in rendered
+    loop_idx = lines.index("LOOP FOREACH dtr_CurrentItems IN dtb_Items")
+    assert lines[loop_idx - 1] == "# VERIFY: Loop Items (confidence 0.80)"
+    end_idx = lines.index("END", loop_idx)
+    assert lines[loop_idx + 1 : end_idx] == ["    SET txt_Out TO dtr_CurrentItems['Name']"]
+    assert lines[end_idx + 1 :] == ["SET txt_Out TO dtb_Items.Name"]
+    assert rendered.count("LOOP FOREACH") == 1
+
+
+def test_loop_body_next_loop_and_exit_loop() -> None:
+    """Early edges inside the body: to the loop's exit continuation -> EXIT LOOP; to the
+    LoopEnd while more of the body follows -> NEXT LOOP (§B12). The enclosing IF's join
+    ('J') runs once, after that IF, for both of its arms.
+
+    Body: D0 (true -> AFTER = exit, false -> D1); D1 (true -> P, false -> D2);
+    D2 (true -> LoopEnd, false -> J); P -> J; J -> LoopEnd.
+    Revert check: without the outer-join propagation into nested DECISIONs, J is consumed
+    inside D2's false arm (lost from D1's true arm) and no NEXT LOOP is emitted; without
+    the loop context, neither keyword is emitted.
+    """
+    gen = PADGenerator()
+    stages = [
+        _flow_start("S", "LS"),
+        _loop_start("LS", "Loop Items", "Items", "D0"),
+        _loop_end("LE", "Loop Items", "LS", "AFTER"),
+        _flow_decision("D0", "[Flag]=True", "AFTER", "D1"),
+        _flow_decision("D1", "[Flag]=False", "P", "D2"),
+        _flow_decision("D2", "[Items.Skip]=True", "LE", "J"),
+        _set_var_stage("P", "VarP", "1", "J"),
+        _set_var_stage("J", "VarJ", "2", "LE"),
+        _set_var_stage("AFTER", "VarAfter", "3", None),
+    ]
+    rendered = gen._render_stage_list_with_coarse_blocks(stages, None, None, dict(_LOOP_MAPPING))
+    lines = rendered.splitlines()
+
+    loop_idx = lines.index("LOOP FOREACH dtr_CurrentItems IN dtb_Items")
+    loop_end_idx = max(i for i, ln in enumerate(lines) if ln == "END")
+    body = lines[loop_idx + 1 : loop_end_idx]
+    stripped = [ln.strip() for ln in body]
+    assert stripped.count("EXIT LOOP") == 1
+    assert stripped.count("NEXT LOOP") == 1
+    # EXIT LOOP is D0's true arm; NEXT LOOP is D2's true arm (inside D1's false arm).
+    assert stripped[stripped.index("IF flg_Flag=True THEN") + 1] == "EXIT LOOP"
+    assert stripped[stripped.index("IF dtr_CurrentItems['Skip']=True THEN") + 1] == "NEXT LOOP"
+    # J is rendered exactly once, after D1's END (reachable from both D1 arms).
+    assert rendered.count("SET VarJ TO 2") == 1
+    j_idx = stripped.index("SET VarJ TO 2")
+    d1_idx = stripped.index("IF flg_Flag=False THEN")
+    assert j_idx > d1_idx
+    assert _indent_of(body[j_idx]) == _indent_of(body[d1_idx])
+    # The exit continuation runs after the loop, not inside it.
+    assert lines[loop_end_idx + 1 :] == ["SET VarAfter TO 3"]
+
+
+def test_unstructurable_loop_gets_todo_naming_loop_and_edge() -> None:
+    """A jump into the middle of the loop body from outside it leaves the pair unbuilt:
+    a # TODO names the loop and the offending edge, no LOOP FOREACH is emitted, and the
+    body stage is still rendered (never silently dropped)."""
+    gen = PADGenerator()
+    stages = [
+        _flow_start("S", "D"),
+        _flow_decision("D", "[Flag]=True", "LS", "B1"),
+        _loop_start("LS", "Loop Items", "Items", "B1"),
+        _loop_end("LE", "Loop Items", "LS", None),
+        _set_var_stage("B1", "VarB", "1", "LE"),
+    ]
+    rendered = gen._render_stage_list_with_coarse_blocks(stages, None, None, dict(_LOOP_MAPPING))
+
+    assert "LOOP FOREACH" not in rendered
+    assert (
+        "# TODO: LOOP 'Loop Items' (FOREACH over BP collection 'Items', LoopStart id=LS) "
+        "not built — edge 'Decision D' (id=D) → 'VarB' (id=B1) jumps into the loop from "
+        "outside it"
+    ) in rendered
+    assert "# TODO: end of unbuilt LOOP 'Loop Items' (LoopEnd id=LE)" in rendered
+    assert "SET VarB TO 1" in rendered
+    assert "# System.LOOP" not in rendered
+
+
+def test_nested_loops_with_same_row_variable_get_todo_naming_both() -> None:
+    """A loop nested in another over the same collection would reuse the outer row
+    variable: the inner one is left unbuilt with a TODO naming both loops; the outer one
+    is still built."""
+    gen = PADGenerator()
+    stages = [
+        _flow_start("S", "LS1"),
+        _loop_start("LS1", "Outer", "Items", "LS2", group_id="G1"),
+        _loop_end("LE1", "Outer", "LS1", None, group_id="G1"),
+        _loop_start("LS2", "Inner", "Items", "B", group_id="G2"),
+        _loop_end("LE2", "Inner", "LS2", "LE1", group_id="G2"),
+        _set_var_stage("B", "VarB", "1", "LE2"),
+    ]
+    rendered = gen._render_stage_list_with_coarse_blocks(stages, None, None, dict(_LOOP_MAPPING))
+
+    assert rendered.count("LOOP FOREACH dtr_CurrentItems IN dtb_Items") == 1
+    assert (
+        "# TODO: LOOP 'Inner' (FOREACH over BP collection 'Items', LoopStart id=LS2) not "
+        "built — it is nested inside LOOP 'Outer' (LoopStart id=LS1) and both would use row "
+        "variable dtr_CurrentItems"
+    ) in rendered
+
+
+def test_loop_pairs_sharing_one_group_id_render_as_separate_loops() -> None:
+    """ast/builder.py may stack-match several LoopStart/LoopEnd pairs that share one
+    group_id; such a group falls back to pair_id pairing, one loop per builder pair."""
+    gen = PADGenerator()
+    stages = [
+        _flow_start("S", "LS1"),
+        _loop_start("LS1", "First", "Items", "B1", group_id="G"),
+        _loop_end("LE1", "First", "LS1", "LS2", group_id="G"),
+        _loop_start("LS2", "Second", "Items", "B2", group_id="G"),
+        _loop_end("LE2", "Second", "LS2", None, group_id="G"),
+        _set_var_stage("B1", "VarA", "1", "LE1"),
+        _set_var_stage("B2", "VarB", "2", "LE2"),
+    ]
+    rendered = gen._render_stage_list_with_coarse_blocks(stages, None, None, dict(_LOOP_MAPPING))
+    lines = rendered.splitlines()
+
+    assert rendered.count("LOOP FOREACH dtr_CurrentItems IN dtb_Items") == 2
+    first = lines.index("LOOP FOREACH dtr_CurrentItems IN dtb_Items")
+    assert lines[first + 1 : first + 3] == ["    SET VarA TO 1", "END"]
+    assert "TODO: LOOP" not in rendered
+
+
+def test_loop_row_write_keeps_table_target_with_todo() -> None:
+    """A SET inside the body writing [Collection.Field] of the looped collection is not a
+    row read: it keeps its table-level target and gets a TODO (no cited PAD write-back)."""
+    gen = PADGenerator()
+    stages = [
+        _flow_start("S", "LS"),
+        _loop_start("LS", "Loop Items", "Items", "W"),
+        _loop_end("LE", "Loop Items", "LS", None),
+        _calc_stage("W", "Write Name", "Items.Name", "[Out]"),
+    ]
+    stages[3].onsuccess_target = "LE"
+    rendered = gen._render_stage_list_with_coarse_blocks(stages, None, None, dict(_LOOP_MAPPING))
+
+    assert "    SET dtb_Items.Name TO txt_Out" in rendered
+    assert "# TODO: 'Write Name' writes field 'Items.Name' of the row being iterated" in rendered
+
+
+def test_flat_stage_list_render_builds_loops() -> None:
+    """The declaration-order renderers (inline_block/fold/split, via
+    _render_flat_stage_list) build loops too."""
+    gen = PADGenerator()
+    stages = [
+        _loop_start("LS", "Loop Items", "Items", "B1"),
+        _loop_end("LE", "Loop Items", "LS", None),
+        _calc_stage("B1", "Read Name", "Out", "[Items.Name]"),
+    ]
+    stages[2].onsuccess_target = "LE"
+    blocks = gen._render_flat_stage_list(stages, None, None, dict(_LOOP_MAPPING))
+
+    assert "\n".join(blocks).splitlines() == [
+        "# VERIFY: Loop Items (confidence 0.80)",
+        "LOOP FOREACH dtr_CurrentItems IN dtb_Items",
+        "    SET txt_Out TO dtr_CurrentItems['Name']",
+        "END",
+    ]
+
+
+# ── Task 8b item 3: honest output for unfilled templates ────────────────────
+
+
+@pytest.mark.parametrize(
+    ("confidence", "target_module", "target_type"),
+    [
+        (0.80, "System", "WAIT <seconds expr>"),  # SPOT-CHECK, <...> placeholders
+        (0.70, "Variables", "Remove Row"),  # SPOT-CHECK VBO method name (8a review example)
+        (0.60, "Variables", "Remove Null Rows"),  # PARTIAL
+        (0.95, "System", "WAIT <seconds expr>"),  # AUTO
+    ],
+)
+def test_unfilled_template_is_todo_never_verify(
+    confidence: float, target_module: str, target_type: str
+) -> None:
+    """Whatever the band, a stage whose output would only be its commented
+    pa_target_action template renders as '# TODO: <stage name> — template not filled:
+    <template>', never a '# VERIFY:' marker (reserved for real generated code)."""
+    gen = PADGenerator()
+    stage = make_annotated_stage(
+        stage_id="U1",
+        name="Unfilled Stage",
+        stage_type=StageType.WAIT,
+        target_type=target_type,
+        target_module=target_module,
+        confidence=confidence,
+    )
+    rendered = gen._render_stage(stage)
+
+    assert rendered == (
+        f"# TODO: Unfilled Stage — template not filled: {target_module}.{target_type}"
+    )
+    assert "# VERIFY:" not in rendered
+
+
+def test_no_target_template_keeps_plain_marker() -> None:
+    """A stage with no target template at all (the START/END no-op markers) keeps its
+    plain '# System.' comment — there is no template to call unfilled."""
+    gen = PADGenerator()
+    assert gen._render_stage(_end_stub_stage("E1", "End")) == "# System."
+
+
+# ── Task 8b fix pass ────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("kind", "operand", "expected"),
+    [
+        (
+            "trim",
+            "dtr_CurrentItem['Identity']",
+            "Text.Trim Text: dtr_CurrentItem['Identity'] TrimOption: Text.TrimOption.Both "
+            "TrimmedText=> txt_trimmed_0",
+        ),
+        (
+            "lower",
+            "txt_ExceptionType",
+            "Text.ChangeCase Text: txt_ExceptionType NewCase: Text.CaseOption.LowerCase "
+            "Result=> txt_trimmed_0",
+        ),
+        (
+            "lower",
+            "ExceptionType()",
+            "Text.ChangeCase 'ExceptionType()' 'To lowercase' => txt_trimmed_0",
+        ),
+    ],
+)
+def test_text_helper_action_never_quotes_a_variable_operand(
+    kind: str, operand: str, expected: str
+) -> None:
+    """Gap 1: a variable/row-read operand is passed unquoted in the reference's syntax
+    (Main L131 Text.Trim, L642/L872 Text.ChangeCase); an unresolved token keeps the old
+    quoted shape."""
+    assert PADGenerator._text_helper_action(kind, operand, "txt_trimmed_0") == expected
+
+
+def test_row_read_inside_trim_is_not_quoted() -> None:
+    """Gap 1 end to end: `Trim([Items.Name])` inside a loop body reads the row unquoted."""
+    gen = PADGenerator()
+    stages = [
+        _flow_start("S", "LS"),
+        _loop_start("LS", "Loop Items", "Items", "B1"),
+        _loop_end("LE", "Loop Items", "LS", None),
+        _calc_stage("B1", "Read Name", "Out", "Trim([Items.Name])"),
+    ]
+    stages[3].onsuccess_target = "LE"
+    rendered = gen._render_stage_list_with_coarse_blocks(stages, None, None, dict(_LOOP_MAPPING))
+    assert (
+        "    Text.Trim Text: dtr_CurrentItems['Name'] TrimOption: Text.TrimOption.Both "
+        "TrimmedText=> txt_trimmed_0"
+    ) in rendered.splitlines()
+    assert "'dtr_" not in rendered
+
+
+def _code_lines(rendered: str) -> list[str]:
+    """Rendered lines without comments, stripped."""
+    return [ln.strip() for ln in rendered.splitlines() if not ln.strip().startswith("#")]
+
+
+def test_declaration_order_loop_waits_for_its_flow_predecessor() -> None:
+    """Gap 2, ConvertConfigFile shape (PID_0127): the flow is Start -> Append { -> loop ->
+    Remove Last Comma, but the BP list declares the LoopStart/LoopEnd first and
+    'Append {' after them. The loop must be emitted after 'Append {' (it initialises the
+    string the loop appends to), and the exit continuation after the loop.
+
+    Revert check: emitting the loop at its LoopStart's list position puts
+    'SET txt_Json TO "{"' after END, overwriting what the loop built.
+    """
+    gen = PADGenerator()
+    stages = [
+        _flow_start("S", "INIT"),
+        _loop_start("LS", "Loop Coll", "Items", "B1"),
+        _loop_end("LE", "Loop Coll", "LS", "AFTER"),
+        _set_var_stage("INIT", "txt_Json", '"{"', "LS"),
+        _set_var_stage("B1", "txt_Json", 'txt_Json + "x"', "LE"),
+        _set_var_stage("AFTER", "txt_Done", "1", None),
+    ]
+    blocks = gen._render_flat_stage_list(stages, None, None, dict(_LOOP_MAPPING))
+    code = _code_lines("\n".join(blocks))
+
+    assert code == [
+        'SET txt_Json TO "{"',
+        "LOOP FOREACH dtr_CurrentItems IN dtb_Items",
+        'SET txt_Json TO txt_Json + "x"',
+        "END",
+        "SET txt_Done TO 1",
+    ]
+    assert "# TODO: reorder" not in "\n".join(blocks)
+
+
+def test_declaration_order_loop_pulled_before_later_declared_successor() -> None:
+    """Gap 2, GenerateReport shape (PID_0127): the direct predecessor is declared before
+    a flow successor, which is declared before the LoopStart. The loop is emitted right
+    after its predecessor, so the successor follows it."""
+    gen = PADGenerator()
+    stages = [
+        _flow_start("S", "PRED"),
+        _set_var_stage("PRED", "txt_A", "1", "LS"),
+        _set_var_stage("AFTER", "txt_B", "2", None),
+        _loop_start("LS", "Loop Coll", "Items", "B1"),
+        _loop_end("LE", "Loop Coll", "LS", "AFTER"),
+        _set_var_stage("B1", "txt_C", "3", "LE"),
+    ]
+    blocks = gen._render_flat_stage_list(stages, None, None, dict(_LOOP_MAPPING))
+    assert _code_lines("\n".join(blocks)) == [
+        "SET txt_A TO 1",
+        "LOOP FOREACH dtr_CurrentItems IN dtb_Items",
+        "SET txt_C TO 3",
+        "END",
+        "SET txt_B TO 2",
+    ]
+
+
+def test_declaration_order_undetermined_reorder_gets_todo() -> None:
+    """Gap 2: when the list declares a transitive flow predecessor ('X') after the loop's
+    direct predecessor and a flow successor ('AFTER') before it, the flow order can't be
+    taken from the list — both are named in reorder TODOs, never silently reordered."""
+    gen = PADGenerator()
+    stages = [
+        _flow_start("S", "X"),
+        _set_var_stage("AFTER", "txt_After", "1", None),
+        _set_var_stage("PRED", "txt_Pred", "1", "LS"),
+        _loop_start("LS", "Loop Coll", "Items", "B1"),
+        _loop_end("LE", "Loop Coll", "LS", "AFTER"),
+        _set_var_stage("B1", "txt_Body", "1", "LE"),
+        _set_var_stage("X", "txt_X", "1", "PRED"),
+    ]
+    rendered = "\n".join(gen._render_flat_stage_list(stages, None, None, dict(_LOOP_MAPPING)))
+    assert (
+        "# TODO: reorder — flow predecessor(s) 'txt_X' (id=X) of LOOP 'Loop Coll' are "
+        "declared after the loop"
+    ) in rendered
+    assert (
+        "# TODO: reorder — flow successor(s) 'txt_After' (id=AFTER) of LOOP 'Loop Coll' are "
+        "declared before its flow predecessors"
+    ) in rendered
+
+
+def test_decision_inside_loop_body_keeps_verify_marker() -> None:
+    """Gap 3: a SPOT-CHECK DECISION rendered by the control-flow walk (here inside a loop
+    body) keeps its '# VERIFY:' line directly before its IF."""
+    gen = PADGenerator()
+    decision = _flow_decision("D", "[Flag]=True", "P", "LE")
+    decision.pa_annotation = _auto_annotation(
+        "IF <expr> THEN <true-branch> ELSE <false-branch> END", 0.85
+    )
+    decision.name = "Item Already added in Queue?"
+    stages = [
+        _flow_start("S", "LS"),
+        _loop_start("LS", "Loop Items", "Items", "D"),
+        _loop_end("LE", "Loop Items", "LS", None),
+        decision,
+        _set_var_stage("P", "VarP", "1", "LE"),
+    ]
+    lines = gen._render_stage_list_with_coarse_blocks(
+        stages, None, None, dict(_LOOP_MAPPING)
+    ).splitlines()
+    if_idx = lines.index("    IF flg_Flag=True THEN")
+    assert lines[if_idx - 1] == "    # VERIFY: Item Already added in Queue? (confidence 0.85)"

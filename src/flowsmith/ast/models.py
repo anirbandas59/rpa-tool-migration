@@ -267,6 +267,21 @@ class BPStage(BaseModel):
         default=False,
         description="True when a PROCESS BP stage has been normalised to ACTION per CLAUDE.md.",
     )
+    is_alert: bool = Field(
+        default=False,
+        description=(
+            "True when an ALERT BP stage has been normalised to ACTION per CLAUDE.md "
+            "('ALERT -> ACTION (is_alert=True)'), Task 8b item 4."
+        ),
+    )
+    is_skill: bool = Field(
+        default=False,
+        description=(
+            "True when a SKILL BP stage has been normalised to ACTION per CLAUDE.md "
+            "('SKILL -> ACTION (is_skill=True, confidence forced to MANUAL)'), Task 8b item 4. "
+            "The MANUAL forcing is the engine's job; this flag is what it keys on."
+        ),
+    )
     processid: str | None = Field(
         default=None,
         description=(
@@ -322,6 +337,23 @@ class BPStage(BaseModel):
         description=(
             "The <groupid> value from the BP XML, used to reliably pair WaitStart/WaitEnd "
             "and LoopStart/LoopEnd bracket stages. None on older BP exports that lack groupid."
+        ),
+    )
+    loop_type: str | None = Field(
+        default=None,
+        description=(
+            "Raw BP <looptype> text (e.g. 'ForEach'), only populated on the LoopStart-derived "
+            "LOOP stage — BP stores the loop definition on the LoopStart only; the LoopEnd "
+            "carries just <groupid> (Task 8b item 1). Kept as the raw string, never "
+            "normalised to an invented loop kind."
+        ),
+    )
+    loop_data: str | None = Field(
+        default=None,
+        description=(
+            "Raw BP <loopdata> text — the name of the collection a ForEach loop iterates "
+            "(e.g. 'InputMapping_Collection'). Only populated on the LoopStart-derived LOOP "
+            "stage (Task 8b item 1)."
         ),
     )
     exception_detail: str | None = Field(

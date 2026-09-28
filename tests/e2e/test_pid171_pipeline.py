@@ -364,3 +364,164 @@ class TestTask7eConfigFollowUp:
         assert text.count("FUNCTION 'Load Config Data' GLOBAL") == 1
         assert "dtb_ConfigFileData." not in text
         assert "%SomeVar%" not in text
+
+
+class TestTask8bLoops:
+    """Task 8b item 2 on the real PID_0171 output."""
+
+    def test_mail_items_loop_built_with_row_read(self, robin_flows: dict) -> None:
+        """Populate Queue's 'Mail Items' ForEach loop (inlined into the Loader) renders as
+        one LOOP FOREACH over dtb_MailItems with its body nested and its row read."""
+        lines = robin_flows["loader"].splitlines()
+        loop_idx = lines.index("LOOP FOREACH dtr_CurrentMailItems IN dtb_MailItems")
+        end_idx = next(i for i in range(loop_idx, len(lines)) if lines[i] == "END")
+        body = lines[loop_idx + 1 : end_idx]
+        assert body[0].startswith("    SET txt_EmailSubject TO dtr_CurrentMailItems['Subject']")
+        assert all(line == "" or line.startswith("    ") for line in body)
+
+    @pytest.mark.parametrize(("role", "built", "unbuilt"), [("loader", 1, 0), ("performer", 2, 2)])
+    def test_every_emitted_loop_built_or_todo(
+        self, robin_flows: dict, role: str, built: int, unbuilt: int
+    ) -> None:
+        """Each LoopStart reaching the flow is either a LOOP FOREACH dtr_... IN ... or a
+        TODO naming it (Loader: Mail Items built; Performer: Loop Final Product and
+        Component Names built, Loop Input and Final Product left as TODOs), and no
+        commented '# System.LOOP' template remains."""
+        text = robin_flows[role]
+        stripped = [line.strip() for line in text.splitlines()]
+        assert sum(line.startswith("LOOP FOREACH dtr_Current") for line in stripped) == built
+        assert sum(line.startswith("# TODO: LOOP '") for line in stripped) == unbuilt
+        assert sum(line.startswith("# TODO: end of unbuilt LOOP '") for line in stripped) == unbuilt
+        assert "# System.LOOP" not in text
+
+
+# ── Task 8b fix pass (gap 1): string-literal well-formedness of the .robin output ──
+
+SAMPLE_0127 = Path("samples/blueprism/PID_0127.bprelease")
+
+# Pre-existing (present at base 8592c84, before Task 8b): PID_0127's 'WithSIMAAS'/
+# 'WithOutSIMAAS' Calculation stages carry a raw multi-line PowerShell script as their BP
+# expression, which the CALCULATION renderer emits verbatim; its
+# `$itm.FieldValues"FSObjType"` lines put a literal against an identifier. Not a quoting
+# bug of the Trim/ChangeCase wrapper — tracked as an open question, not fixed here.
+_PREEXISTING_MALFORMED_PREFIXES = ("Get-PnPListItem -List $SourceName",)
+
+
+def robin_literal_errors(text: str) -> list[tuple[int, str]]:
+    """Scan PAD .robin text for malformed string literals, outside comments.
+
+    Recognises the literal forms used in the reference sources
+    (``docs/pad-reference/*.robin.txt``): ``$'''...'''`` (may span lines and contain
+    ``''``, e.g. Main L801 ``$'''%''%'''``), ``'...'`` (single line, backslash escapes,
+    e.g. Loader L109 ``'\\'``) and the generator's BP ``"..."`` literals (may span lines,
+    ``""`` escapes a quote). ``#`` outside a literal starts a comment to end of line.
+    A literal that never closes is unbalanced; a literal directly touching an identifier
+    character or another quote (``'dtr_X['Field']'`` tokenises as literal, identifier,
+    literal) is a broken quote pair.
+
+    Args:
+        text: The .robin file content.
+
+    Returns:
+        ``(line_number, reason)`` per malformed literal.
+    """
+    errors: list[tuple[int, str]] = []
+    n = len(text)
+    i = 0
+
+    def line_of(pos: int) -> int:
+        return text.count("\n", 0, pos) + 1
+
+    while i < n:
+        char = text[i]
+        start = i
+        if char == "#":
+            newline = text.find("\n", i)
+            i = n if newline < 0 else newline
+            continue
+        if text.startswith("$'''", i):
+            close = text.find("'''", i + 4)
+            if close < 0:
+                errors.append((line_of(start), "unterminated $''' literal"))
+                break
+            i = close + 3
+        elif char == "'":
+            j = i + 1
+            while j < n and text[j] not in "'\n":
+                j += 2 if text[j] == "\\" else 1
+            if j >= n or text[j] != "'":
+                errors.append((line_of(start), "unterminated ' literal"))
+                i = j
+                continue
+            i = j + 1
+        elif char == '"':
+            j = i + 1
+            while True:
+                close = text.find('"', j)
+                if close >= 0 and text.startswith('""', close):
+                    j = close + 2
+                    continue
+                break
+            if close < 0:
+                errors.append((line_of(start), 'unterminated " literal'))
+                break
+            i = close + 1
+        else:
+            i += 1
+            continue
+        before = text[start - 1] if start > 0 else " "
+        after = text[i] if i < n else " "
+        if after.isalnum() or after in "_'\"" or before.isalnum() or before == "_":
+            errors.append((line_of(start), "literal touches an identifier or quote"))
+    return errors
+
+
+def _unexpected_literal_errors(text: str) -> list[str]:
+    """The malformed-literal lines of ``text`` not in the pre-existing allowlist."""
+    lines = text.splitlines()
+    return sorted(
+        {
+            f"L{line_no}: {reason}: {lines[line_no - 1].strip()[:160]}"
+            for line_no, reason in robin_literal_errors(text)
+            if not lines[line_no - 1].strip().startswith(_PREEXISTING_MALFORMED_PREFIXES)
+        }
+    )
+
+
+def test_literal_checker_accepts_reference_and_rejects_broken_quoting() -> None:
+    """The checker passes the real reference sources and catches the 8b regression shape."""
+    for ref in Path("docs/pad-reference").glob("*.robin.txt"):
+        assert robin_literal_errors(ref.read_text(encoding="utf-8")) == [], ref.name
+    assert robin_literal_errors("Text.Trim 'dtr_CurrentX['Identity']' => txt_t") != []
+    assert robin_literal_errors("SET txt_A TO 'unclosed\nSET txt_B TO 1") != []
+    assert robin_literal_errors("SET txt_A TO $'''%''%''' # it's a comment") == []
+
+
+@pytest.fixture(scope="module")
+def robin_flows_0127(tmp_path_factory: pytest.TempPathFactory) -> dict:
+    """The generated PID_0127 Loader/Performer .robin text, keyed by role."""
+    if not SAMPLE_0127.exists():
+        pytest.skip("PID_0127 sample not present")
+    process = build_ast(parse_process(SAMPLE_0127))
+    create_annotator().annotate_process(process)
+    files = PADGenerator().generate_process(process, tmp_path_factory.mktemp("pid127_8b"))
+    return {
+        role: next(f for f in files if f.name.endswith(f"_{role.capitalize()}.robin")).read_text(
+            encoding="utf-8"
+        )
+        for role in ("loader", "performer")
+    }
+
+
+@pytest.mark.parametrize("role", ["loader", "performer"])
+def test_pid171_robin_literals_well_formed(robin_flows: dict, role: str) -> None:
+    """Gap 1: no malformed string literal in the PID_0171 flows (was 2 in the Performer:
+    `Text.Trim 'dtr_CurrentFinalProduct['Identity']'`, `'dtr_CurrentComponentNames['Value']'`)."""
+    assert _unexpected_literal_errors(robin_flows[role]) == []
+
+
+@pytest.mark.parametrize("role", ["loader", "performer"])
+def test_pid127_robin_literals_well_formed(robin_flows_0127: dict, role: str) -> None:
+    """Gap 1: no malformed string literal in the PID_0127 flows beyond the pre-existing
+    PowerShell dump (was 1 more in the Loader: `'dtr_CurrentParentQ['Sno']'`)."""
+    assert _unexpected_literal_errors(robin_flows_0127[role]) == []

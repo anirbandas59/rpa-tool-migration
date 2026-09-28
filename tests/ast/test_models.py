@@ -472,3 +472,28 @@ def test_bp_process_is_frozen() -> None:
     proc = _make_process()
     with pytest.raises(ValidationError):
         proc.name = "Other"  # type: ignore[misc]
+
+
+def test_bp_stage_loop_definition_defaults_none_and_round_trips() -> None:
+    """loop_type/loop_data default to None and keep the raw BP strings (Task 8b item 1)."""
+    plain = _make_stage(stage_id="s-1", name="Plain")
+    assert plain.loop_type is None
+    assert plain.loop_data is None
+    loop = BPStage(
+        stage_id="ls1",
+        stage_type=StageType.LOOP,
+        name="Loop Input",
+        loop_type="ForEach",
+        loop_data="InputMapping_Collection",
+    )
+    assert loop.loop_type == "ForEach"
+    assert loop.loop_data == "InputMapping_Collection"
+
+
+def test_bp_stage_alert_skill_flags_default_false() -> None:
+    """is_alert/is_skill default to False and can be set (Task 8b item 4)."""
+    plain = _make_stage(stage_id="s-1", name="Plain")
+    assert plain.is_alert is False
+    assert plain.is_skill is False
+    assert _make_stage(stage_id="s-2", is_alert=True).is_alert is True
+    assert _make_stage(stage_id="s-3", is_skill=True).is_skill is True

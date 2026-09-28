@@ -11,6 +11,7 @@ Sub-pages rendered based on page-shape mapping (function/inline_block/fold/split
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -109,6 +110,13 @@ BP_ITEM_REF_RE = re.compile(r"\[([^\].]+)(\.[^\]]*)?\]")
 # In_/Out_ parameter name.
 PAD_VARIABLE_RE = re.compile(r"\b(?:In_|Out_)?(?:txt|num|flg|obj|lst|dtb|dtr|dt|ins)_\w+\b")
 PAD_WORD_RE = re.compile(r"\w+")
+# Task 8b fix pass (gap 1): a whole operand that is a §A4 variable reference, optionally
+# followed by row/list indexing (`['Field']`, `[num_i]`) or `.Member` access — passed
+# unquoted to Text.Trim/Text.ChangeCase (reference Main L131, L872).
+PAD_VARIABLE_OPERAND_RE = re.compile(
+    r"(?:In_|Out_)?(?:txt|num|flg|obj|lst|dtb|dtr|dt|ins)_\w+"
+    r"(?:\['[^'\]]*'\]|\[\w+\]|\.\w+)*"
+)
 # String literals: $'''...''' (may span lines), "..." (may span lines — e.g. the BP mail
 # bodies), '...' (single line).
 PAD_STRING_LITERAL_RE = re.compile(r"\$'''.*?'''|\"[^\"]*\"|'[^'\n]*'", re.DOTALL)
@@ -159,6 +167,99 @@ _EXCEPTION_TYPE_COMPARISON_RE = re.compile(
     r"(=|<>)\s*[\"']([^\"']*)[\"']|[\"']([^\"']*)[\"']\s*(=|<>)",
     re.IGNORECASE,
 )
+
+
+# Task 8b item 2: the row variable of a rendered BP ForEach loop — §A4 `dtr_` ("Datatable
+# row", example `dtr_CurrentItem`), reference Main L788 `LOOP FOREACH dtr_CurrentItem IN
+# In_dtb_FinalProduct`. The suffix is the BP collection name without a trailing
+# `_Collection`/`Collection`, non-alphanumerics removed (e.g. InputMapping_Collection ->
+# dtr_CurrentInputMapping).
+LOOP_ROW_VAR_PREFIX = "dtr_Current"
+LOOP_COLLECTION_SUFFIX_RE = re.compile(r"_?collection$", re.IGNORECASE)
+NON_ALPHANUMERIC_RE = re.compile(r"[^A-Za-z0-9]")
+# The only BP <looptype> rendered as a PAD loop (§B12 LOOP row, collection loop). Counted
+# loops are out of Task 8b's scope — neither sample has one.
+BP_FOREACH_LOOP_TYPE = "ForEach"
+# §B12 LOOP row: "EXIT LOOP / NEXT LOOP map directly" (reference Main L834 NEXT LOOP,
+# L875 EXIT LOOP).
+PAD_NEXT_LOOP = "NEXT LOOP"
+PAD_EXIT_LOOP = "EXIT LOOP"
+
+
+@dataclass
+class _LoopPair:
+    """One BP LoopStart/LoopEnd pair as planned for rendering (Task 8b item 2).
+
+    Attributes:
+        start: The LoopStart-derived LOOP stage (``pair_id == stage_id``).
+        end: Its paired LoopEnd-derived LOOP stage, or None when the LoopEnd is not in
+            the stage list being rendered.
+        row_var: The PAD row variable (``dtr_Current<collection>``).
+        collection_var: The PAD collection variable the BP collection resolves to
+            through ``variable_name_mapping`` (None when it doesn't resolve).
+        member_ids: Stage ids rendered inside the loop body (the stages on a path from
+            the LoopStart to the LoopEnd, plus any exception-throw-only side paths).
+        exit_id: The LoopEnd's ``onsuccess`` target — where ``EXIT LOOP`` resumes.
+        unbuilt_reason: Why the loop can't be rendered as a structured LOOP (None when
+            it can).
+        direct_pred_ids: Stages of the list, outside the loop, with an edge into the
+            LoopStart — a declaration-order render emits the loop only once all of them
+            have been emitted (Task 8b fix pass, gap 2).
+        ancestor_ids: Every flow ancestor of the LoopStart in the list (outside the
+            loop, and not also reachable from the loop's exit) — any not yet emitted
+            when the loop is emitted is named in a ``# TODO`` (gap 2).
+        descendant_ids: Every stage reachable from the loop's exit (outside the loop,
+            and not also an ancestor) — any already emitted when the loop is emitted is
+            named in a ``# TODO`` (gap 2).
+    """
+
+    start: BPStage
+    end: BPStage | None
+    row_var: str
+    collection_var: str | None
+    member_ids: set[str] = field(default_factory=set)
+    exit_id: str | None = None
+    unbuilt_reason: str | None = None
+    direct_pred_ids: set[str] = field(default_factory=set)
+    ancestor_ids: set[str] = field(default_factory=set)
+    descendant_ids: set[str] = field(default_factory=set)
+
+
+@dataclass
+class _LoopPlan:
+    """Loop rendering plan for one stage list (Task 8b item 2).
+
+    Attributes:
+        built: LoopStart stage id -> the pair rendered as a real ``LOOP FOREACH``.
+        skip_ids: Stage ids rendered inside a built loop (its body members, its
+            LoopEnd, and any nested LoopStart) — a positional renderer emits nothing
+            for them at their own list position.
+    """
+
+    built: dict[str, _LoopPair] = field(default_factory=dict)
+    skip_ids: set[str] = field(default_factory=set)
+    pending: list[str] = field(default_factory=list)
+    """LoopStart ids of built loops a declaration-order render has reached but not
+    yet emitted, because a direct flow predecessor is declared later (gap 2)."""
+    emitted_ids: set[str] = field(default_factory=set)
+    """Stage ids a declaration-order render has emitted so far (standalone or inside
+    an emitted loop)."""
+
+
+@dataclass
+class _LoopContext:
+    """The loop whose body is currently being walked by ``_render_chain`` (Task 8b).
+
+    Attributes:
+        end_id: The LoopEnd stage id — reaching it ends this iteration.
+        exit_id: The LoopEnd's ``onsuccess`` target — reaching it is ``EXIT LOOP``.
+        tail: True while the walk is in tail position of the body (nothing of the
+            body follows it), where reaching the LoopEnd needs no ``NEXT LOOP``.
+    """
+
+    end_id: str
+    exit_id: str | None
+    tail: bool = True
 
 
 class PADGenerator:
@@ -285,6 +386,16 @@ class PADGenerator:
         self._current_config_replacements: dict[str, str] = {}
         self._current_config_stage_todos: dict[str, list[str]] = {}
         self._current_retired_config_pages: set[str] = set()
+        # Task 8b item 2: LOOP rendering state. The loop plan of the stage list being
+        # rendered (set/restored around each list render); the TODO text for every LOOP
+        # stage that could not be built (stage_id -> line); the stack of loops whose body
+        # is being walked; and the active row scopes (lowercase BP collection name -> PAD
+        # row variable) that make a `[Collection.Field]` read inside a loop body resolve to
+        # `dtr_Current…['Field']` at name-resolution time.
+        self._current_loop_plan: _LoopPlan = _LoopPlan()
+        self._current_loop_todos: dict[str, str] = {}
+        self._loop_context_stack: list[_LoopContext] = []
+        self._active_loop_rows: dict[str, str] = {}
 
     def _get_config_collection_name(self, process: BPProcess) -> str | None:
         """Task 7d item 3: Read the process-level config_collection name from page_target_map.yaml.
@@ -1357,12 +1468,15 @@ class PADGenerator:
             lines.append(f"# Stages: {len(page.stages)}")
             lines.append("")
 
-            # Render one FUNCTION block per page
-            action_lines: list[str] = []
-            for stage in page.stages:
-                rendered = self._render_stage(stage)
-                if rendered:
-                    action_lines.append(rendered)
+            # Render one FUNCTION block per page (Task 8b: loop-aware list render; with
+            # no variable name mapping here every loop is left as a TODO)
+            action_lines = self._render_flat_stage_list(
+                page.stages,
+                None,
+                None,
+                None,
+                render_stage_fn=lambda stage, *_args: self._render_stage(stage),
+            )
 
             actions_content = "\n".join(action_lines)
             epilogue = self._render_goto_epilogue(actions_content)
@@ -2036,18 +2150,24 @@ class PADGenerator:
             # Fix pass 5 gap 1: a further inline_block/fold nested inside this copy
             # treats this copy's own page as its host, not the outer host.
             self._current_host_page = target_page
+            # Task 8b item 2: the inlined page is not part of any loop body of the host
+            # being rendered, so the host's loop context/row scopes must not leak into it.
+            previous_loop_stack = self._loop_context_stack
+            previous_loop_rows = self._active_loop_rows
+            self._loop_context_stack = []
+            self._active_loop_rows = {}
             try:
-                # Render the target page's stages
-                action_lines: list[str] = []
-                for s in target_page.stages:
-                    rendered = self._render_stage(s, process, process_map, inline_mapping)
-                    if rendered:
-                        action_lines.append(rendered)
+                # Render the target page's stages (Task 8b: its own loops built)
+                action_lines = self._render_flat_stage_list(
+                    target_page.stages, process, process_map, inline_mapping
+                )
 
                 actions_content = "\n".join(action_lines)
             finally:
                 self._current_suppress_init_names = previous_suppress
                 self._current_host_page = previous_host_page
+                self._loop_context_stack = previous_loop_stack
+                self._active_loop_rows = previous_loop_rows
 
             if local_inits:
                 actions_content = (
@@ -2099,18 +2219,23 @@ class PADGenerator:
             # Fix pass 5 gap 1: a further inline_block/fold nested inside this copy
             # treats this copy's own page as its host, not the outer host.
             self._current_host_page = target_page
+            # Task 8b item 2: same loop-scope isolation as the inline_block branch above.
+            previous_loop_stack = self._loop_context_stack
+            previous_loop_rows = self._active_loop_rows
+            self._loop_context_stack = []
+            self._active_loop_rows = {}
             try:
-                # Render the target page's stages
-                action_lines: list[str] = []
-                for s in target_page.stages:
-                    rendered = self._render_stage(s, process, process_map, fold_mapping)
-                    if rendered:
-                        action_lines.append(rendered)
+                # Render the target page's stages (Task 8b: its own loops built)
+                action_lines = self._render_flat_stage_list(
+                    target_page.stages, process, process_map, fold_mapping
+                )
 
                 actions_content = "\n".join(action_lines)
             finally:
                 self._current_suppress_init_names = previous_suppress
                 self._current_host_page = previous_host_page
+                self._loop_context_stack = previous_loop_stack
+                self._active_loop_rows = previous_loop_rows
 
             if local_inits:
                 actions_content = (
@@ -3284,14 +3409,11 @@ class PADGenerator:
             # FUNCTIONs inlining Sample Manager - Explorer (gap 2, num_RetryCount).
             self._current_host_page = page
             try:
-                # Render stages for this target
-                action_lines: list[str] = []
-                for stage in stages_for_target:
-                    rendered = self._render_stage(
-                        stage, process, process_map, body_variable_name_mapping
-                    )
-                    if rendered:
-                        action_lines.append(rendered)
+                # Render stages for this target (Task 8b: loop-aware; a loop whose
+                # LoopStart/LoopEnd land in different sub-FUNCTIONs is left as a TODO)
+                action_lines = self._render_flat_stage_list(
+                    stages_for_target, process, process_map, body_variable_name_mapping
+                )
 
                 actions_content = "\n".join(action_lines)
 
@@ -3677,21 +3799,51 @@ class PADGenerator:
 
         return prefix + sanitized_name
 
+    def _loop_row_reference(self, reference: str) -> str | None:
+        """Resolve ``Collection.Field`` to the current-row read of an enclosing loop.
+
+        Task 8b item 2: inside a rendered BP ForEach loop body, BP's
+        ``[Collection.Field]`` reads the *current row* of the looped collection, so it
+        becomes ``dtr_Current…['Field']`` (§A4 `dtr_`; reference Main L801
+        ``dtr_CurrentItem['Identity']``). Only the collections of the loops whose body is
+        being rendered right now are in scope (``self._active_loop_rows``), so the same
+        reference outside the loop keeps its normal rendering.
+
+        Args:
+            reference: A dotted BP reference, e.g. ``'InputMapping_Collection.Column1'``.
+
+        Returns:
+            The row read (e.g. ``"dtr_CurrentInputMapping['Column1']"``), or None when the
+            base is not a collection looped over by an enclosing rendered loop.
+        """
+        if not self._active_loop_rows or "." not in reference:
+            return None
+        base, _sep, field_name = reference.partition(".")
+        row_var = self._active_loop_rows.get(base.strip().lower())
+        if row_var is None or not field_name.strip():
+            return None
+        return f"{row_var}['{field_name.strip()}']"
+
     def _resolve_dotted_reference(
         self,
         reference: str,
         variable_name_mapping: dict[str, str] | None = None,
+        use_loop_rows: bool = True,
     ) -> str:
         """Resolve a dotted reference (Collection.Field) through the variable name mapping.
 
         Handles references like 'FinalProduct_Collection.Column8' where the base collection
         name needs to be looked up in the mapping (e.g., FinalProduct_Collection → dtb_finalproductCollection)
-        but the field suffix (.Column8) is preserved.
+        but the field suffix (.Column8) is preserved. Inside a rendered loop body over that
+        collection, the reference is a current-row read instead (Task 8b, see
+        ``_loop_row_reference``).
 
         Args:
             reference: The dotted reference string (e.g., 'FinalProduct_Collection.Column8').
             variable_name_mapping: Optional dict mapping lowercase BP names to PAD names.
                                    If None, the reference is returned unchanged.
+            use_loop_rows: False resolves without the active loop row scopes (used for a
+                SET *target*, which is a row write, not a read — Task 8b).
 
         Returns:
             The resolved reference with mapped base name, or the original reference if no mapping found.
@@ -3699,6 +3851,11 @@ class PADGenerator:
         """
         if not variable_name_mapping or "." not in reference:
             return reference
+
+        if use_loop_rows:
+            row_reference = self._loop_row_reference(reference)
+            if row_reference is not None:
+                return row_reference
 
         # Task 7d item 3/4: a full dotted key (a config-column read such as
         # 'configfiledata.sub folder' → 'txt_SubFolder') wins over base-name resolution.
@@ -3790,7 +3947,7 @@ class PADGenerator:
             separate_actions.extend(inner_actions)
             # Create a temporary variable for the Trim result using deterministic counter
             temp_var = f"txt_trimmed_{temp_var_counter}"
-            action = f"Text.Trim '{translated_inner}' => {temp_var}"
+            action = self._text_helper_action("trim", translated_inner, temp_var)
             separate_actions.append(action)
             # Replace the Trim call with the temp var
             result = result.replace(match.group(0), temp_var)
@@ -3811,7 +3968,7 @@ class PADGenerator:
             separate_actions.extend(inner_actions)
             # Create a temporary variable for the Lower result using deterministic counter
             temp_var = f"txt_lowered_{temp_var_counter}"
-            action = f"Text.ChangeCase '{translated_inner}' 'To lowercase' => {temp_var}"
+            action = self._text_helper_action("lower", translated_inner, temp_var)
             separate_actions.append(action)
             result = result.replace(match.group(0), temp_var)
             seen_lower[inner_expr] = temp_var
@@ -3853,6 +4010,45 @@ class PADGenerator:
         result = result.replace("&", "+")
 
         return result, separate_actions
+
+    @staticmethod
+    def _text_helper_action(kind: str, operand: str, temp_var: str) -> str:
+        """Render the separate Trim/Lower action line of a translated BP expression.
+
+        Task 8b fix pass (gap 1): an operand that is a PAD variable reference — a §A4
+        variable, optionally indexed (``dtr_CurrentItem['Identity']``) or dotted — is
+        passed *unquoted*, in the reference's own action syntax:
+        ``Text.Trim Text: txt_UserName TrimOption: Text.TrimOption.Both TrimmedText=>
+        txt_UserName`` (``docs/pad-reference/DF_PID_171_US_LIMS_Prelude_Main.robin.txt``
+        L131) and ``Text.ChangeCase Text: lst_ComponentNames[num_LoopIndex] NewCase:
+        Text.CaseOption.LowerCase Result=> txt_CurrentComponent`` (same file L872; L642).
+        Wrapping a row read in ``'...'`` produced unbalanced quoting
+        (``'dtr_CurrentFinalProduct['Identity']'``). Any other operand (an untranslated
+        BP token such as ``ExceptionType()``) keeps the pre-existing quoted shape, which
+        is balanced because it contains no quote.
+
+        Args:
+            kind: ``"trim"`` or ``"lower"``.
+            operand: The translated inner expression.
+            temp_var: The temp variable receiving the result.
+
+        Returns:
+            The action line.
+        """
+        operand = operand.strip()
+        if PAD_VARIABLE_OPERAND_RE.fullmatch(operand):
+            if kind == "trim":
+                return (
+                    f"Text.Trim Text: {operand} TrimOption: Text.TrimOption.Both "
+                    f"TrimmedText=> {temp_var}"
+                )
+            return (
+                f"Text.ChangeCase Text: {operand} NewCase: Text.CaseOption.LowerCase "
+                f"Result=> {temp_var}"
+            )
+        if kind == "trim":
+            return f"Text.Trim '{operand}' => {temp_var}"
+        return f"Text.ChangeCase '{operand}' 'To lowercase' => {temp_var}"
 
     def _lookup_method_actions_template(
         self, stage: BPStage, method_name_override: str | None = None
@@ -4099,6 +4295,18 @@ class PADGenerator:
         if stage.stage_type in STRUCTURAL_STAGE_TYPES:
             return self._render_structural_stage(stage)
 
+        # Task 8b item 2: a LOOP stage reaching the per-stage renderer is one a loop-aware
+        # stage-list render did not build into a `LOOP FOREACH … END` (a built loop's
+        # LoopStart renders via _render_loop and its LoopEnd emits nothing). It gets the
+        # TODO its loop plan recorded — never the commented §B12 template.
+        if stage.stage_type == StageType.LOOP:
+            return self._current_loop_todos.get(
+                stage.stage_id,
+                f"# TODO: LOOP stage '{stage.name}' (id={stage.stage_id}) was rendered "
+                "outside a loop-aware stage-list render — no LOOP FOREACH … END was built "
+                "for it; restructure the loop manually",
+            )
+
         # SubSheet/Process calls: route through mapping (if context available)
         if stage.is_subsheet_call and process and process_map is not None:
             return self._render_call_or_inline(stage, process, process_map, variable_name_mapping)
@@ -4222,9 +4430,22 @@ class PADGenerator:
 
             # Map target variable name using dotted reference resolution if needed
             if variable_name_mapping and "." in target_var_name:
+                # Task 8b item 2: a SET target is a write, never a current-row *read* —
+                # it keeps its normal resolution. Writing a field of the row being
+                # iterated has no cited PAD write-back for a FOREACH row variable, so it
+                # is flagged rather than guessed.
                 mapped_target = self._resolve_dotted_reference(
-                    target_var_name, variable_name_mapping
+                    target_var_name, variable_name_mapping, use_loop_rows=False
                 )
+                row_write = self._loop_row_reference(target_var_name)
+                if row_write is not None:
+                    lines.append(
+                        f"# TODO: '{stage.name}' writes field '{target_var_name}' of the "
+                        f"row being iterated ({row_write}) — BP updates the looped "
+                        "collection's current row; no confirmed PAD write-back for a "
+                        "FOREACH row variable, so the SET keeps its table-level target — "
+                        "complete manually"
+                    )
             elif variable_name_mapping:
                 target_lower = target_var_name.lower()
                 mapped_target = variable_name_mapping.get(target_lower, target_var_name)
@@ -4536,8 +4757,19 @@ class PADGenerator:
             )
             lines.append(rendered)
 
+        elif target_type:
+            # Task 8b item 3: this fallback only ever emits the commented pa_target_action
+            # template (e.g. a VBO method name like 'Variables.Remove Row', or a §B12
+            # template still holding <...> placeholders) — never generated code. CLAUDE.md's
+            # band table reserves "# VERIFY:" for real code, so whatever the band this is an
+            # explicit unfilled-template TODO naming the stage, not a VERIFY marker.
+            lines.append(
+                f"# TODO: {stage.name} — template not filled: {target_module}.{target_type}"
+            )
+
         else:
-            # Generic comment for unhandled types
+            # Generic comment for unhandled types with no target template at all (e.g. the
+            # START/END no-op markers, which render as '# System.')
             comment = f"# {target_module}.{target_type}"
             if band == ConfidenceBand.SPOT_CHECK:
                 comment += f" # VERIFY: {stage.name} (confidence {annotation.confidence:.2f})"
@@ -4586,6 +4818,41 @@ class PADGenerator:
         """
         if render_stage_fn is None:
             render_stage_fn = self._render_stage
+
+        # Task 8b item 2: this list's BP loops are planned once (scoped to this render,
+        # restored afterwards) — both the positional walk below and the control-flow
+        # walk (_render_decision_graph/_render_chain) render a built loop at its
+        # LoopStart and skip its body members/LoopEnd at their own list positions.
+        previous_plan = self._current_loop_plan
+        self._current_loop_plan = self._plan_loops(stages, variable_name_mapping)
+        try:
+            return self._render_planned_stage_list(
+                stages, process, process_map, variable_name_mapping, render_stage_fn
+            )
+        finally:
+            self._current_loop_plan = previous_plan
+
+    def _render_planned_stage_list(
+        self,
+        stages: list[BPStage],
+        process: BPProcess | None,
+        process_map: dict[str, Any] | None,
+        variable_name_mapping: dict[str, str] | None,
+        render_stage_fn: Any,
+    ) -> str:
+        """Body of ``_render_stage_list_with_coarse_blocks``, run under its loop plan.
+
+        Args:
+            stages: Ordered stage list to render.
+            process: The BPProcess (forwarded to per-stage renderers).
+            process_map: Process map from page_target_map.yaml.
+            variable_name_mapping: Optional BP-name→PAD-name dict from Task 5b.
+            render_stage_fn: Callable(stage, process, process_map, variable_name_mapping) → str.
+
+        Returns:
+            All rendered lines joined by newlines.
+        """
+        stages_by_id = {s.stage_id: s for s in stages}
 
         # Identify coarse-BLOCK groups: map from BLOCK stage_id → (block_idx, recover_idx, resume_idx)
         # A coarse BLOCK is one whose recover_stage_id is set (Task 4b).
@@ -4724,8 +4991,13 @@ class PADGenerator:
                     if body_idx in continuation_indices:
                         continue
                     body_stage = stages[body_idx]
-                    rendered = render_stage_fn(
-                        body_stage, process, process_map, variable_name_mapping
+                    rendered = self._render_positional_stage(
+                        body_stage,
+                        stages_by_id,
+                        process,
+                        process_map,
+                        variable_name_mapping,
+                        render_stage_fn,
                     )
                     if rendered:
                         output_lines.append(rendered)
@@ -4787,16 +5059,847 @@ class PADGenerator:
                 # --- Advance past all consumed stages in this group ---
                 # Skip to after the RESUME (or after the RECOVER if no RESUME found).
                 idx = resume_idx + 1 if resume_idx is not None else recover_idx + 1
+                # Task 8b fix pass (gap 2): the group's structural/continuation stages
+                # count as emitted, so a loop waiting on one of them is released here.
+                plan = self._current_loop_plan
+                for group_stage in stages[block_idx:idx]:
+                    if (
+                        group_stage.stage_id not in plan.skip_ids
+                        and group_stage.stage_id not in plan.built
+                    ):
+                        plan.emitted_ids.add(group_stage.stage_id)
+                output_lines.extend(
+                    self._flush_pending_loops(
+                        stages_by_id, process, process_map, variable_name_mapping, render_stage_fn
+                    )
+                )
                 continue
 
-            # Not part of a coarse-BLOCK group — render normally
+            # Not part of a coarse-BLOCK group — render normally (Task 8b: a built loop
+            # renders at its LoopStart; its members/LoopEnd render nothing here)
             if idx not in consumed_indices:
-                rendered = render_stage_fn(stage, process, process_map, variable_name_mapping)
+                rendered = self._render_positional_stage(
+                    stage,
+                    stages_by_id,
+                    process,
+                    process_map,
+                    variable_name_mapping,
+                    render_stage_fn,
+                )
                 if rendered:
                     output_lines.append(rendered)
+            else:
+                self._current_loop_plan.emitted_ids.add(stage.stage_id)
             idx += 1
 
+        # Task 8b fix pass (gap 2): never drop a loop still waiting on a predecessor.
+        output_lines.extend(
+            self._flush_pending_loops(
+                stages_by_id,
+                process,
+                process_map,
+                variable_name_mapping,
+                render_stage_fn,
+                final=True,
+            )
+        )
         return "\n".join(output_lines)
+
+    # ── Task 8b item 2: LOOP rendering ─────────────────────────────────────────
+
+    @staticmethod
+    def _loop_row_variable(collection_name: str) -> str:
+        """Name the PAD row variable of a loop over ``collection_name`` (Task 8b).
+
+        §A4 `dtr_` ("Datatable row", example ``dtr_CurrentItem``): ``dtr_Current`` + the
+        BP collection name without a trailing ``_Collection``/``Collection``, with
+        non-alphanumerics removed — ``InputMapping_Collection`` → ``dtr_CurrentInputMapping``,
+        ``Mail Items`` → ``dtr_CurrentMailItems``.
+
+        Args:
+            collection_name: The BP collection name from the LoopStart's ``<loopdata>``.
+
+        Returns:
+            The row variable name.
+        """
+        stem = NON_ALPHANUMERIC_RE.sub("", LOOP_COLLECTION_SUFFIX_RE.sub("", collection_name))
+        if not stem:
+            stem = NON_ALPHANUMERIC_RE.sub("", collection_name)
+        return f"{LOOP_ROW_VAR_PREFIX}{stem}"
+
+    @staticmethod
+    def _stage_successors(stage: BPStage) -> list[str]:
+        """Every flow-edge target of a stage (``onsuccess``/``ontrue``/``onfalse``).
+
+        Args:
+            stage: Any BPStage.
+
+        Returns:
+            The non-empty targets, in onsuccess/ontrue/onfalse order.
+        """
+        return [
+            target
+            for target in (stage.onsuccess_target, stage.ontrue_target, stage.onfalse_target)
+            if target
+        ]
+
+    @staticmethod
+    def _with_calc_siblings(stage_id: str, stages_by_id: dict[str, BPStage]) -> list[str]:
+        """A stage id plus its MultipleCalculation fan-out siblings (``<base>__calc_N``).
+
+        ``ast/builder.py``'s ``_normalise_stages`` fans one MultipleCalculation out into
+        ``<base>__calc_1..N``; only ``__calc_1`` is an edge target, but all N render
+        together (see ``_render_chain``), so loop membership must include every sibling.
+
+        Args:
+            stage_id: The stage id.
+            stages_by_id: id → BPStage map of the stage list being rendered.
+
+        Returns:
+            ``[stage_id]``, or every ``__calc_`` sibling id present in ``stages_by_id``.
+        """
+        base, sep, _suffix = stage_id.partition("__calc_")
+        if not sep:
+            return [stage_id]
+        prefix = f"{base}__calc_"
+        return sorted(sid for sid in stages_by_id if sid.startswith(prefix))
+
+    def _loop_pairs(self, stages: list[BPStage]) -> list[tuple[BPStage | None, BPStage | None]]:
+        """Pair the LoopStart/LoopEnd LOOP stages of a stage list (Task 8b item 2).
+
+        Pairs by ``group_id`` first (BP's ``<groupid>``, shared by a LoopStart and its
+        LoopEnd), falling back to ``pair_id``. ``ast/builder.py``'s
+        ``_assign_wait_loop_pairs`` (~L373) treats a group_id as a pairing *scope* and may
+        stack-match several Start/End pairs that share one group_id; such a group — or any
+        group that isn't exactly one LoopStart plus one LoopEnd — is split back into the
+        builder's own pairs by ``pair_id`` (always the Start's stage_id), so each builder
+        pair is planned as its own loop. The Start of a pair is the stage whose
+        ``pair_id`` equals its own ``stage_id`` (builder contract).
+
+        Args:
+            stages: The stage list being rendered.
+
+        Returns:
+            ``(start, end)`` tuples in list order of their first member; either side is
+            None when its partner is not in this stage list (e.g. a split page).
+        """
+        loop_stages = [s for s in stages if s.stage_type == StageType.LOOP]
+        by_group: dict[str, list[BPStage]] = {}
+        for stage in loop_stages:
+            if stage.group_id is not None:
+                by_group.setdefault(stage.group_id, []).append(stage)
+
+        slots: dict[str, list[BPStage | None]] = {}
+        for stage in loop_stages:
+            group = by_group.get(stage.group_id) if stage.group_id is not None else None
+            if group is not None and len(group) == 2:
+                group_starts = [s for s in group if s.pair_id == s.stage_id]
+                if len(group_starts) == 1:
+                    slot = slots.setdefault(f"group:{stage.group_id}", [None, None])
+                    slot[0 if stage is group_starts[0] else 1] = stage
+                    continue
+            slot = slots.setdefault(f"pair:{stage.pair_id or stage.stage_id}", [None, None])
+            slot[0 if stage.pair_id == stage.stage_id else 1] = stage
+        return [(slot[0], slot[1]) for slot in slots.values()]
+
+    def _terminal_region(
+        self,
+        entry_id: str,
+        stages_by_id: dict[str, BPStage],
+        forbidden: set[str],
+    ) -> set[str] | None:
+        """The stages of a side path that can only end in an exception throw.
+
+        A loop-body edge to such a path (e.g. a Decision arm that throws a Business
+        Exception) is structurable: the path is rendered inside the body and the throw
+        leaves the loop by itself (§B12 EXCEPTION row).
+
+        Args:
+            entry_id: First stage of the side path.
+            stages_by_id: id → BPStage map of the stage list being rendered.
+            forbidden: Stage ids the path must never reach (the LoopStart/LoopEnd, the
+                loop's exit continuation and the loop body).
+
+        Returns:
+            The path's stage ids, or None if it reaches a forbidden stage, an END stage,
+            a stage outside the list, or a dead end that isn't an EXCEPTION throw.
+        """
+        region: set[str] = set()
+        frontier = [entry_id]
+        while frontier:
+            sid = frontier.pop()
+            if sid in region:
+                continue
+            if sid in forbidden or sid not in stages_by_id:
+                return None
+            stage = stages_by_id[sid]
+            if stage.stage_type == StageType.END:
+                return None
+            region.update(self._with_calc_siblings(sid, stages_by_id))
+            successors = self._stage_successors(stage)
+            if not successors and stage.stage_type != StageType.EXCEPTION:
+                return None
+            frontier.extend(successors)
+        return region
+
+    def _analyse_loop(
+        self,
+        start: BPStage,
+        end: BPStage | None,
+        stages: list[BPStage],
+        stages_by_id: dict[str, BPStage],
+        variable_name_mapping: dict[str, str] | None,
+    ) -> _LoopPair:
+        """Decide whether one LoopStart/LoopEnd pair can render as a structured loop.
+
+        The body is every stage on a flow path from the LoopStart's ``onsuccess`` to its
+        LoopEnd (not walking past the LoopEnd). A body edge may go to another body stage,
+        to the LoopEnd (end of iteration / ``NEXT LOOP``), to the LoopEnd's ``onsuccess``
+        target (``EXIT LOOP``, §B12), or into a side path that can only end in an
+        exception throw. Anything else — an edge leaving the body for any other stage, a
+        jump back to the LoopStart, or an edge from outside the loop into its body or
+        LoopEnd (a jump into the middle of the loop) — makes the flow unstructurable, and
+        the pair's ``unbuilt_reason`` names the offending edge.
+
+        Args:
+            start: The LoopStart-derived LOOP stage.
+            end: Its LoopEnd, or None if not in this stage list.
+            stages: The stage list being rendered.
+            stages_by_id: id → BPStage map of ``stages``.
+            variable_name_mapping: BP-name → PAD-name map the collection resolves through.
+
+        Returns:
+            The planned pair (``unbuilt_reason`` None when it can be built).
+        """
+        collection = (start.loop_data or "").strip()
+        row_var = self._loop_row_variable(collection) if collection else ""
+        collection_var = (
+            variable_name_mapping.get(collection.lower())
+            if variable_name_mapping and collection
+            else None
+        )
+        pair = _LoopPair(start=start, end=end, row_var=row_var, collection_var=collection_var)
+
+        def name_of(sid: str) -> str:
+            stage = stages_by_id.get(sid)
+            return f"'{stage.name}' (id={sid})" if stage else f"id={sid} (not in this stage list)"
+
+        if end is None:
+            pair.unbuilt_reason = (
+                "its LoopEnd is not in the stage list being rendered here (the loop spans "
+                "a page split or a partial render)"
+            )
+            return pair
+        pair.exit_id = end.onsuccess_target
+        if start.loop_type != BP_FOREACH_LOOP_TYPE:
+            pair.unbuilt_reason = (
+                f"its BP <looptype> is '{start.loop_type}', not '{BP_FOREACH_LOOP_TYPE}' — "
+                "only collection (FOREACH) loops are rendered"
+            )
+            return pair
+        if not collection:
+            pair.unbuilt_reason = "its LoopStart carries no <loopdata> collection"
+            return pair
+        if not collection_var:
+            pair.unbuilt_reason = (
+                f"its collection '{collection}' does not resolve to a PAD variable through "
+                "the variable name mapping"
+            )
+            return pair
+        if not start.onsuccess_target:
+            pair.unbuilt_reason = "its LoopStart has no onsuccess edge"
+            return pair
+
+        # Forward reach from the body entry, never walking past the LoopStart/LoopEnd.
+        reach: set[str] = set()
+        edges: list[tuple[str, str]] = []
+        frontier = [start.onsuccess_target]
+        while frontier:
+            sid = frontier.pop()
+            if sid in reach or sid not in stages_by_id:
+                continue
+            reach.add(sid)
+            if sid in (start.stage_id, end.stage_id):
+                continue
+            frontier.extend(self._with_calc_siblings(sid, stages_by_id))
+            for target in self._stage_successors(stages_by_id[sid]):
+                edges.append((sid, target))
+                frontier.append(target)
+        if end.stage_id not in reach:
+            pair.unbuilt_reason = (
+                "no flow path within the stage list being rendered here leads from the "
+                "LoopStart to its LoopEnd"
+            )
+            return pair
+
+        # Body = the reached stages from which the LoopEnd is reachable.
+        predecessors: dict[str, set[str]] = {}
+        for source, target in edges:
+            predecessors.setdefault(target, set()).add(source)
+        body: set[str] = set()
+        frontier = [end.stage_id]
+        while frontier:
+            sid = frontier.pop()
+            for source in sorted(predecessors.get(sid, set())):
+                if source not in body and source != start.stage_id:
+                    body.add(source)
+                    frontier.append(source)
+
+        members = set(body)
+        forbidden = body | {start.stage_id, end.stage_id}
+        if pair.exit_id:
+            forbidden.add(pair.exit_id)
+        for source, target in edges:
+            if source not in body or target in body or target == end.stage_id:
+                continue
+            if target == pair.exit_id:
+                continue  # EXIT LOOP (§B12)
+            if target == start.stage_id:
+                pair.unbuilt_reason = (
+                    f"edge {name_of(source)} → {name_of(target)} jumps back to the LoopStart"
+                )
+                return pair
+            region = self._terminal_region(target, stages_by_id, forbidden)
+            if region is None:
+                exit_text = name_of(pair.exit_id) if pair.exit_id else "none"
+                pair.unbuilt_reason = (
+                    f"edge {name_of(source)} → {name_of(target)} leaves the loop body for a "
+                    "stage that is neither the LoopEnd nor the loop's exit continuation "
+                    f"({exit_text}) and does not end in an exception throw"
+                )
+                return pair
+            members |= region
+
+        for stage in stages:
+            if stage.stage_id in members or stage.stage_id == start.stage_id:
+                continue
+            for target in self._stage_successors(stage):
+                if target in members or target == end.stage_id:
+                    pair.unbuilt_reason = (
+                        f"edge {name_of(stage.stage_id)} → {name_of(target)} jumps into the "
+                        "loop from outside it"
+                    )
+                    return pair
+
+        pair.member_ids = members
+        return pair
+
+    def _plan_loops(
+        self,
+        stages: list[BPStage],
+        variable_name_mapping: dict[str, str] | None,
+    ) -> _LoopPlan:
+        """Plan which LOOP pairs of a stage list render as a real ``LOOP FOREACH … END``.
+
+        Every pair is analysed by ``_analyse_loop``. Two buildable loops that overlap
+        without one fully containing the other are both left unbuilt, and a loop nested
+        in another with the same row variable is left unbuilt naming both (never a
+        guessed rename). Every LOOP stage that won't be built gets its ``# TODO`` text
+        recorded in ``self._current_loop_todos``, read by ``_render_stage_core``.
+
+        Args:
+            stages: The stage list being rendered.
+            variable_name_mapping: BP-name → PAD-name map for the collection variable.
+
+        Returns:
+            The plan for this stage list.
+        """
+        stages_by_id = {s.stage_id: s for s in stages}
+        pairs: list[_LoopPair] = []
+        for start, end in self._loop_pairs(stages):
+            if start is None:
+                if end is not None:
+                    self._current_loop_todos[end.stage_id] = (
+                        f"# TODO: LoopEnd '{end.name}' (id={end.stage_id}) has no LoopStart "
+                        "in the stage list being rendered here (the loop spans a page split "
+                        "or a partial render) — no LOOP FOREACH … END was built; restructure "
+                        "the loop manually"
+                    )
+                continue
+            pairs.append(
+                self._analyse_loop(start, end, stages, stages_by_id, variable_name_mapping)
+            )
+
+        buildable = [p for p in pairs if p.unbuilt_reason is None and p.end is not None]
+        for outer in buildable:
+            for inner in buildable:
+                if inner is outer or inner.unbuilt_reason or outer.unbuilt_reason:
+                    continue
+                if inner.end is None:
+                    continue
+                start_in = inner.start.stage_id in outer.member_ids
+                end_in = inner.end.stage_id in outer.member_ids
+                if start_in != end_in:
+                    inner.unbuilt_reason = (
+                        f"it overlaps LOOP '{outer.start.name}' (LoopStart "
+                        f"id={outer.start.stage_id}) without being nested inside it"
+                    )
+                    outer.unbuilt_reason = (
+                        f"it overlaps LOOP '{inner.start.name}' (LoopStart "
+                        f"id={inner.start.stage_id}) without containing it"
+                    )
+                elif start_in and inner.row_var == outer.row_var:
+                    inner.unbuilt_reason = (
+                        f"it is nested inside LOOP '{outer.start.name}' (LoopStart "
+                        f"id={outer.start.stage_id}) and both would use row variable "
+                        f"{inner.row_var} — rename one manually"
+                    )
+
+        plan = _LoopPlan()
+        for pair in pairs:
+            if pair.unbuilt_reason is None and pair.end is not None:
+                self._loop_flow_neighbours(pair, stages, stages_by_id)
+                plan.built[pair.start.stage_id] = pair
+                plan.skip_ids |= pair.member_ids
+                plan.skip_ids.add(pair.end.stage_id)
+                continue
+            collection_text = (
+                f"FOREACH over BP collection '{pair.start.loop_data}'"
+                if pair.start.loop_data
+                else "no BP collection"
+            )
+            self._current_loop_todos[pair.start.stage_id] = (
+                f"# TODO: LOOP '{pair.start.name}' ({collection_text}, LoopStart "
+                f"id={pair.start.stage_id}) not built — {pair.unbuilt_reason}. Its body "
+                "stages are rendered unlooped (they would run once, not once per row) — "
+                "restructure the loop manually"
+            )
+            if pair.end is not None:
+                self._current_loop_todos[pair.end.stage_id] = (
+                    f"# TODO: end of unbuilt LOOP '{pair.end.name}' (LoopEnd "
+                    f"id={pair.end.stage_id}) — see the LoopStart TODO for why it was not built"
+                )
+        return plan
+
+    def _loop_flow_neighbours(
+        self,
+        pair: _LoopPair,
+        stages: list[BPStage],
+        stages_by_id: dict[str, BPStage],
+    ) -> None:
+        """Record a built loop's in-list flow predecessors (Task 8b fix pass, gap 2).
+
+        Sets ``pair.direct_pred_ids`` (stages outside the loop with an edge into the
+        LoopStart) and ``pair.ancestor_ids`` (every stage from which the LoopStart is
+        reachable without passing through the loop, minus stages also reachable from
+        the loop's exit — those sit on a cycle around the loop, so "before the loop" is
+        not determined for them).
+
+        Args:
+            pair: A built pair (``end`` set).
+            stages: The stage list being rendered.
+            stages_by_id: id → BPStage map of ``stages``.
+        """
+        if pair.end is None:
+            return
+        loop_ids = pair.member_ids | {pair.start.stage_id, pair.end.stage_id}
+        predecessors: dict[str, set[str]] = {}
+        for stage in stages:
+            for target in self._stage_successors(stage):
+                predecessors.setdefault(target, set()).add(stage.stage_id)
+
+        pair.direct_pred_ids = {
+            sid for sid in predecessors.get(pair.start.stage_id, set()) if sid not in loop_ids
+        }
+
+        ancestors: set[str] = set()
+        frontier = list(pair.direct_pred_ids)
+        while frontier:
+            sid = frontier.pop()
+            if sid in ancestors or sid in loop_ids:
+                continue
+            ancestors.add(sid)
+            frontier.extend(predecessors.get(sid, set()))
+
+        descendants: set[str] = set()
+        frontier = [pair.exit_id] if pair.exit_id else []
+        while frontier:
+            sid = frontier.pop()
+            if sid in descendants or sid in loop_ids or sid not in stages_by_id:
+                continue
+            descendants.add(sid)
+            frontier.extend(self._stage_successors(stages_by_id[sid]))
+        # START/END render as no-op markers ('# System.'), so their order vs the loop
+        # has no runtime effect — they are never named in a reorder TODO.
+        no_ops = {
+            sid
+            for sid in ancestors | descendants
+            if stages_by_id[sid].stage_type in (StageType.START, StageType.END)
+        }
+        pair.ancestor_ids = ancestors - descendants - no_ops
+        pair.descendant_ids = descendants - ancestors - no_ops
+
+    def _render_loop(
+        self,
+        pair: _LoopPair,
+        stages_by_id: dict[str, BPStage],
+        visited: set[str],
+        ancestors: set[str],
+        process: BPProcess | None,
+        process_map: dict[str, Any] | None,
+        variable_name_mapping: dict[str, str] | None,
+        render_stage_fn: Any,
+    ) -> str:
+        """Render one planned loop as ``LOOP FOREACH <row> IN <collection> … END``.
+
+        §B12 LOOP row via ``templates/pad/actions/loop.robin.j2``. The body is walked
+        with the existing structured control-flow renderer (``_render_chain``, Task 7b
+        fix pass) from the LoopStart's ``onsuccess`` up to the LoopEnd, so it is nested
+        inside the loop, not flat after it. While it is walked, the loop is on
+        ``self._loop_context_stack`` (so ``_render_chain`` emits ``NEXT LOOP``/``EXIT
+        LOOP`` for early edges to the LoopEnd/exit) and its collection is in
+        ``self._active_loop_rows`` (so ``[Collection.Field]`` reads resolve to the row).
+        The LoopEnd emits nothing of its own — ``END`` closes the loop.
+
+        Args:
+            pair: A built pair from ``_plan_loops``.
+            stages_by_id: id → BPStage map of the stage list being rendered.
+            visited: Shared set of already-rendered stage ids (updated).
+            ancestors: Stage ids on the current forward path.
+            process: The BPProcess (forwarded to per-stage renderers).
+            process_map: Process map from page_target_map.yaml.
+            variable_name_mapping: BP-name → PAD-name map.
+            render_stage_fn: Callable(stage, process, process_map, variable_name_mapping) → str.
+
+        Returns:
+            The rendered loop.
+
+        Raises:
+            GenerationError: If called for a pair without a LoopEnd (never planned as built).
+        """
+        start, end = pair.start, pair.end
+        if end is None:
+            raise GenerationError(f"LOOP '{start.name}' has no LoopEnd and cannot be rendered")
+        visited.add(start.stage_id)
+        visited.add(end.stage_id)
+
+        previous_rows = self._active_loop_rows
+        self._loop_context_stack.append(_LoopContext(end_id=end.stage_id, exit_id=pair.exit_id))
+        self._active_loop_rows = {
+            **previous_rows,
+            (start.loop_data or "").strip().lower(): pair.row_var,
+        }
+        try:
+            body_blocks = self._render_chain(
+                start.onsuccess_target,
+                stages_by_id,
+                visited,
+                ancestors | {start.stage_id},
+                process,
+                process_map,
+                variable_name_mapping,
+                render_stage_fn,
+                stop_id=end.stage_id,
+            )
+        finally:
+            self._loop_context_stack.pop()
+            self._active_loop_rows = previous_rows
+
+        body_lines = [line for block in body_blocks for line in block.split("\n")]
+        annotation = start.pa_annotation
+        verify_comment = (
+            f"{start.name} (confidence {annotation.confidence:.2f})"
+            if annotation is not None and annotation.band == ConfidenceBand.SPOT_CHECK
+            else None
+        )
+        rendered = self.env.get_template("actions/loop.robin.j2").render(
+            var_name=pair.row_var,
+            collection=pair.collection_var,
+            body_lines=body_lines,
+            verify_comment=verify_comment,
+        )
+
+        # Never silently drop a stage (CLAUDE.md): a planned body member the structured
+        # walk did not reach is rendered right after the loop, under a TODO naming it.
+        missed = [
+            stage
+            for sid, stage in stages_by_id.items()
+            if sid in pair.member_ids and sid not in visited
+        ]
+        if missed:
+            extra = [
+                f"# TODO: stage(s) {', '.join(repr(s.name) for s in missed)} of LOOP "
+                f"'{start.name}' were not reached by the structured body walk and are "
+                "rendered after the loop — move them into the loop body manually"
+            ]
+            for stage in missed:
+                visited.add(stage.stage_id)
+                text = render_stage_fn(stage, process, process_map, variable_name_mapping)
+                if text:
+                    extra.append(text)
+            rendered = "\n".join([rendered, *extra])
+        return rendered
+
+    def _render_positional_stage(
+        self,
+        stage: BPStage,
+        stages_by_id: dict[str, BPStage],
+        process: BPProcess | None,
+        process_map: dict[str, Any] | None,
+        variable_name_mapping: dict[str, str] | None,
+        render_stage_fn: Any,
+    ) -> str:
+        """Render one stage of a positional (list-order) render, honouring the loop plan.
+
+        A built loop's LoopStart renders the whole loop (``_render_loop``); its body
+        members and LoopEnd render nothing at their own list position (they are inside
+        the loop). Every other stage renders normally.
+
+        Args:
+            stage: The stage at the current list position.
+            stages_by_id: id → BPStage map of the stage list being rendered.
+            process: The BPProcess (forwarded to per-stage renderers).
+            process_map: Process map from page_target_map.yaml.
+            variable_name_mapping: BP-name → PAD-name map.
+            render_stage_fn: Callable(stage, process, process_map, variable_name_mapping) → str.
+
+        Returns:
+            The rendered text ("" for a stage rendered inside a loop).
+        """
+        plan = self._current_loop_plan
+        blocks: list[str] = []
+        pair = plan.built.get(stage.stage_id)
+        if stage.stage_id in plan.emitted_ids:
+            pass  # a loop already emitted right after its last direct flow predecessor
+        elif pair is not None and stage.stage_id not in plan.skip_ids:
+            # Task 8b fix pass (gap 2): the BP stage list is declaration order, not
+            # execution order. A loop is emitted right after its last direct flow
+            # predecessor (see _flush_pending_loops) — here only if they are all emitted
+            # already; otherwise it waits for them.
+            if pair.direct_pred_ids <= plan.emitted_ids:
+                blocks.append(
+                    self._render_positioned_loop(
+                        pair,
+                        stages_by_id,
+                        process,
+                        process_map,
+                        variable_name_mapping,
+                        render_stage_fn,
+                    )
+                )
+            else:
+                plan.pending.append(stage.stage_id)
+        elif stage.stage_id not in plan.skip_ids:
+            plan.emitted_ids.add(stage.stage_id)
+            rendered = render_stage_fn(stage, process, process_map, variable_name_mapping)
+            if rendered:
+                blocks.append(rendered)
+        blocks.extend(
+            self._flush_pending_loops(
+                stages_by_id, process, process_map, variable_name_mapping, render_stage_fn
+            )
+        )
+        return "\n".join(block for block in blocks if block)
+
+    def _render_positioned_loop(
+        self,
+        pair: _LoopPair,
+        stages_by_id: dict[str, BPStage],
+        process: BPProcess | None,
+        process_map: dict[str, Any] | None,
+        variable_name_mapping: dict[str, str] | None,
+        render_stage_fn: Any,
+        forced: bool = False,
+    ) -> str:
+        """Emit a built loop in a declaration-order render (Task 8b fix pass, gap 2).
+
+        A flow ancestor of the LoopStart not yet emitted at this point is declared after
+        the loop in the BP stage list, so the flow order around the loop can't be taken
+        from the list: a ``# TODO`` names those stages instead of silently leaving them
+        after the loop.
+
+        Args:
+            pair: A built pair.
+            stages_by_id: id → BPStage map of the stage list being rendered.
+            process: The BPProcess (forwarded to per-stage renderers).
+            process_map: Process map from page_target_map.yaml.
+            variable_name_mapping: BP-name → PAD-name map.
+            render_stage_fn: Callable(stage, process, process_map, variable_name_mapping) → str.
+            forced: True when emitted at the end of the list because a direct flow
+                predecessor was never emitted in declaration order.
+
+        Returns:
+            The loop, preceded by its reorder TODO(s) if any.
+        """
+        plan = self._current_loop_plan
+        order = list(stages_by_id)
+        late = sorted(
+            (sid for sid in pair.ancestor_ids if sid not in plan.emitted_ids), key=order.index
+        )
+        early = sorted(
+            (sid for sid in pair.descendant_ids if sid in plan.emitted_ids), key=order.index
+        )
+        todos: list[str] = []
+        if forced:
+            preds = ", ".join(
+                f"'{stages_by_id[sid].name}' (id={sid})"
+                for sid in sorted(pair.direct_pred_ids, key=order.index)
+            )
+            todos.append(
+                f"# TODO: LOOP '{pair.start.name}' (LoopStart id={pair.start.stage_id}) is "
+                f"emitted at the end of this block: its direct flow predecessor(s) {preds} "
+                "were never emitted in declaration order — place the loop manually"
+            )
+        if late:
+            names = ", ".join(f"'{stages_by_id[sid].name}' (id={sid})" for sid in late)
+            todos.append(
+                f"# TODO: reorder — flow predecessor(s) {names} of LOOP "
+                f"'{pair.start.name}' are declared after the loop in the BP stage list and "
+                "render after it here, but the flow runs them before the loop — move them "
+                "manually"
+            )
+        if early:
+            names = ", ".join(f"'{stages_by_id[sid].name}' (id={sid})" for sid in early)
+            todos.append(
+                f"# TODO: reorder — flow successor(s) {names} of LOOP '{pair.start.name}' "
+                "are declared before its flow predecessors in the BP stage list and render "
+                "before it here, but the flow runs them after the loop — move them manually"
+            )
+        rendered = self._render_loop(
+            pair,
+            stages_by_id,
+            plan.emitted_ids,
+            set(),
+            process,
+            process_map,
+            variable_name_mapping,
+            render_stage_fn,
+        )
+        return "\n".join([*todos, rendered])
+
+    def _flush_pending_loops(
+        self,
+        stages_by_id: dict[str, BPStage],
+        process: BPProcess | None,
+        process_map: dict[str, Any] | None,
+        variable_name_mapping: dict[str, str] | None,
+        render_stage_fn: Any,
+        final: bool = False,
+    ) -> list[str]:
+        """Emit every not-yet-emitted loop whose direct flow predecessors are all emitted.
+
+        Called after every emitted stage, so a loop lands right after its last direct flow
+        predecessor — before its LoopStart's list position when that predecessor is
+        declared earlier (the loop's flow successors are often declared in between), or
+        after it when the predecessor is declared later (Task 8b fix pass, gap 2). A loop
+        with no direct predecessor in the list is emitted at its LoopStart's position.
+
+        Args:
+            stages_by_id: id → BPStage map of the stage list being rendered.
+            process: The BPProcess (forwarded to per-stage renderers).
+            process_map: Process map from page_target_map.yaml.
+            variable_name_mapping: BP-name → PAD-name map.
+            render_stage_fn: Callable(stage, process, process_map, variable_name_mapping) → str.
+            final: End of the list — also emit every still-pending loop (with a TODO), so
+                none is ever silently dropped.
+
+        Returns:
+            The emitted loops, in emission order.
+        """
+        plan = self._current_loop_plan
+        out: list[str] = []
+        progress = True
+        while progress:
+            progress = False
+            for start_id, pair in plan.built.items():
+                if (
+                    start_id in plan.emitted_ids
+                    or start_id in plan.skip_ids
+                    or not (pair.direct_pred_ids or start_id in plan.pending)
+                    or not pair.direct_pred_ids <= plan.emitted_ids
+                ):
+                    continue
+                if start_id in plan.pending:
+                    plan.pending.remove(start_id)
+                out.append(
+                    self._render_positioned_loop(
+                        pair,
+                        stages_by_id,
+                        process,
+                        process_map,
+                        variable_name_mapping,
+                        render_stage_fn,
+                    )
+                )
+                progress = True
+                break
+        if final:
+            for start_id in [
+                sid
+                for sid in plan.built
+                if sid not in plan.emitted_ids and sid not in plan.skip_ids
+            ]:
+                if start_id in plan.pending:
+                    plan.pending.remove(start_id)
+                out.append(
+                    self._render_positioned_loop(
+                        plan.built[start_id],
+                        stages_by_id,
+                        process,
+                        process_map,
+                        variable_name_mapping,
+                        render_stage_fn,
+                        forced=True,
+                    )
+                )
+        return out
+
+    def _render_flat_stage_list(
+        self,
+        stages: list[BPStage],
+        process: BPProcess | None,
+        process_map: dict[str, Any] | None,
+        variable_name_mapping: dict[str, str] | None,
+        render_stage_fn: Any = None,
+    ) -> list[str]:
+        """Render a stage list in list order, with its BP loops built (Task 8b item 2).
+
+        Used by the renderers that emit a page's stages in declaration order
+        (``inline_block``/``fold`` copies, ``split`` sub-FUNCTIONs, ``generate_page``);
+        the loop plan is scoped to this list and restored afterwards.
+
+        Args:
+            stages: The stage list.
+            process: The BPProcess (forwarded to per-stage renderers).
+            process_map: Process map from page_target_map.yaml.
+            variable_name_mapping: BP-name → PAD-name map.
+            render_stage_fn: Callable(stage, process, process_map, variable_name_mapping) → str.
+                Defaults to ``self._render_stage``.
+
+        Returns:
+            The non-empty rendered blocks, in order.
+        """
+        if render_stage_fn is None:
+            render_stage_fn = self._render_stage
+        stages_by_id = {s.stage_id: s for s in stages}
+        previous_plan = self._current_loop_plan
+        self._current_loop_plan = self._plan_loops(stages, variable_name_mapping)
+        try:
+            blocks: list[str] = []
+            for stage in stages:
+                rendered = self._render_positional_stage(
+                    stage,
+                    stages_by_id,
+                    process,
+                    process_map,
+                    variable_name_mapping,
+                    render_stage_fn,
+                )
+                if rendered:
+                    blocks.append(rendered)
+            blocks.extend(
+                self._flush_pending_loops(
+                    stages_by_id,
+                    process,
+                    process_map,
+                    variable_name_mapping,
+                    render_stage_fn,
+                    final=True,
+                )
+            )
+            return blocks
+        finally:
+            self._current_loop_plan = previous_plan
 
     def _render_decision_graph(
         self,
@@ -4860,10 +5963,27 @@ class PADGenerator:
         # Never silently drop a stage (CLAUDE.md): anything the graph walk didn't
         # reach (orphaned stages, or a shape this generic walk doesn't resolve) is
         # still rendered, appended in original declaration order.
+        # Task 8b: a built loop reached only here still renders as one loop at its
+        # LoopStart (its members/LoopEnd render nothing at their own positions).
         for stage in stages:
             if stage.stage_id not in visited:
-                visited.add(stage.stage_id)
-                rendered = render_stage_fn(stage, process, process_map, variable_name_mapping)
+                pair = self._current_loop_plan.built.get(stage.stage_id)
+                if pair is not None:
+                    rendered = self._render_loop(
+                        pair,
+                        stages_by_id,
+                        visited,
+                        set(),
+                        process,
+                        process_map,
+                        variable_name_mapping,
+                        render_stage_fn,
+                    )
+                elif stage.stage_id in self._current_loop_plan.skip_ids:
+                    continue
+                else:
+                    visited.add(stage.stage_id)
+                    rendered = render_stage_fn(stage, process, process_map, variable_name_mapping)
                 if rendered:
                     lines.append(rendered)
 
@@ -4993,6 +6113,20 @@ class PADGenerator:
         local_ancestors = set(ancestors)
 
         while stage_id is not None and stage_id in stages_by_id and stage_id != stop_id:
+            # Task 8b item 2: inside a rendered loop body, reaching the LoopEnd ends the
+            # iteration (NEXT LOOP unless nothing of the body follows this point) and
+            # reaching the LoopEnd's own successor leaves the loop (EXIT LOOP) — §B12
+            # LOOP row "EXIT LOOP / NEXT LOOP map directly".
+            loop_context = self._loop_context_stack[-1] if self._loop_context_stack else None
+            if loop_context is not None:
+                if stage_id == loop_context.end_id:
+                    if not loop_context.tail:
+                        lines.append(PAD_NEXT_LOOP)
+                    return lines
+                if stage_id == loop_context.exit_id:
+                    lines.append(PAD_EXIT_LOOP)
+                    return lines
+
             if stage_id in local_ancestors:
                 # Genuine loop back-edge within this same forward path — never
                 # silently drop (CLAUDE.md); this generic walk cannot unroll BP
@@ -5014,6 +6148,26 @@ class PADGenerator:
                 return lines
 
             stage = stages_by_id[stage_id]
+
+            # Task 8b item 2: a planned loop renders as one LOOP FOREACH … END here (its
+            # body nested inside), then the walk continues after its LoopEnd.
+            loop_pair = self._current_loop_plan.built.get(stage_id)
+            if loop_pair is not None and loop_pair.end is not None:
+                local_ancestors.add(stage_id)
+                lines.append(
+                    self._render_loop(
+                        loop_pair,
+                        stages_by_id,
+                        visited,
+                        local_ancestors,
+                        process,
+                        process_map,
+                        variable_name_mapping,
+                        render_stage_fn,
+                    )
+                )
+                stage_id = loop_pair.end.onsuccess_target
+                continue
 
             base, sep, _suffix = stage.stage_id.partition("__calc_")
             if sep:
@@ -5050,6 +6204,7 @@ class PADGenerator:
                     process_map,
                     variable_name_mapping,
                     render_stage_fn,
+                    outer_stop_id=stop_id,
                 )
                 if rendered:
                     lines.append(rendered)
@@ -5118,6 +6273,7 @@ class PADGenerator:
         process_map: dict[str, Any] | None,
         variable_name_mapping: dict[str, str] | None,
         render_stage_fn: Any,
+        outer_stop_id: str | None = None,
     ) -> str:
         """Render one DECISION stage as a real nested ``IF``/``ELSE``/``END``.
 
@@ -5175,6 +6331,12 @@ class PADGenerator:
             process_map: Process map from page_target_map.yaml.
             variable_name_mapping: Optional BP-name→PAD-name dict from Task 5b.
             render_stage_fn: Callable(stage, process, process_map, variable_name_mapping) → str.
+            outer_stop_id: The stop of the chain this DECISION sits in (an enclosing
+                DECISION's join, or a loop body's LoopEnd) — Task 8b: never chosen as
+                this DECISION's own join and never walked past by its arms or its
+                continuation, so an enclosing join is rendered once, by its owner,
+                after the enclosing ``END`` (it was previously consumed inside a nested
+                arm and silently lost from the enclosing IF's other arm).
 
         Returns:
             The rendered ``IF``/``ELSE``/``END`` block (plus any shared continuation
@@ -5201,21 +6363,49 @@ class PADGenerator:
         # Find the nearest stage reachable from both arms (a real merge point) so
         # neither branch's walk consumes it — it is rendered once, after END.
         stop_ids = visited | ancestors
-        true_reachable = self._reachable_stage_ids(stage.ontrue_target, stages_by_id, stop_ids)
+        # Task 8b item 2: inside a rendered loop body the reachability search never walks
+        # past the LoopEnd or into the loop's exit continuation, and the exit is never a
+        # join (each arm reaching it emits its own EXIT LOOP).
+        loop_context = self._loop_context_stack[-1] if self._loop_context_stack else None
+        loop_bounds: set[str] = set()
+        if loop_context is not None:
+            loop_bounds.add(loop_context.end_id)
+            if loop_context.exit_id:
+                loop_bounds.add(loop_context.exit_id)
+        if outer_stop_id is not None:
+            loop_bounds.add(outer_stop_id)
+        true_reachable = self._reachable_stage_ids(
+            stage.ontrue_target, stages_by_id, stop_ids | loop_bounds
+        )
         false_reachable_set = set(
-            self._reachable_stage_ids(stage.onfalse_target, stages_by_id, stop_ids)
+            self._reachable_stage_ids(stage.onfalse_target, stages_by_id, stop_ids | loop_bounds)
         )
         # A genuine join must be a *new* node, not one already inside stop_ids
         # (visited elsewhere, or an ancestor on this same forward path) — a
         # stop_ids member reachable from both arms is either a loop back-edge
         # (ancestors) or already independently rendered (visited), neither of
         # which should be hoisted as a fresh shared continuation.
+        loop_exit_id = loop_context.exit_id if loop_context is not None else None
         join_id = next(
-            (sid for sid in true_reachable if sid in false_reachable_set and sid not in stop_ids),
+            (
+                sid
+                for sid in true_reachable
+                if sid in false_reachable_set
+                and sid not in stop_ids
+                and sid not in (loop_exit_id, outer_stop_id)
+            ),
             None,
         )
+        arm_stop_id = join_id if join_id is not None else outer_stop_id
 
         previous_context = self._current_exception_branch_context
+        # Task 8b item 2: an arm is in tail position of the loop body only if this IF is
+        # and nothing of the body follows the IF (no join, or the join is the LoopEnd).
+        previous_tail = loop_context.tail if loop_context is not None else True
+        if loop_context is not None:
+            loop_context.tail = previous_tail and (
+                join_id is None or join_id == loop_context.end_id
+            )
         try:
             self._current_exception_branch_context = true_context
             true_lines = self._render_chain(
@@ -5227,7 +6417,7 @@ class PADGenerator:
                 process_map,
                 variable_name_mapping,
                 render_stage_fn,
-                stop_id=join_id,
+                stop_id=arm_stop_id,
             )
             self._current_exception_branch_context = false_context
             false_lines = self._render_chain(
@@ -5239,12 +6429,21 @@ class PADGenerator:
                 process_map,
                 variable_name_mapping,
                 render_stage_fn,
-                stop_id=join_id,
+                stop_id=arm_stop_id,
             )
         finally:
             self._current_exception_branch_context = previous_context
+            if loop_context is not None:
+                loop_context.tail = previous_tail
 
         out: list[str] = list(cond_actions)
+        # Task 8b fix pass (gap 3): a SPOT-CHECK DECISION keeps its VERIFY marker directly
+        # before the IF (CLAUDE.md band table: "Full code + inline comment to verify"), as
+        # the flat DECISION renderer already does (_render_stage_core's Condition branch)
+        # — it was lost for decisions rendered here, e.g. inside a loop body.
+        annotation = stage.pa_annotation
+        if annotation is not None and annotation.band == ConfidenceBand.SPOT_CHECK:
+            out.append(f"# VERIFY: {stage.name} (confidence {annotation.confidence:.2f})")
         out.append(f"IF {condition_text} THEN")
         for block in true_lines:
             out.extend(f"    {ln}" for ln in block.split("\n"))
@@ -5263,6 +6462,7 @@ class PADGenerator:
                 process_map,
                 variable_name_mapping,
                 render_stage_fn,
+                stop_id=outer_stop_id,
             )
             out.extend(continuation_lines)
 

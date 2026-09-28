@@ -13,7 +13,7 @@ flag entry is hand-off-ready (Task 8 "Do" step 2).
 
 from __future__ import annotations
 
-from flowsmith.ast import BPPage, BPProcess, BPStage, ConfidenceBand
+from flowsmith.ast import BPPage, BPProcess, BPStage, ConfidenceBand, PAAnnotation
 from flowsmith.engine import FlagIndex, FlagIndexBuilder, ProcessScore, ProcessScorer
 from flowsmith.exceptions import TransformError
 from flowsmith.reporter.models import (
@@ -147,8 +147,27 @@ def build_stage_detail(stage: BPStage, page: BPPage, page_names: dict[str, str])
         confidence=ann.confidence,
         band=ann.band.value,
         flag_count=len(ann.flags),
-        pending_flag_reasons=[f.reason for f in stage.pending_flags],
+        pending_flag_reasons=_untransferred_pending_reasons(stage, ann),
     )
+
+
+def _untransferred_pending_reasons(stage: BPStage, ann: PAAnnotation) -> list[str]:
+    """Reasons of the stage's pending (AST-time) flags not already on its annotation.
+
+    Task 8a keeps ``pending_flags`` after the engine copies them onto
+    ``pa_annotation.flags`` (clearing them would break re-annotation), deduplicating on
+    (severity, reason). Only a pending flag missing from the annotation is really
+    "untransferred" (Task 8b item 5; 8a review gap 2).
+
+    Args:
+        stage: The BP stage.
+        ann: Its PAAnnotation.
+
+    Returns:
+        The reasons of the pending flags whose (severity, reason) is not on ``ann.flags``.
+    """
+    transferred = {(f.severity, f.reason) for f in ann.flags}
+    return [f.reason for f in stage.pending_flags if (f.severity, f.reason) not in transferred]
 
 
 def _check_consistency(score: ProcessScore, index: FlagIndex) -> None:
