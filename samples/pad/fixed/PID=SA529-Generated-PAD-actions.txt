@@ -1,0 +1,375 @@
+
+FUNCTION GetAttachmentNames GLOBAL
+    SET txt_AttachmentNames TO $''''''
+    LOOP FOREACH CurrentItem IN In_dtb_Attachments
+        IF In_flg_SetFlag THEN
+            Text.AppendLine Text: txt_AttachmentNames LineToAppend: $''';\\n%CurrentItem['Attachment']%''' Result=> txt_AttachmentNames
+        ELSE
+            Text.AppendLine Text: txt_AttachmentNames LineToAppend: $''';\\n%CurrentItem['Name']%''' Result=> txt_AttachmentNames
+        END
+    END
+    IF NOT IsEmpty(txt_AttachmentNames) THEN
+        Text.GetSubtext.GetSubtext CharacterPosition: 1 NumberOfChars: txt_AttachmentNames.Length - 1 Text: txt_AttachmentNames Subtext=> txt_AttachmentNames
+        Text.Trim Text: txt_AttachmentNames TrimOption: Text.TrimOption.Both TrimmedText=> Out_txt_AttachmentNames
+    END
+END FUNCTION
+
+
+FUNCTION 'Write To Exception Report' GLOBAL
+    Clipboard.Clear _
+    System.TerminateProcess.TerminateProcessByName ProcessName: $'''EXCEL'''
+    Excel.LaunchExcel.LaunchAndOpen Path: txt_ExceptionReportPath Visible: True ReadOnly: False LoadAddInsAndMacros: False Instance=> ins_Excel
+    Excel.SetActiveWorksheet.ActivateWorksheetByName Instance: ins_Excel Name: obj_ConfigFileData['Exception Report WorkSheet Name']
+    Excel.GetFirstFreeColumnRow Instance: ins_Excel FirstFreeColumn=> FirstFreeColumn FirstFreeRow=> num_ExceptionRow
+    Text.Trim Text: obj_ItemData['Functional Mailboxes'] TrimOption: Text.TrimOption.Both TrimmedText=> TrimmedFunctionalMailboxes
+    Excel.WriteToExcel.WriteCell Instance: ins_Excel Column: $'''A''' Row: num_ExceptionRow Value: TrimmedFunctionalMailboxes
+    Excel.WriteToExcel.WriteCell Instance: ins_Excel Column: $'''B''' Row: num_ExceptionRow Value: SenderName
+    Excel.WriteToExcel.WriteCell Instance: ins_Excel Column: $'''C''' Row: num_ExceptionRow Value: SenderEmailAddress
+    DateTime.Add DateTime: ReceivedOn TimeToAdd: obj_ConfigFileData['UTC To China Time'] TimeUnit: DateTime.TimeUnit.Hours ResultedDate=> ChinaReceivedOn
+    Excel.WriteToExcel.WriteCell Instance: ins_Excel Column: $'''D''' Row: num_ExceptionRow Value: ChinaReceivedOn
+    Text.Trim Text: obj_ItemData['Subject'] TrimOption: Text.TrimOption.Both TrimmedText=> TrimmedSubject
+    Excel.WriteToExcel.WriteCell Instance: ins_Excel Column: $'''E''' Row: num_ExceptionRow Value: TrimmedSubject
+    Excel.WriteToExcel.WriteCell Instance: ins_Excel Column: $'''F''' Row: num_ExceptionRow Value: num_NumOfAttachments
+    Text.Trim Text: In_txt_ProcessedAttachments TrimOption: Text.TrimOption.Both TrimmedText=> TrimmedProcessedAttachments
+    Excel.WriteToExcel.WriteCell Instance: ins_Excel Column: $'''G''' Row: num_ExceptionRow Value: TrimmedProcessedAttachments
+    Text.Trim Text: In_txt_ExceptionAttachments TrimOption: Text.TrimOption.Both TrimmedText=> TrimmedExceptionAttachments
+    Excel.WriteToExcel.WriteCell Instance: ins_Excel Column: $'''H''' Row: num_ExceptionRow Value: TrimmedExceptionAttachments
+    Excel.WriteToExcel.WriteCell Instance: ins_Excel Column: In_txt_ExceptionReasonColumn Row: num_ExceptionRow Value: In_txt_ExceptionReason
+    DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> CurrentDateTime
+    DateTime.Add DateTime: CurrentDateTime TimeToAdd: obj_ConfigFileData['UTC To China Time'] TimeUnit: DateTime.TimeUnit.Hours ResultedDate=> ChinaCurrentDateTime
+    Excel.WriteToExcel.WriteCell Instance: ins_Excel Column: $'''K''' Row: num_ExceptionRow Value: ChinaCurrentDateTime
+    Text.ConvertDateTimeToText.FromCustomDateTime DateTime: ChinaReceivedOn CustomFormat: $'''dd/MM/yyyy hh:mm:ss tt''' Result=> FormattedChinaReceivedOn
+    Excel.WriteToExcel.WriteCell Instance: ins_Excel Column: $'''D''' Row: num_ExceptionRow Value: FormattedChinaReceivedOn
+    Text.ConvertDateTimeToText.FromCustomDateTime DateTime: ChinaCurrentDateTime CustomFormat: $'''dd/MM/yyyy hh:mm:ss tt''' Result=> FormattedChinaCurrentDateTime
+    Excel.WriteToExcel.WriteCell Instance: ins_Excel Column: $'''K''' Row: num_ExceptionRow Value: FormattedChinaCurrentDateTime
+    Excel.ResizeColumnsOrRows.AutofitAllColumns Instance: ins_Excel
+    Excel.SaveExcel.SaveAs Instance: ins_Excel DocumentPath: txt_ExceptionReportPath DocumentFormat: Excel.ExcelFormat.FromExtension
+    Excel.CloseExcel.CloseAndSave Instance: ins_Excel
+END FUNCTION
+
+FUNCTION Write_To_Final_Reports GLOBAL
+    Variables.FilterDataTable DataTable: In_dtb_InputFiles FilterParameters: { ^['RULE', 'COLUMN', 'OPERATOR', 'VALUE'], [$'''And''', $'''Return Code''', $'''StartsWith''', In_obj_ConfigFileData['Success Return Code']] } FilteredDataTable=> dtb_SuccessFiles
+    Variables.FilterDataTable DataTable: In_dtb_InputFiles FilterParameters: { ^['RULE', 'COLUMN', 'OPERATOR', 'VALUE'], [$'''And''', $'''Return Code''', $'''NotStartsWith''', In_obj_ConfigFileData['Success Return Code']] } FilteredDataTable=> dtb_ExceptionFiles
+    SET num_SuccessCount TO dtb_SuccessFiles.RowsCount
+    SET num_ExceptionCount TO dtb_ExceptionFiles.RowsCount
+    IF num_ExceptionCount = 0 THEN
+        SET Out_txt_FullyProcessed TO $'''True'''
+        CALL Get_Processed_Attachment_Names In_dtb_Attachments: dtb_SuccessFiles In_flg_SetFlag: False Out_txt_AttachmentNames=> txt_ProcessedAttachments
+        CALL Write_To_Success_Report In_txt_ProcessedReports: txt_ProcessedAttachments
+        EXIT
+    END
+    IF num_ExceptionCount > 0 THEN
+        CALL Get_Unprocessed_Attachment_Names In_dtb_Attachments: dtb_ExceptionFiles In_flg_SetFlag: False Out_txt_AttachmentNames=> txt_UnprocessedAttachments
+        CALL Get_Processed_Attachment_Names In_dtb_Attachments: dtb_SuccessFiles In_flg_SetFlag: False Out_txt_AttachmentNames=> txt_ProcessedAttachments
+        IF IsEmpty(Trim(txt_ProcessedAttachments)) THEN
+            SET txt_ProcessedAttachments TO $'''None'''
+        END
+    END
+    SET txt_ProcessedAttachments TO $''''''
+    SET txt_UnprocessedAttachments TO $''''''
+    SET txt_ExceptionReason TO $''''''
+    LOOP FOREACH CurrentExceptionRow IN dtb_ExceptionFiles
+        IF NOT IsEmpty(Trim(CurrentExceptionRow['Return Code'])) THEN
+            Text.AppendLine Text: txt_ExceptionReason LineToAppend: $''';\\n%CurrentExceptionRow['Name']%  -  %CurrentExceptionRow['Return Code']%''' Result=> txt_ExceptionReason
+        ELSE
+            Text.AppendLine Text: txt_ExceptionReason LineToAppend: $''';\\n%CurrentExceptionRow['Name']%  -  %In_txt_ExceptionDetail%''' Result=> txt_ExceptionReason
+        END
+    END
+    Text.Trim Text: txt_ExceptionReason TrimOption: Text.TrimOption.Both TrimmedText=> txt_ExceptionReason
+    Text.GetSubtext.GetSubtextFrom CharacterPosition: 1 Text: txt_ExceptionReason Subtext=> txt_ExceptionReason
+    CALL Write_To_Exception_Report In_txt_ExceptionAttachments: txt_UnprocessedAttachments In_txt_ProcessedAttachments: txt_ProcessedAttachments In_txt_ExceptionReason: txt_ExceptionReason In_txt_ExceptionReasonColumn: $'''J'''
+    SET Out_txt_FullyProcessed TO $'''False'''
+    # Add your processing logic here
+    # Output variable assignment
+    SET Out_txt_FullyProcessed TO $''''''
+END FUNCTION
+
+FUNCTION Get_Invalid_Email_List GLOBAL
+    Clipboard.Clear _
+    System.TerminateProcess.TerminateProcessByName ProcessName: $'''EXCEL'''
+    Excel.LaunchExcel.LaunchAndOpen Path: txt_InvalidEmailListFilePath Visible: True ReadOnly: True LoadAddInsAndMacros: False Instance=> ins_Excel
+    Excel.SetActiveWorksheet.ActivateWorksheetByName Instance: ins_Excel Name: obj_ConfigFileData['Invalid Email List WorkSheet Name']
+    Excel.ReadFromExcel.ReadAllCells Instance: ins_Excel FirstLineIsHeader: True GetCellContentsMode: Excel.GetCellContentsMode.FormattedTextValues RangeValue=> dtb_InvalidEmailList
+    Variables.DeleteColumnFromDataTable.DeleteColumnWithName DataTable: dtb_InvalidEmailList ColumnName: $'''No.'''
+    Variables.DeleteEmptyRowsFromDataTable DataTable: dtb_InvalidEmailList
+    SET Out_dtb_InvalidEmailList TO dtb_InvalidEmailList
+    Excel.CloseExcel.Close Instance: ins_Excel
+END FUNCTION
+
+FUNCTION Get_Final_Attachments GLOBAL
+    Clipboard.Clear _
+    IF (System.IfProcess.ProcessIsRunning ProcessName: $'''EXCEL''') THEN
+        System.TerminateProcess.TerminateProcessByName ProcessName: $'''EXCEL'''
+    END
+    Excel.LaunchExcel.LaunchAndOpen Path: txt_ExceptionReportPath Visible: False ReadOnly: True LoadAddInsAndMacros: False Instance=> ins_ExceptionExcel
+    Excel.SetActiveWorksheet.ActivateWorksheetByName Instance: ins_ExceptionExcel Name: obj_ConfigFileData['Exception Report WorkSheet Name']
+    Excel.ReadFromExcel.ReadAllCells Instance: ins_ExceptionExcel FirstLineIsHeader: True GetCellContentsMode: Excel.GetCellContentsMode.FormattedTextValues RangeValue=> dtb_ExceptionData
+    Excel.LaunchExcel.LaunchAndOpen Path: txt_SuccessReportPath Visible: False ReadOnly: True LoadAddInsAndMacros: False Instance=> ins_SuccessExcel
+    Excel.SetActiveWorksheet.ActivateWorksheetByName Instance: ins_SuccessExcel Name: obj_ConfigFileData['Success Report WorkSheet Name']
+    Excel.ReadFromExcel.ReadAllCells Instance: ins_SuccessExcel FirstLineIsHeader: True GetCellContentsMode: Excel.GetCellContentsMode.FormattedTextValues RangeValue=> dtb_SuccessData
+    Excel.CloseExcel.Close Instance: ins_ExceptionExcel
+    Excel.CloseExcel.Close Instance: ins_SuccessExcel
+    Variables.DeleteEmptyRowsFromDataTable DataTable: dtb_ExceptionData
+    Variables.DeleteEmptyRowsFromDataTable DataTable: dtb_SuccessData
+    SET txt_Attachments TO $''''''
+    IF dtb_SuccessData.RowsCount > 0 THEN
+        SET txt_Attachments TO txt_SuccessReportPath
+    END
+    IF dtb_ExceptionData.RowsCount > 0 THEN
+        IF NOT IsEmpty(txt_Attachments) THEN
+            SET txt_Attachments TO $'''%txt_Attachments%;%txt_ExceptionReportPath%'''
+        ELSE
+            SET txt_Attachments TO txt_ExceptionReportPath
+        END
+    END
+    SET Out_txt_Attachments TO txt_Attachments
+END FUNCTION
+
+FUNCTION 'Golden Tax API Calls' GLOBAL
+    @@copilotGeneratedAction: 'True'
+External.Placeholder Category: 'AIDisclaimer' Message: 'Start of AI generated actions'
+    @@copilotGeneratedAction: 'True'
+**REGION Initialize variables, copy input requests, add column to data table, set output
+    @@copilotGeneratedAction: 'True'
+SET num_RowIndex TO 0
+    @@copilotGeneratedAction: 'True'
+SET num_Count TO 0
+    @@copilotGeneratedAction: 'True'
+SET num_ResponseCount TO 0
+    @@copilotGeneratedAction: 'True'
+SET dtb_InputFiles TO In_dtb_InputRequests
+    @@copilotGeneratedAction: 'True'
+Variables.AddColumnToDataTable.AppendColumnToDataTable DataTable: dtb_InputFiles ColumnName: $'''Return Code'''
+    @@copilotGeneratedAction: 'True'
+SET Out_dtb_InputFiles TO dtb_InputFiles
+    CALL Create_Output_Report_Files
+    CALL Create_Output_Report_Files
+    LOOP FOREACH CurrentRequest IN In_dtb_InputRequests
+        Web.InvokeWebService.InvokeWebServicePost Url: obj_ConfigFileData['API POST URL'] Accept: $'''application/json''' ContentType: $'''%obj_ConfigFileData['Content Type']%%CurrentRequest['Extension']%''' CustomHeaders: $'''%txt_APIHeaderKey%: %pwd_APIHeaderKeyValue%''' RequestBody: $'''{
+  \"FilePath\": \"%CurrentRequest['Path']%\",
+  \"Name\": \"%CurrentRequest['Name']%\",
+  \"Extension\": \"%CurrentRequest['Extension']%\",
+  \"ContentType\": \"%obj_ConfigFileData['Content Type']%%CurrentRequest['Extension']%\",
+  \"Sender\": \"%CurrentRequest['Sender']%\",
+  \"ReceivedDate\": \"%CurrentRequest['ReceivedDate']%\",
+  \"Subject\": \"%CurrentRequest['Subject']%\"
+}''' ConnectionTimeout: 30 FollowRedirection: True ClearCookies: False FailOnErrorStatus: False EncodeRequestBody: True UserAgent: $'''Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3''' Encoding: Web.Encoding.AutoDetect AcceptUntrustedCertificates: False TrimRequestBody: True ResponseHeaders=> WebServiceResponseHeaders Response=> txt_Response StatusCode=> StatusCode
+        IF Contains(txt_Response, $'''returnCode''', False) THEN
+            Variables.ConvertJsonToCustomObject Json: txt_Response CustomObject=> obj_Response
+            SET obj_ReturnCode TO obj_Response['data']
+            IF ToNumber(Trim(obj_ConfigFileData['Success Return Code'])) = ToNumber(Trim(obj_ReturnCode['returnCode'])) THEN
+                Variables.ModifyDataTableItem DataTable: dtb_InputFiles ColumnNameOrIndex: $'''Return Code''' RowIndex: num_RowIndex Value: $'''%obj_ReturnCode['returnCode']% : %obj_ReturnCode['returnMsg']%'''
+                Variables.IncreaseVariable Value: num_RowIndex IncrementValue: 1
+                SET num_Count TO 0
+                SET num_ResponseCount TO 0
+                IF num_RowIndex = In_num_RowCount THEN
+                    EXIT
+                END
+            END
+        END
+    END
+    SET Out_dtb_InputFiles TO dtb_InputFiles
+    @@copilotGeneratedAction: 'True'
+**ENDREGION
+    @@copilotGeneratedAction: 'True'
+External.Placeholder Category: 'AIDisclaimer' SubCategory: 'CopilotFeedback' Message: 'End of AI generated actions'
+    CALL Write_To_Final_Reports In_dtb_InputFiles: Out_dtb_InputFiles In_obj_ConfigFileData: obj_ConfigFileData In_txt_ExceptionDetail: $'''''' Out_txt_FullyProcessed=> Out_txt_FullyProcessed
+    CALL Download_Email_Attachment
+    CALL GetAttachmentNames
+    CALL Get_Final_Attachments
+END FUNCTION
+
+FUNCTION XL_Read_Range GLOBAL
+    IF (File.IfFile.Exists File: In_txt_FilePath) THEN
+        Excel.LaunchExcel.LaunchAndOpen Path: In_txt_FilePath Visible: False ReadOnly: False LoadAddInsAndMacros: False Instance=> ins_Excel
+        Excel.SetActiveWorksheet.ActivateWorksheetByName Instance: ins_Excel Name: In_txt_Worksheet
+        Excel.ReadFromExcel.ReadCells Instance: ins_Excel StartColumn: In_txt_StartRange StartRow: 1 EndColumn: In_txt_EndRange EndRow: 100 FirstLineIsHeader: True GetCellContentsMode: Excel.GetCellContentsMode.FormattedTextValues RangeValue=> Out_dtb_RangeAsCollection
+        Variables.DeleteEmptyRowsFromDataTable DataTable: Out_dtb_RangeAsCollection
+        Variables.DeleteColumnFromDataTable.DeleteColumnWithName DataTable: Out_dtb_RangeAsCollection ColumnName: $'''Description'''
+        Excel.SetActiveWorksheet.ActivateWorksheetByName Instance: ins_Excel Name: $'''Functional MailBoxes'''
+        Excel.GetFirstFreeRowOnColumn Instance: ins_Excel Column: In_txt_StartRange FirstFreeRowOnColumn=> num_RowCount
+        SET In_txt_EndRange TO $'''%In_txt_StartRange%%num_RowCount%'''
+        Excel.ReadFromExcel.ReadCells Instance: ins_Excel StartColumn: In_txt_StartRange StartRow: 1 EndColumn: In_txt_EndRange EndRow: num_RowCount FirstLineIsHeader: True GetCellContentsMode: Excel.GetCellContentsMode.FormattedTextValues RangeValue=> dtb_FunctionalMailBoxes
+        Excel.SetActiveWorksheet.ActivateWorksheetByName Instance: ins_Excel Name: $'''Success Report'''
+        Excel.ReadFromExcel.ReadAllCells Instance: ins_Excel FirstLineIsHeader: False GetCellContentsMode: Excel.GetCellContentsMode.FormattedTextValues RangeValue=> dtb_SuccessReport
+        Excel.SetActiveWorksheet.ActivateWorksheetByName Instance: ins_Excel Name: $'''Exception Report'''
+        Excel.ReadFromExcel.ReadAllCells Instance: ins_Excel FirstLineIsHeader: False GetCellContentsMode: Excel.GetCellContentsMode.FormattedTextValues RangeValue=> dtb_ExceptionReport
+        Excel.CloseExcel.Close Instance: ins_Excel
+    END
+END FUNCTION
+
+FUNCTION Download_Email_Attachment GLOBAL
+    SET flg_Exists TO False
+    SET num_Count TO 0
+    SET txt_FilterCondition TO $''''''
+    SET txt_Formats TO $''''''
+    SET txt_AttachmentName TO $''''''
+    SET num_FileSize TO 0
+    SET txt_ExceptionAttachmentNames TO $''''''
+    SET txt_ExceptionReason TO $''''''
+    SET txt_AttachmentsSizeExceptionReason TO $'''Input email contains attachment with greater than'''
+    # Delete all files matching *.* from txt_LocalFolderName
+    File.Delete Files: $'''%txt_LocalFolderName%\\*.*'''
+    # Split the valid attachment formats by comma, remove empty items
+    Text.Trim Text: coll_ConfigFileData['Valid Attachment Formats'] TrimOption: Text.TrimOption.Both TrimmedText=> TrimmedAttachmentFormats
+    Text.SplitText.SplitWithDelimiter Text: TrimmedAttachmentFormats CustomDelimiter: $''',''' IsRegEx: False Result=> lst_SplitFormats
+    # Remove empty items from lst_SplitFormats
+    LOOP index FROM lst_SplitFormats.Count - 1 TO 0 STEP -1
+        IF IsEmpty(Trim(lst_SplitFormats[index])) THEN
+            Variables.RemoveItemFromList.RemoveItemFromListByIndex List: lst_SplitFormats ItemIndex: index
+        END
+    END
+    LOOP FOREACH txt_CurrentFormat IN lst_SplitFormats
+        SET txt_Formats TO Replace(txt_FormatFunction, $'''File''', Trim(txt_CurrentFormat))
+        SET txt_FilterCondition TO Trim(txt_FilterCondition) + $''' ''' + txt_Formats
+    END
+    # Remove the final 'OR' by excluding its last 2 characters
+    Text.GetSubtext.GetSubtext CharacterPosition: 0 NumberOfChars: txt_FilterCondition.Length - 2 Text: txt_FilterCondition Subtext=> txt_FilterCondition
+    # For each obj_SplitValue in dtb_SplitValues
+    LOOP FOREACH obj_SplitValue IN dtb_SplitValues
+        # Split obj_SplitValue['Attachment'] by '.' into lst_SplitFormat
+        Text.SplitText.SplitWithDelimiter Text: obj_SplitValue['Attachment'] CustomDelimiter: $'''.''' IsRegEx: False Result=> lst_SplitFormat
+        # Remove empty items from lst_SplitFormat
+        LOOP index FROM lst_SplitFormat.Count - 1 TO 0 STEP -1
+            IF IsEmpty(Trim(lst_SplitFormat[index])) THEN
+                Variables.RemoveItemFromList.RemoveItemFromListByIndex List: lst_SplitFormat ItemIndex: index
+            END
+        END
+        # Set txt_AttachmentName from the split filename value (the file name is usually the first part)
+        IF lst_SplitFormat.Count > 0 THEN
+            SET txt_AttachmentName TO lst_SplitFormat[0]
+        END
+        # Filter lst_SplitFormat using Trim(txt_FilterCondition) - retain only formats allowed in txt_FilterCondition
+        # (Check if the last part is in txt_FilterCondition)
+        SET AttachmentExt TO lst_SplitFormat[lst_SplitFormat.Count - 1]
+        IF Contains(Trim(txt_FilterCondition), AttachmentExt, True) THEN
+            # Allowed format: process further
+            Variables.IncreaseVariable Value: num_Count IncrementValue: 1
+            # Check attachment character length
+            IF Length(Trim(obj_SplitValue['Attachment'])) <= ToNumber(coll_ConfigFileData['Attachment Character Limit']) THEN
+                # Normal name branch: add your normal-name logic here
+                File.WriteText File: $'''%txt_LocalFolderName%%obj_SplitValue['Attachment']%''' TextToWrite: AttachmentContent AppendNewLine: False IfFileExists: File.IfFileExists.Overwrite Encoding: File.FileEncoding.UTF8
+                SET txt_DownloadedPath TO $'''%txt_LocalFolderName%%obj_SplitValue['Attachment']%'''
+                IF (File.IfFile.Exists File: txt_DownloadedPath) THEN
+                    SET num_Count TO 0
+                    File.GetFileProperty File: txt_DownloadedPath Property: File.FileProperty.Size Value=> num_FileSize
+                    IF num_FileSize <= ToNumber(coll_ConfigFileData['File Size']) THEN
+                        # File is within allowed size, continue loop
+                        NEXT LOOP
+                    ELSE
+                        # Oversize branch: handle oversized file here
+                        # ...
+                    END
+                    CALL Move_Mails_to_Folders FunctionalMailBox: Trim(coll_ItemData['To']) DestinationFolder: Trim(coll_ConfigFileData['Exception Email Folder'])
+                    SET txt_ExceptionReason TO coll_ConfigFileData['File Size Exception In Chinese'] + NewLine() + $'''无效的附件 - %obj_SplitValue['Attachment']%''' + NewLine() + $''' / %txt_AttachmentsSizeExceptionReason% ''' + Left(coll_ConfigFileData['File Size'], 1) + $''' MB. ''' + NewLine() + $'''Invalid Attachments - %obj_SplitValue['Attachment']%'''
+                    CALL GetAttachmentNames In_dtb_Attachments: dtb_SplitValues In_flg_SetFlag: True Out_txt_AttachmentNames=> txt_ExceptionAttachmentNames
+                ELSE
+                    # File not found, leave the existing failure handling/manual handling as is
+                    # ...
+                END
+                # Example: SET NormalNameFlag TO True
+            ELSE
+                # Truncated name branch: add your truncated-name logic here
+                # Example: SET TruncatedNameFlag TO True
+                Text.GetSubtext.GetSubtext CharacterPosition: 0 NumberOfChars: ToNumber(coll_ConfigFileData['Attachment Character Limit']) Text: txt_AttachmentName Subtext=> ShortAttachmentName
+                File.WriteText File: $'''%txt_LocalFolderName%%ShortAttachmentName%.%lst_SplitFormat.CurrentItem%''' TextToWrite: AttachmentContent AppendNewLine: False IfFileExists: File.IfExists.Overwrite Encoding: File.FileEncoding.UTF8
+                SET txt_DownloadedPath TO $'''%txt_LocalFolderName%%ShortAttachmentName%.%lst_SplitFormat.CurrentItem%'''
+                IF (File.IfFile.Exists File: txt_DownloadedPath) THEN
+                    SET num_Count TO 0
+                    File.GetFileProperty File: txt_DownloadedPath Property: File.FileProperty.Size Value=> num_FileSize
+                    IF num_FileSize <= ToNumber(coll_ConfigFileData['File Size']) THEN
+                        # File is within allowed size, continue loop
+                        NEXT LOOP
+                    ELSE
+                        # Oversize branch: handle oversized file here
+                        # ...
+                    END
+                ELSE
+                    # File not found, leave the existing failure handling/manual handling as is
+                    # ...
+                END
+            END
+        END
+    END
+END FUNCTION
+
+FUNCTION Filter_Invalid_Input_Requests GLOBAL
+    CALL Get_Invalid_Email_List Out_dtb_InvalidEmailList=> dtb_InvalidEmailList
+    SET txt_AttachmentName TO $''''''
+    Variables.CreateNewDatatable InputTable: { } DataTable=> dtb_FilterAttachments
+    SET num_Count TO 0
+    SET flg_ContainsSearchTerm TO False
+    LOOP FOREACH obj_CurrentInputRequest IN dtb_InputRequests
+        Variables.FindOrReplaceInDataTable.FindItemInDataTableByColumnIndex DataTable: dtb_InvalidEmailList ColumnNameOrIndex: $'''Email ID''' ValueToFind: obj_CurrentInputRequest['SenderEmailAddress'] AllMatches: False MatchCase: False MatchEntireCellContents: True DataTableMatches=> dtb_InvalidSenderMatches
+    END
+    IF dtb_InvalidSenderMatches.RowsCount > 0 THEN
+        Variables.AddItemToList Item: obj_CurrentInputRequest List: lst_InputRequestsToRemove
+    END
+END
+LOOP FOREACH obj_InputRequestToRemove IN lst_InputRequestsToRemove
+    Variables.RemoveItemFromList.RemoveItemFromListByValue List: dtb_InputRequests Item: obj_InputRequestToRemove ItemMatchAllOccurrences: False
+END
+END FUNCTION
+
+FUNCTION Create_Output_Report_Files GLOBAL
+    CALL Create_Output_Folder
+    Clipboard.Clear _
+    # Get current date and time
+    DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> CurrentDateTime
+    # Format date as ddMMMyy
+    Text.ConvertDateTimeToText.FromCustomDateTime DateTime: CurrentDateTime CustomFormat: $'''ddMMMyy''' Result=> txt_Date
+    # Get Success and Exception file names from config
+    Text.Replace.ReplaceText Text: dtb_ConfigFileData['Success Report Name'] TextToFind: $'''ddMMMyy''' ReplaceWith: txt_Date ActivateEscapeSequences: False IgnoreCase: False ComparisonType: Text.TextComparisonType.CultureSensitive Result=> SuccessFileNameRaw
+    Text.Trim Text: SuccessFileNameRaw TrimOption: Text.TrimOption.Both TrimmedText=> txt_SuccessFileName
+    Text.Replace.ReplaceText Text: dtb_ConfigFileData['Exception Report Name'] TextToFind: $'''ddMMMyy''' ReplaceWith: txt_Date ActivateEscapeSequences: False IgnoreCase: False ComparisonType: Text.TextComparisonType.CultureSensitive Result=> ExceptionFileNameRaw
+    Text.Trim Text: ExceptionFileNameRaw TrimOption: Text.TrimOption.Both TrimmedText=> txt_ExceptionFileName
+    # Terminate EXCEL if it is running
+    IF (System.IfProcess.ProcessIsRunning ProcessName: $'''EXCEL''') THEN
+        System.TerminateProcess.TerminateProcessByName ProcessName: $'''EXCEL'''
+    END
+    Excel.LaunchExcel.Launch LoadAddInsAndMacros: False Visible: True Instance=> ins_Excel
+    # (Events disabling is not natively supported in Robin Excel actions; skip or add placeholder if required)
+    SET txt_SuccessWorkBookName TO $'''%txt_OutputFolderPath%%txt_SuccessFileName%'''
+    Excel.SaveExcel.SaveAs Instance: ins_Excel DocumentFormat: Excel.ExcelFormat.FromExtension DocumentPath: txt_SuccessWorkBookName
+    Excel.RenameWorksheet.RenameWorksheetWithName Instance: ins_Excel Name: $'''Sheet1''' NewName: dtb_ConfigFileData['Success Report WorkSheet Name']
+    Excel.SetActiveWorksheet.ActivateWorksheetByName Instance: ins_Excel Name: dtb_ConfigFileData['Success Report WorkSheet Name']
+    Excel.WriteToExcel.WriteCell Instance: ins_Excel Column: $'''A''' Row: 1 Value: dtb_SuccessReport
+    Excel.SetActiveWorksheet.ActivateWorksheetByName Instance: ins_Excel Name: dtb_ConfigFileData['Success Report WorkSheet Name']
+    Excel.ResizeColumnsOrRows.AutofitRangeOfColumns Instance: ins_Excel StartColumn: $'''A''' EndColumn: $'''Z'''
+    Excel.LaunchExcel.Launch LoadAddInsAndMacros: False Visible: True Instance=> ins_Excel
+    SET txt_ExceptionWorkBookName TO $'''%txt_OutputFolderPath%%txt_ExceptionFileName%'''
+    Excel.SaveExcel.SaveAs Instance: ins_Excel DocumentFormat: Excel.ExcelFormat.FromExtension DocumentPath: txt_ExceptionWorkBookName
+    Excel.RenameWorksheet.RenameWorksheetWithName Instance: ins_Excel Name: $'''Sheet1''' NewName: dtb_ConfigFileData['Exception Report WorkSheet Name']
+    Excel.SetActiveWorksheet.ActivateWorksheetByName Instance: ins_Excel Name: dtb_ConfigFileData['Exception Report WorkSheet Name']
+    Excel.WriteToExcel.WriteCell Instance: ins_Excel Column: $'''A''' Row: 1 Value: dtb_ExceptionReport
+    Excel.FormatCellsInExcel.FormatCellRange Instance: ins_Excel StartColumn: $'''A''' StartRow: 1 EndColumn: $'''Z''' EndRow: 1 Bold: True Italic: False Underline: False
+    Excel.ResizeColumnsOrRows.AutofitRangeOfColumns Instance: ins_Excel StartColumn: $'''A''' EndColumn: $'''Z'''
+    Excel.SaveExcel.SaveAs Instance: ins_Excel DocumentFormat: Excel.ExcelFormat.FromExtension DocumentPath: txt_SuccessWorkBookName
+    Excel.SaveExcel.SaveAs Instance: ins_Excel DocumentFormat: Excel.ExcelFormat.FromExtension DocumentPath: txt_ExceptionWorkBookName
+    Excel.CloseExcel.CloseAndSaveAs Instance: ins_Excel DocumentFormat: Excel.ExcelFormat.FromExtension DocumentPath: txt_SuccessWorkBookName
+    Excel.CloseExcel.CloseAndSaveAs Instance: ins_Excel DocumentFormat: Excel.ExcelFormat.FromExtension DocumentPath: txt_ExceptionWorkBookName
+    Excel.CloseExcel.CloseAndSave Instance: ins_Excel
+END FUNCTION
+
+FUNCTION Create_Output_Folder GLOBAL
+    SET flg_Exists TO False
+    SET flg_Success TO False
+    SET txt_Message TO $''''''
+    SET num_Count TO 0
+    IF (Folder.IfFolderExists.Exists Path: txt_OutputFolderPath) THEN
+        SET flg_Exists TO True
+    ELSE
+        Folder.Create FolderPath: txt_OutputFolderPath FolderName: $'''''' Folder=> CreatedFolder
+        IF (Folder.IfFolderExists.Exists Path: txt_OutputFolderPath) THEN
+            SET flg_Exists TO True
+        END
+    END
+    SET Out_flg_DirectoryExists TO flg_Exists
+END FUNCTION
+
+FUNCTION 'Clear Output Directory' GLOBAL
+    WAIT 15
+    IF (Folder.IfFolderExists.Exists Path: In_txt_OutputFolderPath) THEN
+        Folder.Delete Folder: In_txt_OutputFolderPath
+    END
+END FUNCTION
